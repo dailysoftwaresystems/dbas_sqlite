@@ -1,41 +1,62 @@
 import 'dart:async';
 import 'dart:ffi';
 
-import 'package:dbas_sqlite_flutter/src/sqlite_parameter.dart';
-
-import 'src/dbas_sqlite_interface.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform_interface.dart';
+import 'package:decimal/decimal.dart';
 
 class DbasSqlite {
-  static DbasSqlite? instance;
+  static DbasSqlite? _instance;
+  Pointer<DbasSqliteDb>? _dbPtr;
 
   static Future<DbasSqlite> getInstance() async {
-    if (DbasSqlite.instance == null) {
+    if (DbasSqlite._instance == null) {
       await DbasSqlitePlatform.instance.initialize();
-      instance = DbasSqlite();
+      _instance = DbasSqlite();
     }
 
-    return instance as DbasSqlite;
+    return _instance!;
   }
 
-  Future<void> executeSql(String sql, List<Object?> parameters) async {
-    await DbasSqlitePlatform.instance.prepareQuery(sql);
+  Future<void> openDb(String fileName) async {
+    _dbPtr = await DbasSqlitePlatform.instance.openDb(fileName);
   }
 
-  void bindParameters(Pointer<Void> stmt, List<Object?> params) {
-    for (int i = 0; i < params.length; i++) {
-      final index = i + 1; // SQLite index are based on starting 1
-      final value = params[i];
+  Future<int> executeSql(String sql, {List<Object?>? parameters}) async {
+    int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
+    if (prepared == 1) {
+      throw Exception(["It was not possible to prepare the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+    }
 
-      if (value == null) {
-        bindNull(stmt, index);
-      } else if (value is int) {
-        bindInt(stmt, index, value);
-      } else if (value is double) {
-        bindDouble(stmt, index, value);
-      } else if (value is String) {
-        bindText(stmt, index, value);
-      } else {
-        throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
+    _bindParameters(parameters);
+
+    int ok = await DbasSqlitePlatform.instance.readRow(_dbPtr!);
+    if (ok != 1) {
+      throw Exception(["It was not possible to run the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+    }
+
+    return 1;//Fix it
+  }
+
+  void _bindParameters(List<Object?>? parameters) {
+    if (parameters != null && parameters.isNotEmpty) {
+      for (int i = 0; i < parameters.length; i++) {
+        final index = i + 1; // SQLite index are based on starting 1
+        final value = parameters[i];
+
+        if (value == null) {
+          DbasSqlitePlatform.instance.bindNull(_dbPtr!, index);
+        } else if (value is int) {
+          DbasSqlitePlatform.instance.bindInt(_dbPtr!, index, value);
+        } else if (value is double) {
+          DbasSqlitePlatform.instance.bindDouble(_dbPtr!, index, value);
+        } else if (value is Decimal) {
+          DbasSqlitePlatform.instance.bindDouble(_dbPtr!, index, value as double);
+        } else if (value is String) {
+          DbasSqlitePlatform.instance.bindText(_dbPtr!, index, value);
+        } else {
+          throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
+        }
       }
     }
   }
