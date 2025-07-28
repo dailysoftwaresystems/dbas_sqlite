@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('openDb', () async {
-    final plugin = DbasSqlite();
+    final plugin = await DbasSqlite.getInstance();
     await plugin.openDb('test.db');
     expect(plugin.isOpened, isTrue);
   });
