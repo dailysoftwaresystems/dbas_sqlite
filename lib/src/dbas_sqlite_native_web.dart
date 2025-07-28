@@ -1,60 +1,118 @@
-@JS()
-library;
-
 import 'dart:ffi';
 import 'dart:typed_data';
-import 'dart:js_interop';
-import 'dbas_sqlite_db.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
+import 'package:decimal/decimal.dart';
 
-@JS('initDbasSqlite')
-external Object _initDbasSqlite();
-
-@JS('DbasSqlite')
-external DbasSqliteNativeWeb get dbasSqliteNativeWeb;
-
-@JS()
-@staticInterop
 class DbasSqliteNativeWeb {
-  external factory DbasSqliteNativeWeb();
-
   Future<void> initialize() async {
-    final result = _initDbasSqlite();
-    if (result is Future) await result;
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
   }
-}
 
-extension DbasSqliteNativeWebExtension on DbasSqliteNativeWeb {
-  external Pointer<DbasSqliteDb> openDb(String path);
-  external int executeSql(int dbPtr, String sql);
-  external int prepareQuery(int dbPtr, String sql);
+  Future<Pointer<DbasSqliteDb>> openDb(String filePath) async {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 
-  external void bindNull(int stmt, int index);
-  external void bindInt(int stmt, int index, int value);
-  external void bindFloat(int stmt, int index, double value);
-  external void bindDouble(int stmt, int index, double value);
-  external void bindText(int stmt, int index, String value);
-  external void bindBlob(int stmt, int index, Uint8List value);
+  Future<int> executeSql(Pointer<DbasSqliteDb> dbPtr, String sql) async {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 
-  external void bindNameNull(int stmt, String name);
-  external void bindNameInt(int stmt, String name, int value);
-  external void bindNameFloat(int stmt, String name, double value);
-  external void bindNameDouble(int stmt, String name, double value);
-  external void bindNameText(int stmt, String name, String value);
-  external void bindNameBlob(int stmt, String name, Uint8List value);
+  Future<int> prepareQuery(Pointer<DbasSqliteDb> dbPtr, String sql) async {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 
-  external int readRow(int stmt);
-  external int isNull(int stmt, int colIndex);
+  void bindNull(Pointer<DbasSqliteDb> dbPtr, int index) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 
-  external String getColumnText(int stmt, int colIndex);
-  external int getColumnInt(int stmt, int colIndex);
-  external double getColumnFloat(int stmt, int colIndex);
-  external double getColumnDouble(int stmt, int colIndex);
-  external int getColumnCount(int stmt);
+  void bindInt(Pointer<DbasSqliteDb> dbPtr, int index, int value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 
-  external String getLastDbError(int dbPtr);
-  external int getAffectedRows(int dbPtr);
-  external int getLastInsertedId(int dbPtr);
+  void bindDecimal(Pointer<DbasSqliteDb> dbPtr, int index, Decimal value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 
-  external void closeReader(int stmt);
-  external void closeDb(int dbPtr);
+  void bindDouble(Pointer<DbasSqliteDb> dbPtr, int index, double value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindText(Pointer<DbasSqliteDb> dbPtr, int index, String value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindBlob(Pointer<DbasSqliteDb> dbPtr, int index, Uint8List value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindNameNull(Pointer<DbasSqliteDb> dbPtr, String name) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindNameInt(Pointer<DbasSqliteDb> dbPtr, String name, int value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindNameDecimal(Pointer<DbasSqliteDb> dbPtr, String name, Decimal value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindNameDouble(Pointer<DbasSqliteDb> dbPtr, String name, double value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindNameText(Pointer<DbasSqliteDb> dbPtr, String name, String value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void bindNameBlob(Pointer<DbasSqliteDb> dbPtr, String name, Uint8List value) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int readRow(Pointer<DbasSqliteDb> dbPtr) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int isNull(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  String getColumnText(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int getColumnInt(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  Decimal getColumnDecimal(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  double getColumnDouble(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int getColumnCount(Pointer<DbasSqliteDb> dbPtr) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  String getLastDbError(Pointer<DbasSqliteDb> dbPtr) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int getAffectedRows(Pointer<DbasSqliteDb> dbPtr) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int getLastInsertedId(Pointer<DbasSqliteDb> dbPtr) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  void closeReader(Pointer<DbasSqliteDb> dbPtr) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  Future<void> closeDb(Pointer<DbasSqliteDb> dbPtr) async {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
 }
