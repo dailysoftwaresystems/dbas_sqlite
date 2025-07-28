@@ -30,11 +30,20 @@ abstract class DbasSqlitePlatform {
 
   void bindNull(Pointer<DbasSqliteDb> dbPtr, int index);
   void bindInt(Pointer<DbasSqliteDb> dbPtr, int index, int value);
+  void bindDecimal(Pointer<DbasSqliteDb> dbPtr, int index, Decimal value);
   void bindDouble(Pointer<DbasSqliteDb> dbPtr, int index, double value);
   void bindText(Pointer<DbasSqliteDb> dbPtr, int index, String value);
   void bindBlob(Pointer<DbasSqliteDb> dbPtr, int index, Uint8List value);
 
-  Future<int> readRow(Pointer<DbasSqliteDb> dbPtr);
+  void bindNameNull(Pointer<DbasSqliteDb> dbPtr, String name);
+  void bindNameInt(Pointer<DbasSqliteDb> dbPtr, String name, int value);
+  void bindNameDecimal(Pointer<DbasSqliteDb> dbPtr, String name, Decimal value);
+  void bindNameDouble(Pointer<DbasSqliteDb> dbPtr, String name, double value);
+  void bindNameText(Pointer<DbasSqliteDb> dbPtr, String name, String value);
+  void bindNameBlob(Pointer<DbasSqliteDb> dbPtr, String name, Uint8List value);
+
+  int readRow(Pointer<DbasSqliteDb> dbPtr);
+  int isNull(Pointer<DbasSqliteDb> dbPtr, int index);
   String getColumnText(Pointer<DbasSqliteDb> dbPtr, int index);
   int getColumnInt(Pointer<DbasSqliteDb> dbPtr, int index);
   Decimal getColumnDecimal(Pointer<DbasSqliteDb> dbPtr, int index);
@@ -42,6 +51,8 @@ abstract class DbasSqlitePlatform {
   int getColumnCount(Pointer<DbasSqliteDb> dbPtr);
 
   String getLastDbError(Pointer<DbasSqliteDb> dbPtr);
+  int getAffectedRows(Pointer<DbasSqliteDb> dbPtr);
+  int getLastInsertedId(Pointer<DbasSqliteDb> dbPtr);
 
   void closeReader(Pointer<DbasSqliteDb> dbPtr);
   void closeDb(Pointer<DbasSqliteDb> dbPtr);

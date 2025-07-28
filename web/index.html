@@ -33,4 +33,141 @@
       ModuleInstance._free(ptr);
       return result;
     }
+
+    function bindText(dbPtr, index, value) {
+      const ptr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(value) + 1);
+      ModuleInstance.stringToUTF8(value, ptr, ModuleInstance.lengthBytesUTF8(value) + 1);
+      const result = ModuleInstance.BindText(dbPtr, index, ptr);
+      ModuleInstance._free(ptr);
+      return result;
+    }
+
+    function bindInt(dbPtr, index, value) {
+      return ModuleInstance.BindInt(dbPtr, index, value);
+    }
+
+    function bindFloat(dbPtr, index, value) {
+      return ModuleInstance.BindFloat(dbPtr, index, value);
+    }
+
+    function bindDouble(dbPtr, index, value) {
+      return ModuleInstance.BindDouble(dbPtr, index, value);
+    }
+
+    function bindNull(dbPtr, index) {
+      return ModuleInstance.BindNull(dbPtr, index);
+    }
+
+    function bindBlob(dbPtr, index, data) {
+      const length = data.length;
+      const ptr = ModuleInstance._malloc(length);
+      ModuleInstance.HEAPU8.set(data, ptr);
+      const result = ModuleInstance.BindBlob(dbPtr, index, ptr, length);
+      ModuleInstance._free(ptr);
+      return result;
+    }
+
+    function bindNameText(dbPtr, name, value) {
+      const namePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(name) + 1);
+      const valuePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(value) + 1);
+      ModuleInstance.stringToUTF8(name, namePtr, ModuleInstance.lengthBytesUTF8(name) + 1);
+      ModuleInstance.stringToUTF8(value, valuePtr, ModuleInstance.lengthBytesUTF8(value) + 1);
+      const result = ModuleInstance.BindNameText(dbPtr, namePtr, valuePtr);
+      ModuleInstance._free(namePtr);
+      ModuleInstance._free(valuePtr);
+      return result;
+    }
+
+    function bindNameInt(dbPtr, name, value) {
+      const namePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(name) + 1);
+      ModuleInstance.stringToUTF8(name, namePtr, ModuleInstance.lengthBytesUTF8(name) + 1);
+      const result = ModuleInstance.BindNameInt(dbPtr, namePtr, value);
+      ModuleInstance._free(namePtr);
+      return result;
+    }
+
+    function bindNameFloat(dbPtr, name, value) {
+      const namePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(name) + 1);
+      ModuleInstance.stringToUTF8(name, namePtr, ModuleInstance.lengthBytesUTF8(name) + 1);
+      const result = ModuleInstance.BindNameFloat(dbPtr, namePtr, value);
+      ModuleInstance._free(namePtr);
+      return result;
+    }
+
+    function bindNameDouble(dbPtr, name, value) {
+      const namePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(name) + 1);
+      ModuleInstance.stringToUTF8(name, namePtr, ModuleInstance.lengthBytesUTF8(name) + 1);
+      const result = ModuleInstance.BindNameDouble(dbPtr, namePtr, value);
+      ModuleInstance._free(namePtr);
+      return result;
+    }
+
+    function bindNameNull(dbPtr, name) {
+      const namePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(name) + 1);
+      ModuleInstance.stringToUTF8(name, namePtr, ModuleInstance.lengthBytesUTF8(name) + 1);
+      const result = ModuleInstance.BindNameNull(dbPtr, namePtr);
+      ModuleInstance._free(namePtr);
+      return result;
+    }
+
+    function bindNameBlob(dbPtr, name, data) {
+      const namePtr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(name) + 1);
+      const blobPtr = ModuleInstance._malloc(data.length);
+      ModuleInstance.stringToUTF8(name, namePtr, ModuleInstance.lengthBytesUTF8(name) + 1);
+      ModuleInstance.HEAPU8.set(data, blobPtr);
+      const result = ModuleInstance.BindNameBlob(dbPtr, namePtr, blobPtr, data.length);
+      ModuleInstance._free(namePtr);
+      ModuleInstance._free(blobPtr);
+      return result;
+    }
+
+    function readRow(dbPtr) {
+      return ModuleInstance.ReadRow(dbPtr);
+    }
+
+    function isNull(dbPtr, columnIndex) {
+      return ModuleInstance.IsNull(dbPtr, columnIndex);
+    }
+
+    function getColumnText(dbPtr, columnIndex) {
+      const ptr = ModuleInstance.GetColumnText(dbPtr, columnIndex);
+      return ModuleInstance.UTF8ToString(ptr);
+    }
+
+    function getColumnInt(dbPtr, columnIndex) {
+      return ModuleInstance.GetColumnInt(dbPtr, columnIndex);
+    }
+
+    function getColumnFloat(dbPtr, columnIndex) {
+      return ModuleInstance.GetColumnFloat(dbPtr, columnIndex);
+    }
+
+    function getColumnDouble(dbPtr, columnIndex) {
+      return ModuleInstance.GetColumnDouble(dbPtr, columnIndex);
+    }
+
+    function getColumnCount(dbPtr) {
+      return ModuleInstance.GetColumnCount(dbPtr);
+    }
+
+    function getLastDbError(dbPtr) {
+      const ptr = ModuleInstance.GetLastDbError(dbPtr);
+      return ModuleInstance.UTF8ToString(ptr);
+    }
+
+    function getAffectedRows(dbPtr) {
+      return ModuleInstance.GetAffectedRows(dbPtr);
+    }
+
+    function getLastInsertedId(dbPtr) {
+      return ModuleInstance.GetLastInsertedId(dbPtr);
+    }
+
+    function closeReader(dbPtr) {
+      ModuleInstance.CloseReader(dbPtr);
+    }
+
+    function closeDb(dbPtr) {
+      ModuleInstance.CloseDb(dbPtr);
+    }
 </script>
