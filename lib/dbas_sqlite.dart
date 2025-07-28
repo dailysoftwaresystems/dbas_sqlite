@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:typed_data';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform_interface.dart';
@@ -22,24 +23,30 @@ class DbasSqlite {
     _dbPtr = await DbasSqlitePlatform.instance.openDb(fileName);
   }
 
-  Future<int> executeSql(String sql, {List<Object?>? parameters}) async {
+  Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
     int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
     if (prepared == 1) {
       throw Exception(["It was not possible to prepare the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
     }
 
-    _bindParameters(parameters);
-    readRow();
-    return DbasSqlitePlatform.instance.getAffectedRows(_dbPtr!);
+    _bindParameters(params);
+    _bindNameParameters(nameParams);
+
+    if (readRow()) {
+      return DbasSqlitePlatform.instance.getAffectedRows(_dbPtr!);
+    } else {
+      return 0;
+    }
   }
 
-  Future<int> executeReader(String sql, {List<Object?>? parameters}) async {
+  Future<int> executeReader(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
     int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
     if (prepared == 1) {
       throw Exception(["It was not possible to prepare the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
     }
 
-    _bindParameters(parameters);
+    _bindParameters(params);
+    _bindNameParameters(nameParams);
 
     return 1;
   }
@@ -50,10 +57,6 @@ class DbasSqlite {
       throw Exception(["It was not possible to run the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
     }
     return result == 1;
-  }
-
-  Future<void> closeDb() async {
-    await DbasSqlitePlatform.instance.closeDb(_dbPtr!);
   }
 
   void _bindParameters(List<Object?>? parameters) {
@@ -72,10 +75,44 @@ class DbasSqlite {
           DbasSqlitePlatform.instance.bindDouble(_dbPtr!, index, value as double);
         } else if (value is String) {
           DbasSqlitePlatform.instance.bindText(_dbPtr!, index, value);
+        } else if (value is Uint8List) {
+          DbasSqlitePlatform.instance.bindBlob(_dbPtr!, index, value);
         } else {
           throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
         }
       }
     }
+  }
+
+  void _bindNameParameters(Map<String, Object?>? parameters) {
+    if (parameters != null && parameters.isNotEmpty) {
+      parameters.forEach((key, value) {
+        final paramName = key.startsWith(':') || key.startsWith('@') || key.startsWith(r'$')
+            ? key
+            : ':$key';
+
+        if (value == null) {
+          DbasSqlitePlatform.instance.bindNameNull(_dbPtr!, paramName);
+        } else if (value is int) {
+          DbasSqlitePlatform.instance.bindNameInt(_dbPtr!, paramName, value);
+        } else if (value is double) {
+          DbasSqlitePlatform.instance.bindNameDouble(_dbPtr!, paramName, value);
+        } else if (value is Decimal) {
+          DbasSqlitePlatform.instance.bindNameDecimal(_dbPtr!, paramName, value);
+        } else if (value is String) {
+          DbasSqlitePlatform.instance.bindNameText(_dbPtr!, paramName, value);
+        } else if (value is Uint8List) {
+          DbasSqlitePlatform.instance.bindNameBlob(_dbPtr!, paramName, value);
+        } else {
+          throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
+        }
+      });
+    }
+  }
+
+
+  Future<void> closeDb() async {
+    await DbasSqlitePlatform.instance.closeDb(_dbPtr!);
+    _dbPtr = null;
   }
 }
