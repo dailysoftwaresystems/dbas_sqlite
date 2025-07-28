@@ -3,7 +3,6 @@ library;
 
 import 'dart:ffi';
 import 'dart:js/js_wasm.dart';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';

@@ -55,5 +55,5 @@ abstract class DbasSqlitePlatform {
   int getLastInsertedId(Pointer<DbasSqliteDb> dbPtr);
 
   void closeReader(Pointer<DbasSqliteDb> dbPtr);
-  void closeDb(Pointer<DbasSqliteDb> dbPtr);
+  Future<void> closeDb(Pointer<DbasSqliteDb> dbPtr);
 }

@@ -148,7 +148,7 @@ class DbasSqliteWeb extends DbasSqlitePlatform {
   }
 
   @override
-  void closeDb(Pointer<DbasSqliteDb> dbPtr) {
+  Future<void> closeDb(Pointer<DbasSqliteDb> dbPtr) async {
     _sqlite!.closeDb(dbPtr.address);
   }
 }

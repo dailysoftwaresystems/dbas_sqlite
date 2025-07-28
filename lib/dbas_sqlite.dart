@@ -29,13 +29,31 @@ class DbasSqlite {
     }
 
     _bindParameters(parameters);
+    readRow();
+    return DbasSqlitePlatform.instance.getAffectedRows(_dbPtr!);
+  }
 
-    int ok = await DbasSqlitePlatform.instance.readRow(_dbPtr!);
-    if (ok != 1) {
-      throw Exception(["It was not possible to run the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+  Future<int> executeReader(String sql, {List<Object?>? parameters}) async {
+    int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
+    if (prepared == 1) {
+      throw Exception(["It was not possible to prepare the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
     }
 
-    return 1;//Fix it
+    _bindParameters(parameters);
+
+    return 1;
+  }
+
+  bool readRow() {
+    int result = DbasSqlitePlatform.instance.readRow(_dbPtr!);
+    if (result == -1) {
+      throw Exception(["It was not possible to run the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+    }
+    return result == 1;
+  }
+
+  Future<void> closeDb() async {
+    await DbasSqlitePlatform.instance.closeDb(_dbPtr!);
   }
 
   void _bindParameters(List<Object?>? parameters) {
