@@ -49,6 +49,9 @@ extension DbasSqliteNativeWebExtension on DbasSqliteNativeWeb {
   external int getColumnInt(int stmt, int colIndex);
   external double getColumnFloat(int stmt, int colIndex);
   external double getColumnDouble(int stmt, int colIndex);
+  external Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDb> dbPtr, int columnIndex);
+  external int getColumnBytes(Pointer<DbasSqliteDb> dbPtr, int columnIndex);
+  external int getColumnType(int stmt, int colIndex);
   external int getColumnCount(int stmt);
 
   external String getLastDbError(int dbPtr);

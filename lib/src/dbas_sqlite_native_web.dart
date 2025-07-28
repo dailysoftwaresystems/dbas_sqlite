@@ -92,6 +92,18 @@ class DbasSqliteNativeWeb {
     throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
   }
 
+  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int getColumnBytes(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
+  int getColumnType(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
+  }
+
   int getColumnCount(Pointer<DbasSqliteDb> dbPtr) {
     throw UnsupportedError('DbasSqliteNativeWeb is only supported on Web.');
   }

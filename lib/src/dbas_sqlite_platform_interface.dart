@@ -48,6 +48,18 @@ abstract class DbasSqlitePlatform {
   int getColumnInt(Pointer<DbasSqliteDb> dbPtr, int index);
   Decimal getColumnDecimal(Pointer<DbasSqliteDb> dbPtr, int index);
   double getColumnDouble(Pointer<DbasSqliteDb> dbPtr, int index);
+  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDb> dbPtr, int index);
+  int getColumnBytes(Pointer<DbasSqliteDb> dbPtr, int index);
+
+  /// Returns the SQLite column type at the given column index in the current row.
+  /// The return value corresponds to SQLite data types:
+  /// ```
+  /// INTEGER = 1
+  /// FLOAT   = 2
+  /// TEXT    = 3
+  /// BLOB    = 4
+  /// NULL    = 5
+  int getColumnType(Pointer<DbasSqliteDb> dbPtr, int index);
   int getColumnCount(Pointer<DbasSqliteDb> dbPtr);
 
   String getLastDbError(Pointer<DbasSqliteDb> dbPtr);

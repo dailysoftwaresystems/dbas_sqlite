@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:typed_data';
 
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform_interface.dart';
 import 'package:decimal/decimal.dart';
@@ -61,6 +62,59 @@ class DbasSqlite {
       throw Exception(["It was not possible to run the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
     }
     return result == 1;
+  }
+
+  bool isColumnNull(int idx) {
+    return DbasSqlitePlatform.instance.isNull(_dbPtr!, idx) == 1;
+  }
+
+  String getColumnText(int idx) {
+    return DbasSqlitePlatform.instance.getColumnText(_dbPtr!, idx);
+  }
+
+  String? getColumnNullableText(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return DbasSqlitePlatform.instance.getColumnText(_dbPtr!, idx);
+  }
+
+  int getColumnInt(int idx) {
+    return DbasSqlitePlatform.instance.getColumnInt(_dbPtr!, idx);
+  }
+
+  Decimal getColumnDecimal(int idx) {
+    if (isColumnNull(idx)) {
+      return Decimal.zero;
+    }
+
+    return DbasSqlitePlatform.instance.getColumnDecimal(_dbPtr!, idx);
+  }
+
+  double getColumnDouble(int idx) {
+    return DbasSqlitePlatform.instance.getColumnDouble(_dbPtr!, idx);
+  }
+
+  Uint8List getColumnBlob(int idx) {
+    final length = DbasSqlitePlatform.instance.getColumnBytes(_dbPtr!, idx);
+    final ptr = DbasSqlitePlatform.instance.getColumnBlob(_dbPtr!, idx);
+
+    if (length == 0 || ptr == nullptr) {
+      return Uint8List(0); // Empty blob
+    }
+
+    // Copy native memory bytes to Dart Uint8List
+    final bytes = ptr.asTypedList(length);
+    return Uint8List.fromList(bytes);
+  }
+
+  SqliteColumnType getColumnType(int idx) {
+    return SqliteColumnType.fromInt( DbasSqlitePlatform.instance.getColumnType(_dbPtr!, idx));
+  }
+
+  int getColumnCount() {
+    return DbasSqlitePlatform.instance.getColumnCount(_dbPtr!);
   }
 
   void _bindParameters(List<Object?>? parameters) {

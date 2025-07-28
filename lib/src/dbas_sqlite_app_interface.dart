@@ -272,6 +272,36 @@ abstract class DbasSqliteApp extends DbasSqlitePlatform {
   }
 
   @override
+  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    final func = _sqlite!.lookupFunction<
+        Pointer<Uint8> Function(Pointer<DbasSqliteDb>, Int32),
+        Pointer<Uint8> Function(Pointer<DbasSqliteDb>, int)
+    >('GetColumnBlob');
+
+    return func(dbPtr, columnIndex);
+  }
+
+  @override
+  int getColumnBytes(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    final func = _sqlite!.lookupFunction<
+        Int32 Function(Pointer<DbasSqliteDb>, Int32),
+        int Function(Pointer<DbasSqliteDb>, int)
+    >('GetColumnBytes');
+
+    return func(dbPtr, columnIndex);
+  }
+
+  @override
+  int getColumnType(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    final func = _sqlite!.lookupFunction<
+        Int32 Function(Pointer<DbasSqliteDb>, Int32),
+        int Function(Pointer<DbasSqliteDb>, int)
+    >('GetColumnType');
+
+    return func(dbPtr, columnIndex);
+  }
+
+  @override
   int getColumnCount(Pointer<DbasSqliteDb> dbPtr) {
     final func = _sqlite!.lookupFunction<
         Int32 Function(Pointer<DbasSqliteDb>),

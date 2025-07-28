@@ -245,9 +245,6 @@ function assert(condition, text) {
 
 // We used to include malloc/free by default in the past. Show a helpful error in
 // builds with assertions.
-function _malloc() {
-  abort('malloc() called but not included in the build - add `_malloc` to EXPORTED_FUNCTIONS');
-}
 function _free() {
   // Show a helpful error since we used to include free by default in the past.
   abort('free() called but not included in the build - add `_free` to EXPORTED_FUNCTIONS');
@@ -461,7 +458,7 @@ function updateMemoryViews() {
   var b = wasmMemory.buffer;
   HEAP8 = new Int8Array(b);
   HEAP16 = new Int16Array(b);
-  HEAPU8 = new Uint8Array(b);
+  Module['HEAPU8'] = HEAPU8 = new Uint8Array(b);
   HEAPU16 = new Uint16Array(b);
   HEAP32 = new Int32Array(b);
   HEAPU32 = new Uint32Array(b);
@@ -743,6 +740,10 @@ async function createWasm() {
     
     assert(wasmMemory, 'memory not found in wasm exports');
     updateMemoryViews();
+
+    wasmTable = wasmExports['__indirect_function_table'];
+    
+    assert(wasmTable, 'table not found in wasm exports');
 
     assignWasmExports(wasmExports);
     removeRunDependency('wasm-instantiate');
@@ -4497,6 +4498,197 @@ async function createWasm() {
       return (...args) => ccall(ident, returnType, argTypes, args, opts);
     };
 
+
+
+
+
+  var uleb128EncodeWithLen = (arr) => {
+      const n = arr.length;
+      assert(n < 16384);
+      // Note: this LEB128 length encoding produces extra byte for n < 128,
+      // but we don't care as it's only used in a temporary representation.
+      return [(n % 128) | 128, n >> 7, ...arr];
+    };
+  
+  
+  var wasmTypeCodes = {
+      'i': 0x7f, // i32
+      'p': 0x7f, // i32
+      'j': 0x7e, // i64
+      'f': 0x7d, // f32
+      'd': 0x7c, // f64
+      'e': 0x6f, // externref
+    };
+  var generateTypePack = (types) => uleb128EncodeWithLen(Array.from(types, (type) => {
+      var code = wasmTypeCodes[type];
+      assert(code, `invalid signature char: ${type}`);
+      return code;
+    }));
+  var convertJsFunctionToWasm = (func, sig) => {
+  
+      // Rest of the module is static
+      var bytes = Uint8Array.of(
+        0x00, 0x61, 0x73, 0x6d, // magic ("\0asm")
+        0x01, 0x00, 0x00, 0x00, // version: 1
+        0x01, // Type section code
+          // The module is static, with the exception of the type section, which is
+          // generated based on the signature passed in.
+          ...uleb128EncodeWithLen([
+            0x01, // count: 1
+            0x60 /* form: func */,
+            // param types
+            ...generateTypePack(sig.slice(1)),
+            // return types (for now only supporting [] if `void` and single [T] otherwise)
+            ...generateTypePack(sig[0] === 'v' ? '' : sig[0])
+          ]),
+        // The rest of the module is static
+        0x02, 0x07, // import section
+          // (import "e" "f" (func 0 (type 0)))
+          0x01, 0x01, 0x65, 0x01, 0x66, 0x00, 0x00,
+        0x07, 0x05, // export section
+          // (export "f" (func 0 (type 0)))
+          0x01, 0x01, 0x66, 0x00, 0x00,
+      );
+  
+      // We can compile this wasm module synchronously because it is very small.
+      // This accepts an import (at "e.f"), that it reroutes to an export (at "f")
+      var module = new WebAssembly.Module(bytes);
+      var instance = new WebAssembly.Instance(module, { 'e': { 'f': func } });
+      var wrappedFunc = instance.exports['f'];
+      return wrappedFunc;
+    };
+  
+  var wasmTableMirror = [];
+  
+  /** @type {WebAssembly.Table} */
+  var wasmTable;
+  var getWasmTableEntry = (funcPtr) => {
+      var func = wasmTableMirror[funcPtr];
+      if (!func) {
+        /** @suppress {checkTypes} */
+        wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr);
+      }
+      /** @suppress {checkTypes} */
+      assert(wasmTable.get(funcPtr) == func, 'JavaScript-side Wasm function table mirror is out of date!');
+      return func;
+    };
+  
+  var updateTableMap = (offset, count) => {
+      if (functionsInTableMap) {
+        for (var i = offset; i < offset + count; i++) {
+          var item = getWasmTableEntry(i);
+          // Ignore null values.
+          if (item) {
+            functionsInTableMap.set(item, i);
+          }
+        }
+      }
+    };
+  
+  var functionsInTableMap;
+  
+  var getFunctionAddress = (func) => {
+      // First, create the map if this is the first use.
+      if (!functionsInTableMap) {
+        functionsInTableMap = new WeakMap();
+        updateTableMap(0, wasmTable.length);
+      }
+      return functionsInTableMap.get(func) || 0;
+    };
+  
+  
+  var freeTableIndexes = [];
+  
+  var getEmptyTableSlot = () => {
+      // Reuse a free index if there is one, otherwise grow.
+      if (freeTableIndexes.length) {
+        return freeTableIndexes.pop();
+      }
+      try {
+        // Grow the table
+        return wasmTable['grow'](1);
+      } catch (err) {
+        if (!(err instanceof RangeError)) {
+          throw err;
+        }
+        throw 'Unable to grow wasm table. Set ALLOW_TABLE_GROWTH.';
+      }
+    };
+  
+  
+  var setWasmTableEntry = (idx, func) => {
+      /** @suppress {checkTypes} */
+      wasmTable.set(idx, func);
+      // With ABORT_ON_WASM_EXCEPTIONS wasmTable.get is overridden to return wrapped
+      // functions so we need to call it here to retrieve the potential wrapper correctly
+      // instead of just storing 'func' directly into wasmTableMirror
+      /** @suppress {checkTypes} */
+      wasmTableMirror[idx] = wasmTable.get(idx);
+    };
+  /** @param {string=} sig */
+  var addFunction = (func, sig) => {
+      assert(typeof func != 'undefined');
+      // Check if the function is already in the table, to ensure each function
+      // gets a unique index.
+      var rtn = getFunctionAddress(func);
+      if (rtn) {
+        return rtn;
+      }
+  
+      // It's not in the table, add it now.
+  
+      var ret = getEmptyTableSlot();
+  
+      // Set the new value.
+      try {
+        // Attempting to call this with JS function will cause of table.set() to fail
+        setWasmTableEntry(ret, func);
+      } catch (err) {
+        if (!(err instanceof TypeError)) {
+          throw err;
+        }
+        assert(typeof sig != 'undefined', 'Missing signature argument to addFunction: ' + func);
+        var wrapped = convertJsFunctionToWasm(func, sig);
+        setWasmTableEntry(ret, wrapped);
+      }
+  
+      functionsInTableMap.set(func, ret);
+  
+      return ret;
+    };
+
+  
+  
+  
+  
+  var removeFunction = (index) => {
+      functionsInTableMap.delete(getWasmTableEntry(index));
+      setWasmTableEntry(index, null);
+      freeTableIndexes.push(index);
+    };
+
+  var ALLOC_STACK = 1;
+  
+  
+  
+  var allocate = (slab, allocator) => {
+      var ret;
+      assert(typeof allocator == 'number', 'allocate no longer takes a type argument')
+      assert(typeof slab != 'number', 'allocate no longer takes a number as arg0')
+  
+      if (allocator == ALLOC_STACK) {
+        ret = stackAlloc(slab.length);
+      } else {
+        ret = _malloc(slab.length);
+      }
+  
+      if (!slab.subarray && !slab.slice) {
+        slab = new Uint8Array(slab);
+      }
+      HEAPU8.set(slab, ret);
+      return ret;
+    };
+
   FS.createPreloadedFile = FS_createPreloadedFile;
   FS.staticInit();;
 // End JS library code
@@ -4541,6 +4733,13 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
 // Begin runtime exports
   Module['ccall'] = ccall;
   Module['cwrap'] = cwrap;
+  Module['addFunction'] = addFunction;
+  Module['removeFunction'] = removeFunction;
+  Module['setValue'] = setValue;
+  Module['getValue'] = getValue;
+  Module['UTF8ToString'] = UTF8ToString;
+  Module['stringToUTF8'] = stringToUTF8;
+  Module['allocate'] = allocate;
   var missingLibrarySymbols = [
   'writeI53ToI64',
   'writeI53ToI64Clamped',
@@ -4583,12 +4782,6 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'STACK_ALIGN',
   'POINTER_SIZE',
   'ASSERTIONS',
-  'convertJsFunctionToWasm',
-  'getEmptyTableSlot',
-  'updateTableMap',
-  'getFunctionAddress',
-  'addFunction',
-  'removeFunction',
   'intArrayToString',
   'AsciiToString',
   'stringToAscii',
@@ -4686,8 +4879,6 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'registerWebGlEventCallback',
   'runAndAbortIfError',
   'ALLOC_NORMAL',
-  'ALLOC_STACK',
-  'allocate',
   'writeStringToMemory',
   'writeAsciiToMemory',
   'demangle',
@@ -4708,7 +4899,6 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'HEAPF32',
   'HEAPF64',
   'HEAP8',
-  'HEAPU8',
   'HEAP16',
   'HEAPU16',
   'HEAP32',
@@ -4746,17 +4936,17 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'noExitRuntime',
   'addOnPreRun',
   'addOnPostRun',
+  'convertJsFunctionToWasm',
   'freeTableIndexes',
   'functionsInTableMap',
-  'setValue',
-  'getValue',
+  'getEmptyTableSlot',
+  'updateTableMap',
+  'getFunctionAddress',
   'PATH',
   'PATH_FS',
   'UTF8Decoder',
   'UTF8ArrayToString',
-  'UTF8ToString',
   'stringToUTF8Array',
-  'stringToUTF8',
   'lengthBytesUTF8',
   'intArrayFromString',
   'UTF16Decoder',
@@ -4935,6 +5125,7 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'IDBStore',
   'SDL',
   'SDL_gfx',
+  'ALLOC_STACK',
   'allocateUTF8',
   'allocateUTF8OnStack',
   'print',
@@ -4954,19 +5145,35 @@ function checkIncomingModuleAPI() {
 }
 
 // Imports from the Wasm binary.
+var _malloc = makeInvalidEarlyAccess('_malloc');
 var _OpenDb = Module['_OpenDb'] = makeInvalidEarlyAccess('_OpenDb');
 var _ExecuteSql = Module['_ExecuteSql'] = makeInvalidEarlyAccess('_ExecuteSql');
 var _PrepareQuery = Module['_PrepareQuery'] = makeInvalidEarlyAccess('_PrepareQuery');
 var _BindText = Module['_BindText'] = makeInvalidEarlyAccess('_BindText');
 var _BindInt = Module['_BindInt'] = makeInvalidEarlyAccess('_BindInt');
+var _BindBlob = Module['_BindBlob'] = makeInvalidEarlyAccess('_BindBlob');
+var _BindFloat = Module['_BindFloat'] = makeInvalidEarlyAccess('_BindFloat');
 var _BindDouble = Module['_BindDouble'] = makeInvalidEarlyAccess('_BindDouble');
 var _BindNull = Module['_BindNull'] = makeInvalidEarlyAccess('_BindNull');
+var _BindNameText = Module['_BindNameText'] = makeInvalidEarlyAccess('_BindNameText');
+var _BindNameInt = Module['_BindNameInt'] = makeInvalidEarlyAccess('_BindNameInt');
+var _BindNameBlob = Module['_BindNameBlob'] = makeInvalidEarlyAccess('_BindNameBlob');
+var _BindNameFloat = Module['_BindNameFloat'] = makeInvalidEarlyAccess('_BindNameFloat');
+var _BindNameDouble = Module['_BindNameDouble'] = makeInvalidEarlyAccess('_BindNameDouble');
+var _BindNameNull = Module['_BindNameNull'] = makeInvalidEarlyAccess('_BindNameNull');
 var _ReadRow = Module['_ReadRow'] = makeInvalidEarlyAccess('_ReadRow');
+var _IsNull = Module['_IsNull'] = makeInvalidEarlyAccess('_IsNull');
 var _GetColumnText = Module['_GetColumnText'] = makeInvalidEarlyAccess('_GetColumnText');
 var _GetColumnInt = Module['_GetColumnInt'] = makeInvalidEarlyAccess('_GetColumnInt');
 var _GetColumnFloat = Module['_GetColumnFloat'] = makeInvalidEarlyAccess('_GetColumnFloat');
 var _GetColumnDouble = Module['_GetColumnDouble'] = makeInvalidEarlyAccess('_GetColumnDouble');
+var _GetColumnType = Module['_GetColumnType'] = makeInvalidEarlyAccess('_GetColumnType');
+var _GetColumnBlob = Module['_GetColumnBlob'] = makeInvalidEarlyAccess('_GetColumnBlob');
+var _GetColumnBytes = Module['_GetColumnBytes'] = makeInvalidEarlyAccess('_GetColumnBytes');
 var _GetColumnCount = Module['_GetColumnCount'] = makeInvalidEarlyAccess('_GetColumnCount');
+var _GetLastDbError = Module['_GetLastDbError'] = makeInvalidEarlyAccess('_GetLastDbError');
+var _GetAffectedRows = Module['_GetAffectedRows'] = makeInvalidEarlyAccess('_GetAffectedRows');
+var _GetLastInsertedId = Module['_GetLastInsertedId'] = makeInvalidEarlyAccess('_GetLastInsertedId');
 var _CloseReader = Module['_CloseReader'] = makeInvalidEarlyAccess('_CloseReader');
 var _CloseDb = Module['_CloseDb'] = makeInvalidEarlyAccess('_CloseDb');
 var _fflush = makeInvalidEarlyAccess('_fflush');
@@ -4981,19 +5188,35 @@ var __emscripten_stack_alloc = makeInvalidEarlyAccess('__emscripten_stack_alloc'
 var _emscripten_stack_get_current = makeInvalidEarlyAccess('_emscripten_stack_get_current');
 
 function assignWasmExports(wasmExports) {
+  _malloc = createExportWrapper('malloc', 1);
   Module['_OpenDb'] = _OpenDb = createExportWrapper('OpenDb', 1);
   Module['_ExecuteSql'] = _ExecuteSql = createExportWrapper('ExecuteSql', 2);
   Module['_PrepareQuery'] = _PrepareQuery = createExportWrapper('PrepareQuery', 2);
   Module['_BindText'] = _BindText = createExportWrapper('BindText', 3);
   Module['_BindInt'] = _BindInt = createExportWrapper('BindInt', 3);
+  Module['_BindBlob'] = _BindBlob = createExportWrapper('BindBlob', 4);
+  Module['_BindFloat'] = _BindFloat = createExportWrapper('BindFloat', 3);
   Module['_BindDouble'] = _BindDouble = createExportWrapper('BindDouble', 3);
   Module['_BindNull'] = _BindNull = createExportWrapper('BindNull', 2);
+  Module['_BindNameText'] = _BindNameText = createExportWrapper('BindNameText', 3);
+  Module['_BindNameInt'] = _BindNameInt = createExportWrapper('BindNameInt', 3);
+  Module['_BindNameBlob'] = _BindNameBlob = createExportWrapper('BindNameBlob', 4);
+  Module['_BindNameFloat'] = _BindNameFloat = createExportWrapper('BindNameFloat', 3);
+  Module['_BindNameDouble'] = _BindNameDouble = createExportWrapper('BindNameDouble', 3);
+  Module['_BindNameNull'] = _BindNameNull = createExportWrapper('BindNameNull', 2);
   Module['_ReadRow'] = _ReadRow = createExportWrapper('ReadRow', 1);
+  Module['_IsNull'] = _IsNull = createExportWrapper('IsNull', 2);
   Module['_GetColumnText'] = _GetColumnText = createExportWrapper('GetColumnText', 2);
   Module['_GetColumnInt'] = _GetColumnInt = createExportWrapper('GetColumnInt', 2);
   Module['_GetColumnFloat'] = _GetColumnFloat = createExportWrapper('GetColumnFloat', 2);
   Module['_GetColumnDouble'] = _GetColumnDouble = createExportWrapper('GetColumnDouble', 2);
+  Module['_GetColumnType'] = _GetColumnType = createExportWrapper('GetColumnType', 2);
+  Module['_GetColumnBlob'] = _GetColumnBlob = createExportWrapper('GetColumnBlob', 2);
+  Module['_GetColumnBytes'] = _GetColumnBytes = createExportWrapper('GetColumnBytes', 2);
   Module['_GetColumnCount'] = _GetColumnCount = createExportWrapper('GetColumnCount', 1);
+  Module['_GetLastDbError'] = _GetLastDbError = createExportWrapper('GetLastDbError', 1);
+  Module['_GetAffectedRows'] = _GetAffectedRows = createExportWrapper('GetAffectedRows', 1);
+  Module['_GetLastInsertedId'] = _GetLastInsertedId = createExportWrapper('GetLastInsertedId', 1);
   Module['_CloseReader'] = _CloseReader = createExportWrapper('CloseReader', 1);
   Module['_CloseDb'] = _CloseDb = createExportWrapper('CloseDb', 1);
   _fflush = createExportWrapper('fflush', 1);

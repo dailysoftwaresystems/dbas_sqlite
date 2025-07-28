@@ -125,6 +125,21 @@ class DbasSqliteWeb extends DbasSqlitePlatform {
   }
 
   @override
+  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    return _sqlite!.getColumnBlob(dbPtr, columnIndex);
+  }
+
+  @override
+  int getColumnBytes(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
+    return _sqlite!.getColumnBytes(dbPtr, columnIndex);
+  }
+
+  @override
+  int getColumnType(Pointer<DbasSqliteDb> dbPtr, int colIndex) {
+    return _sqlite!.getColumnType(dbPtr, colIndex);
+  }
+
+  @override
   int getColumnCount(Pointer<DbasSqliteDb> dbPtr) {
     return _sqlite!.getColumnCount(dbPtr);
   }

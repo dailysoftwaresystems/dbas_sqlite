@@ -146,6 +146,18 @@
       return ModuleInstance.GetColumnDouble(dbPtr, columnIndex);
     }
 
+    function getColumnType(dbPtr, columnIndex) {
+      return ModuleInstance.GetColumnType(dbPtr, columnIndex);
+    }
+
+    function getColumnBlob(dbPtr, columnIndex) {
+      return ModuleInstance.GetColumnBlob(dbPtr, columnIndex);
+    }
+
+    function getColumnBytes(dbPtr, columnIndex) {
+      return ModuleInstance.GetColumnBytes(dbPtr, columnIndex);
+    }
+
     function getColumnCount(dbPtr) {
       return ModuleInstance.GetColumnCount(dbPtr);
     }
