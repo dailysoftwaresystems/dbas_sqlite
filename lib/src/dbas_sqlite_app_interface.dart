@@ -30,6 +30,10 @@ abstract class DbasSqliteApp extends DbasSqlitePlatform {
     final resultPtr = functionPtr(sqlC);
     calloc.free(sqlC);
 
+    if (resultPtr == nullptr) {
+      throw Exception(['It was not possible to open database at: $fileName']);
+    }
+
     return resultPtr;
   }
 
@@ -254,7 +258,7 @@ abstract class DbasSqliteApp extends DbasSqlitePlatform {
   @override
   Decimal getColumnDecimal(Pointer<DbasSqliteDb> dbPtr, int columnIndex) {
     final result = getColumnDouble(dbPtr, columnIndex);
-    return result == null ? Decimal.zero : Decimal.parse(result.toString());
+    return Decimal.parse(result.toString());
   }
 
   @override
@@ -360,6 +364,6 @@ class DbasSqliteLinux extends DbasSqliteApp {
 class DbasSqliteWindows extends DbasSqliteApp {
   @override
   Future<void> internalInitialize() async {
-    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open(path.join(DbasSqlitePlatform.basePath, 'windows', 'dbas_sqlite.so')));
+    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open(path.join(DbasSqlitePlatform.basePath, 'windows', 'dbas_sqlite.dll')));
   }
 }

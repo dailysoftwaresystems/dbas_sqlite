@@ -21,7 +21,7 @@ abstract class DbasSqlitePlatform {
     throw UnsupportedError("Platform not ${Platform.version} found");
   }
 
-  static final basePath = path.join(Directory.current.path, 'native_libs');
+  static final basePath = path.join(Directory.current.path, 'native_libs', 'sqlite');
   Future<void> initialize();
 
   Future<Pointer<DbasSqliteDb>> openDb(String fileName);
