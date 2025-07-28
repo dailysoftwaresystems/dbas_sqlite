@@ -23,6 +23,10 @@ class DbasSqlite {
     _dbPtr = await DbasSqlitePlatform.instance.openDb(fileName);
   }
 
+  bool isOpened() {
+    return _dbPtr != null;
+  }
+
   Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
     int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
     if (prepared == 1) {
