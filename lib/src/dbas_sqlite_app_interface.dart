@@ -393,7 +393,7 @@ class DbasSqliteIOS extends DbasSqliteApp {
 class DbasSqliteMacOS extends DbasSqliteApp {
   @override
   Future<void> internalInitialize() async {
-    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open(path.join(DbasSqlitePlatform.basePath, 'macos', 'dbas_sqlite.dylib')));
+    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open('dbas_sqlite.dylib'));
   }
 }
 

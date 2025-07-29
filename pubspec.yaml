@@ -42,19 +42,18 @@ flutter:
   plugin:
     platforms:
       android:
-        package: com.dailysoftwaresystems.dbas_sqlite_flutter
-        pluginClass: DbasSqliteFlutterPlugin
+        ffiPlugin: true
       ios:
-        pluginClass: DbasSqliteFlutterPlugin
+        ffiPlugin: true
       linux:
-        pluginClass: DbasSqliteFlutterPlugin
+        ffiPlugin: true
       macos:
-        pluginClass: DbasSqliteFlutterPlugin
+        ffiPlugin: true
       windows:
-        pluginClass: DbasSqliteFlutterPluginCApi
+        ffiPlugin: true
       web:
-        pluginClass: DbasSqliteFlutterWeb
-        fileName: dbas_sqlite_flutter_web.dart
+        pluginClass: DbasSqliteWeb
+        fileName: dbas_sqlite_web_interface.dart
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

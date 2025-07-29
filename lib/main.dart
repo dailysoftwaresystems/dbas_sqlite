@@ -1,0 +1,1 @@
+void main() => print('DBAS SQLite started');
