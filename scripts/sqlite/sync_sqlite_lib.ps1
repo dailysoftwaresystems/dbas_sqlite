@@ -47,7 +47,14 @@ DownloadRecursive $BASE_URL $OUT_DIR
 
 Write-Host "All binaries downloaded in: $OUT_DIR, copying binaries to respective platform directories..."
 
+Write-Host "Copying android binaries..."
 Copy-Item "$OUT_DIR/android/a64/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a" -Recurse -Force
 Copy-Item "$OUT_DIR/android/armeabi/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a" -Recurse -Force
+
+Write-Host "Copying ios binaries..."
+Copy-Item "$OUT_DIR/ios/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../ios" -Recurse -Force
+
+Write-Host "Copying macos binaries..."
+Copy-Item "$OUT_DIR/macos/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../macos" -Recurse -Force
 
 Write-Host "All platform binaries copied successfully."

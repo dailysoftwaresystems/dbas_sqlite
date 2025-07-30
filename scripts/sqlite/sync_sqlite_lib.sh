@@ -19,7 +19,7 @@ download_recursive() {
 
     echo "Reading: $url into $path"
 
-    curl -s "$url" | jq -c '.[]' | while read -r item; do
+    curl -s "$url" -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3.raw" | jq -c '.[]' | while read -r item; do
         type=$(echo "$item" | jq -r '.type')
         name=$(echo "$item" | jq -r '.name')
         download_url=$(echo "$item" | jq -r '.download_url')
@@ -42,10 +42,19 @@ download_recursive "$BASE_URL" "$OUT_DIR"
 
 echo "All binaries downloaded in: $OUT_DIR, copying binaries to respective platform directories..."
 
+echo "Copying android binaries..."
 mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a"
 mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a"
 
 cp -r "$OUT_DIR/android/a64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a/"
 cp -r "$OUT_DIR/android/armeabi/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a/"
+
+echo "Copying ios binaries..."
+mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"
+cp -r "$OUT_DIR/ios/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"
+
+echo "Copying macos binaries..."
+mkdir -p "$SCRIPT_DIR/../../macos/dbas_sqlite.xcframework"
+cp -r "$OUT_DIR/macos/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../macos/dbas_sqlite.xcframework"
 
 echo "All platform binaries copied successfully."

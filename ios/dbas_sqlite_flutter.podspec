@@ -5,9 +5,9 @@
 Pod::Spec.new do |s|
   s.name             = 'dbas_sqlite_flutter'
   s.version          = '0.0.1'
-  s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
+  s.summary          = 'A new Flutter plugin project.'
   s.description      = <<-DESC
-Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
+A new Flutter plugin project.
                        DESC
   s.homepage         = 'http://example.com'
   s.license          = { :file => '../LICENSE' }
