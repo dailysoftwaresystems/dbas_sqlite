@@ -1,5 +1,4 @@
 import 'dart:ffi';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
@@ -8,7 +7,6 @@ import 'package:decimal/decimal.dart';
 
 import 'dbas_sqlite_db.dart';
 import 'dbas_sqlite_platform_interface.dart';
-import 'package:path_provider/path_provider.dart';
 
 abstract class DbasSqliteApp extends DbasSqlitePlatform {
   static DynamicLibrary? _sqlite;
@@ -376,24 +374,14 @@ class DbasSqliteAndroid extends DbasSqliteApp {
 class DbasSqliteIOS extends DbasSqliteApp {
   @override
   Future<void> internalInitialize() async {
-    final byteData = await rootBundle.load('native_libs/sqlite/ios/dbas_sqlite.dylib');
-
-    final tempDir = await getTemporaryDirectory();
-    final dylibPath = path.join(tempDir.path, 'dbas_sqlite.dylib');
-    final file = File(dylibPath);
-    await file.writeAsBytes(
-      byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
-      flush: true,
-    );
-
-    DbasSqliteApp._sqlite = DynamicLibrary.open(dylibPath);
+    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.process());
   }
 }
 
 class DbasSqliteMacOS extends DbasSqliteApp {
   @override
   Future<void> internalInitialize() async {
-    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open('dbas_sqlite.dylib'));
+    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.process());
   }
 }
 

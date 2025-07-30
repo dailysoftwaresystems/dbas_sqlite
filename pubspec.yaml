@@ -85,5 +85,3 @@ flutter:
   #
   # For details regarding fonts in packages, see
   # https://flutter.dev/to/font-from-package
-  assets:
-    - native_libs/sqlite/ios/dbas_sqlite.dylib
