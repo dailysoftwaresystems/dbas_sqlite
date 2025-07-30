@@ -8,37 +8,44 @@ if [[ -z "$GITHUB_TOKEN" ]]; then
 fi
 
 REPO="dailysoftwaresystems/DBAS.SQLite"
-BRANCH="main"
 BASE_URL="https://api.github.com/repos/$REPO/contents/dbas/dist"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NATIVE_LIBS_DIR="$SCRIPT_DIR/../../native_libs"
+OUT_DIR="$NATIVE_LIBS_DIR/sqlite"
 
-# Files by platform
-declare -A FILES
-FILES[android]="dbas_sqlite.so"
-FILES[ios]="dbas_sqlite.dylib"
-FILES[macos]="dbas_sqlite.dylib"
-FILES[linux]="dbas_sqlite.so"
-FILES[windows]="dbas_sqlite.dll"
-FILES[web]="dbas_sqlite.wasm dbas_sqlite.js"
+download_recursive() {
+    local url=$1
+    local path=$2
 
-# Output directory
-OUT_DIR="../../dbas_base_app/native_libs/sqlite"
-mkdir -p "$OUT_DIR"
+    echo "Reading: $url into $path"
 
-echo "Downloading binaries from $REPO (branch: $BRANCH)..."
+    curl -s "$url" | jq -c '.[]' | while read -r item; do
+        type=$(echo "$item" | jq -r '.type')
+        name=$(echo "$item" | jq -r '.name')
+        download_url=$(echo "$item" | jq -r '.download_url')
+        next_url=$(echo "$item" | jq -r '.url')
+        target_path="$path/$name"
 
-for platform in "${!FILES[@]}"; do
-    mkdir -p "$OUT_DIR/$platform"
-    for file in ${FILES[$platform]}; do
-        url="$BASE_URL/$platform/$file?ref=$BRANCH"
-        dest="$OUT_DIR/$platform/$file"
-        echo "-> Downloading $url"
-        curl -sSfL \
-          -H "Authorization: token $GITHUB_TOKEN" \
-          -H "Accept: application/vnd.github.v3.raw" \
-          "$url" -o "$dest"
+        if [ "$type" = "file" ]; then
+            echo "Downloading $target_path"
+            mkdir -p "$path"
+            curl -sL "$download_url" -o "$target_path" -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3.raw"
+        elif [ "$type" = "dir" ]; then
+            download_recursive "$next_url" $target_path
+        fi
     done
-done
+}
 
-echo "All binaries downloaded in: $OUT_DIR"
+rm -rf "$NATIVE_LIBS_DIR/sqlite/*"
+mkdir -p "$OUT_DIR"
+download_recursive "$BASE_URL" "$OUT_DIR"
 
-# TODO: Must copy android one to: android\src\main\jniLibs\<all sub directories>
+echo "All binaries downloaded in: $OUT_DIR, copying binaries to respective platform directories..."
+
+mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a"
+mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a"
+
+cp -r "$OUT_DIR/android/a64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a/"
+cp -r "$OUT_DIR/android/armeabi/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a/"
+
+echo "All platform binaries copied successfully."

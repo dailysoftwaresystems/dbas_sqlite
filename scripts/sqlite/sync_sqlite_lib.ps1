@@ -8,19 +8,10 @@ if (-not $env:GITHUB_TOKEN -or [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) 
 
 $GitHubToken = $env:GITHUB_TOKEN
 $REPO = "dailysoftwaresystems/DBAS.SQLite"
-$BRANCH = "main"
 $BASE_URL = "https://api.github.com/repos/$REPO/contents/dbas/dist"
-$OUT_DIR = "../../dbas_base_app/native_libs/sqlite"
-
-# Files by platform
-$FILES = @{
-    "android" = @("dbas_sqlite.so")
-    "ios"     = @("dbas_sqlite.dylib")
-    "macos"   = @("dbas_sqlite.dylib")
-    "linux"   = @("dbas_sqlite.so")
-    "windows" = @("dbas_sqlite.dll")
-    "web"     = @("dbas_sqlite.wasm", "dbas_sqlite.js")
-}
+$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$NativeLibsDir = "$SCRIPT_DIR/../../native_libs"
+$OUT_DIR = "$NativeLibsDir/sqlite"
 
 # Github token
 $headers = @{
@@ -29,21 +20,34 @@ $headers = @{
     "User-Agent"    = "PowerShell"
 }
 
-Write-Host "Downloading binaries from $REPO (branch: $BRANCH)...`n"
+function DownloadRecursive($url, $localPath) {
+    Write-Host "Reading: $url into $localPath"
+    $items = Invoke-RestMethod -Uri $url -Headers $headers
 
-foreach ($platform in $FILES.Keys) {
-    $platformPath = Join-Path $OUT_DIR $platform
-    New-Item -Path $platformPath -ItemType Directory -Force | Out-Null
+    foreach ($item in $items) {
+        $name = $item.name
+        $type = $item.type
+        $downloadUrl = $item.download_url
+        $nextUrl = $item.url
+        $targetPath = Join-Path $localPath $name
 
-    foreach ($file in $FILES[$platform]) {
-        $url = "$BASE_URL/$platform/$file`?ref=$BRANCH"
-        $dest = Join-Path $platformPath $file
-
-        Write-Host "-> Downloading $url"
-        Invoke-WebRequest -Uri $url -Headers $headers -OutFile $dest -UseBasicParsing
+        if ($type -eq "file") {
+            Write-Host "Downloading $targetPath"
+            New-Item -ItemType Directory -Force -Path $localPath | Out-Null
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $targetPath -Headers $headers
+        } elseif ($type -eq "dir") {
+            DownloadRecursive $nextUrl $targetPath
+        }
     }
 }
 
-Write-Host "`nAll binaries downloaded in: $OUT_DIR"
+Remove-Item "$NativeLibsDir/sqlite/*" -Recurse -Force
+New-Item -ItemType Directory -Force -Path $OUT_DIR | Out-Null
+DownloadRecursive $BASE_URL $OUT_DIR
 
-# TODO: Must copy android one to: android\src\main\jniLibs\<all sub directories>
+Write-Host "All binaries downloaded in: $OUT_DIR, copying binaries to respective platform directories..."
+
+Copy-Item "$OUT_DIR/android/a64/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a" -Recurse -Force
+Copy-Item "$OUT_DIR/android/armeabi/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a" -Recurse -Force
+
+Write-Host "All platform binaries copied successfully."
