@@ -1,5 +1,4 @@
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as path;
 import 'dart:io';
