@@ -7,7 +7,7 @@ Pod::Spec.new do |s|
   s.version          = '0.0.1'
   s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
   s.description      = <<-DESC
-A new Flutter plugin project.
+  Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
                        DESC
   s.homepage         = 'https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter'
   s.license          = { :file => '../LICENSE' }

@@ -7,7 +7,7 @@ Pod::Spec.new do |s|
   s.version          = '0.0.1'
   s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
   s.description      = <<-DESC
-A new Flutter plugin project.
+Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
                        DESC
   s.homepage         = 'https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter'
   s.license          = { :file => '../LICENSE' }
@@ -28,4 +28,5 @@ A new Flutter plugin project.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
   s.vendored_frameworks = 'macos/dbas_sqlite.xcframework'
+  s.static_framework = true
 end
