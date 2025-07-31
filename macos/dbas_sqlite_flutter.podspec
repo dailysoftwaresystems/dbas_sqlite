@@ -17,7 +17,6 @@ Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and We
   s.dependency 'FlutterMacOS'
   s.platform = :osx, '10.11'
 
-# FlutterMacOS.framework does contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
   s.vendored_frameworks = 'dbas_sqlite.xcframework'
