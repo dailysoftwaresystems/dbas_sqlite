@@ -19,7 +19,7 @@ Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and We
 
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
-  s.vendored_frameworks = 'dbas_sqlite.xcframework'
+  s.vendored_frameworks = 'macos/dbas_sqlite.xcframework'
   s.static_framework = true
 
   # If your plugin requires a privacy manifest, for example if it collects user
