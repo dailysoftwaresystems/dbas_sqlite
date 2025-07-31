@@ -10,23 +10,22 @@ Pod::Spec.new do |s|
 Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
                        DESC
   s.homepage         = 'https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter'
-  s.license          = { :file => '../LICENSE' }
+  s.license          = { :type => 'Proprietary', :file => '../LICENSE' }
   s.author           = { 'Daily Software Systems LTDA.' => 'dailysoftwaresystems@outlook.com' }
-
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
+  s.dependency 'FlutterMacOS'
+  s.platform = :osx, '10.11'
+
+# FlutterMacOS.framework does contain a i386 slice.
+  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
+  s.swift_version = '5.0'
+  s.vendored_frameworks = 'dbas_sqlite.xcframework'
+  s.static_framework = true
 
   # If your plugin requires a privacy manifest, for example if it collects user
   # data, update the PrivacyInfo.xcprivacy file to describe your plugin's
   # privacy impact, and then uncomment this line. For more information,
   # see https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
   # s.resource_bundles = {'dbas_sqlite_flutter_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
-
-  s.dependency 'FlutterMacOS'
-
-  s.platform = :osx, '10.11'
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
-  s.swift_version = '5.0'
-  s.vendored_frameworks = 'macos/dbas_sqlite.xcframework'
-  s.static_framework = true
 end

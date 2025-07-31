@@ -7,10 +7,10 @@ Pod::Spec.new do |s|
   s.version          = '0.0.1'
   s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
   s.description      = <<-DESC
-  Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
+ Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
                        DESC
   s.homepage         = 'https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter'
-  s.license          = { :file => '../LICENSE' }
+  s.license          = { :type => 'Proprietary', :file => '../LICENSE' }
   s.author           = { 'Daily Software Systems LTDA.' => 'dailysoftwaresystems@outlook.com' }
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
@@ -20,7 +20,7 @@ Pod::Spec.new do |s|
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.0'
-  s.vendored_frameworks = 'ios/dbas_sqlite.xcframework'
+  s.vendored_frameworks = 'dbas_sqlite.xcframework'
   s.static_framework = true
 
   # If your plugin requires a privacy manifest, for example if it uses any
