@@ -1,1 +1,1 @@
-flutter run -d "iPhone 16 Plus"
+flutter run -d "iPhone 16 Plus" --project-root=example
