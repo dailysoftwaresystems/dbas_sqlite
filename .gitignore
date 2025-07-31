@@ -40,6 +40,7 @@ analysis_benchmark.json
 .pub-preload-cache/
 .pub/
 build/
+!scripts/build/
 flutter_*.png
 linked_*.ds
 unlinked.ds
