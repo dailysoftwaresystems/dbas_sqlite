@@ -7,6 +7,8 @@
 		<dict>
 			<key>BinaryPath</key>
 			<string>dbas_sqlite.a</string>
+			<key>HeadersPath</key>
+			<string>Headers</string>
 			<key>LibraryIdentifier</key>
 			<string>macos-arm64_x86_64</string>
 			<key>LibraryPath</key>
