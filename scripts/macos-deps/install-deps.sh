@@ -13,7 +13,9 @@ else
   softwareupdate --list | grep -q "Command Line Tools" && sudo softwareupdate -i "$(softwareupdate --list | grep -oE 'Command Line Tools.*\n' | head -n1 | sed 's/^[ *]*//')"
 fi
 
-brew install rbenv ruby ruby-build
+brew install rbenv ruby ruby-build node
+brew install --cask wine-stable
+
 echo 'eval "$(rbenv init -)"' >> ~/.zshrc
 echo 'export PATH="/opt/homebrew/opt/ruby/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
