@@ -18,6 +18,7 @@ extern "C" {
     } SQLiteDb;
 
     __attribute__((visibility("default"))) DLL_EXPORT SQLiteDb* OpenDb(const char* fileName);
+    __attribute__((visibility("default"))) DLL_EXPORT bool IsOpened(SQLiteDb* inst);
 
     __attribute__((visibility("default"))) DLL_EXPORT int ExecuteSql(SQLiteDb* inst, const char* sql);
 

@@ -190,8 +190,6 @@ var ICASEFS = 'ICASEFS is no longer included by default; build with -licasefs.js
 var JSFILEFS = 'JSFILEFS is no longer included by default; build with -ljsfilefs.js';
 var OPFS = 'OPFS is no longer included by default; build with -lopfs.js';
 
-var NODEFS = 'NODEFS is no longer included by default; build with -lnodefs.js';
-
 // perform assertions in shell.js after we set up out() and err(), as otherwise
 // if an assertion fails it cannot print the message
 
@@ -244,10 +242,6 @@ function assert(condition, text) {
 
 // We used to include malloc/free by default in the past. Show a helpful error in
 // builds with assertions.
-function _free() {
-  // Show a helpful error since we used to include free by default in the past.
-  abort('free() called but not included in the build - add `_free` to EXPORTED_FUNCTIONS');
-}
 
 /**
  * Indicates whether filename is delivered via file protocol (as opposed to http/https)
@@ -683,7 +677,7 @@ async function instantiateArrayBuffer(binaryFile, imports) {
 }
 
 async function instantiateAsync(binary, binaryFile, imports) {
-  if (!binary && typeof WebAssembly.instantiateStreaming == 'function'
+  if (!binary
       // Don't use streaming for file:// delivered objects in a webview, fetch them synchronously.
       && !isFileURI(binaryFile)
       // Avoid instantiateStreaming() on Node.js environment for now, as while
@@ -876,66 +870,15 @@ async function createWasm() {
       }
     };
 
+  var nodePath = require('path');
   var PATH = {
-  isAbs:(path) => path.charAt(0) === '/',
-  splitPath:(filename) => {
-        var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
-        return splitPathRe.exec(filename).slice(1);
-      },
-  normalizeArray:(parts, allowAboveRoot) => {
-        // if the path tries to go above the root, `up` ends up > 0
-        var up = 0;
-        for (var i = parts.length - 1; i >= 0; i--) {
-          var last = parts[i];
-          if (last === '.') {
-            parts.splice(i, 1);
-          } else if (last === '..') {
-            parts.splice(i, 1);
-            up++;
-          } else if (up) {
-            parts.splice(i, 1);
-            up--;
-          }
-        }
-        // if the path is allowed to go above the root, restore leading ..s
-        if (allowAboveRoot) {
-          for (; up; up--) {
-            parts.unshift('..');
-          }
-        }
-        return parts;
-      },
-  normalize:(path) => {
-        var isAbsolute = PATH.isAbs(path),
-            trailingSlash = path.slice(-1) === '/';
-        // Normalize the path
-        path = PATH.normalizeArray(path.split('/').filter((p) => !!p), !isAbsolute).join('/');
-        if (!path && !isAbsolute) {
-          path = '.';
-        }
-        if (path && trailingSlash) {
-          path += '/';
-        }
-        return (isAbsolute ? '/' : '') + path;
-      },
-  dirname:(path) => {
-        var result = PATH.splitPath(path),
-            root = result[0],
-            dir = result[1];
-        if (!root && !dir) {
-          // No dirname whatsoever
-          return '.';
-        }
-        if (dir) {
-          // It has a dirname, strip trailing slash
-          dir = dir.slice(0, -1);
-        }
-        return root + dir;
-      },
-  basename:(path) => path && path.match(/([^\/]+|\/)\/*$/)[1],
-  join:(...paths) => PATH.normalize(paths.join('/')),
-  join2:(l, r) => PATH.normalize(l + '/' + r),
-  };
+      isAbs: nodePath.isAbsolute,
+      normalize: nodePath.normalize,
+      dirname: nodePath.dirname,
+      basename: nodePath.basename,
+      join: nodePath.join,
+      join2: nodePath.join,
+    };
   
   var initRandomFill = () => {
       // This block is not needed on v19+ since crypto.getRandomValues is builtin
@@ -953,58 +896,13 @@ async function createWasm() {
   
   
   
+  /** @type{{resolve: function(...*)}} */
   var PATH_FS = {
-  resolve:(...args) => {
-        var resolvedPath = '',
-          resolvedAbsolute = false;
-        for (var i = args.length - 1; i >= -1 && !resolvedAbsolute; i--) {
-          var path = (i >= 0) ? args[i] : FS.cwd();
-          // Skip empty and invalid entries
-          if (typeof path != 'string') {
-            throw new TypeError('Arguments to path.resolve must be strings');
-          } else if (!path) {
-            return ''; // an invalid portion invalidates the whole thing
-          }
-          resolvedPath = path + '/' + resolvedPath;
-          resolvedAbsolute = PATH.isAbs(path);
-        }
-        // At this point the path should be resolved to a full absolute path, but
-        // handle relative paths to be safe (might happen when process.cwd() fails)
-        resolvedPath = PATH.normalizeArray(resolvedPath.split('/').filter((p) => !!p), !resolvedAbsolute).join('/');
-        return ((resolvedAbsolute ? '/' : '') + resolvedPath) || '.';
+  resolve:(...paths) => {
+        paths.unshift(FS.cwd());
+        return nodePath.posix.resolve(...paths);
       },
-  relative:(from, to) => {
-        from = PATH_FS.resolve(from).slice(1);
-        to = PATH_FS.resolve(to).slice(1);
-        function trim(arr) {
-          var start = 0;
-          for (; start < arr.length; start++) {
-            if (arr[start] !== '') break;
-          }
-          var end = arr.length - 1;
-          for (; end >= 0; end--) {
-            if (arr[end] !== '') break;
-          }
-          if (start > end) return [];
-          return arr.slice(start, end - start + 1);
-        }
-        var fromParts = trim(from.split('/'));
-        var toParts = trim(to.split('/'));
-        var length = Math.min(fromParts.length, toParts.length);
-        var samePartsLength = length;
-        for (var i = 0; i < length; i++) {
-          if (fromParts[i] !== toParts[i]) {
-            samePartsLength = i;
-            break;
-          }
-        }
-        var outputParts = [];
-        for (var i = samePartsLength; i < fromParts.length; i++) {
-          outputParts.push('..');
-        }
-        outputParts = outputParts.concat(toParts.slice(samePartsLength));
-        return outputParts.join('/');
-      },
+  relative:(from, to) => nodePath.posix.relative(from || FS.cwd(), to || FS.cwd()),
   };
   
   
@@ -1020,6 +918,7 @@ async function createWasm() {
       while (heapOrArray[idx] && !(idx >= maxIdx)) ++idx;
       return idx;
     };
+  
   
     /**
      * Given a pointer 'idx' to a null-terminated UTF8-encoded string in the given
@@ -1040,8 +939,6 @@ async function createWasm() {
         return UTF8Decoder.decode(heapOrArray.subarray(idx, endPtr));
       }
       var str = '';
-      // If building with TextDecoder, we have already computed the string length
-      // above, so test loop end condition against that
       while (idx < endPtr) {
         // For UTF8 byte structure, see:
         // http://en.wikipedia.org/wiki/UTF-8#Description
@@ -1746,26 +1643,6 @@ async function createWasm() {
   
   
   
-    /**
-     * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
-     * emscripten HEAP, returns a copy of that string as a Javascript String object.
-     *
-     * @param {number} ptr
-     * @param {number=} maxBytesToRead - An optional length that specifies the
-     *   maximum number of bytes to read. You can omit this parameter to scan the
-     *   string until the first 0 byte. If maxBytesToRead is passed, and the string
-     *   at [ptr, ptr+maxBytesToReadr[ contains a null byte in the middle, then the
-     *   string will cut short at that byte index.
-     * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
-     * @return {string}
-     */
-  var UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
-      assert(typeof ptr == 'number', `UTF8ToString expects a number (got ${typeof ptr})`);
-      return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead, ignoreNul) : '';
-    };
-  
-  var strError = (errno) => UTF8ToString(_strerror(errno));
-  
   var ERRNO_CODES = {
       'EPERM': 63,
       'ENOENT': 44,
@@ -1889,6 +1766,543 @@ async function createWasm() {
       'EOWNERDEAD': 62,
       'ESTRPIPE': 135,
     };
+  
+  var NODEFS = {
+  isWindows:false,
+  staticInit() {
+        NODEFS.isWindows = !!process.platform.match(/^win/);
+        var flags = process.binding("constants")["fs"];
+        NODEFS.flagsForNodeMap = {
+          "1024": flags["O_APPEND"],
+          "64": flags["O_CREAT"],
+          "128": flags["O_EXCL"],
+          "256": flags["O_NOCTTY"],
+          "0": flags["O_RDONLY"],
+          "2": flags["O_RDWR"],
+          "4096": flags["O_SYNC"],
+          "512": flags["O_TRUNC"],
+          "1": flags["O_WRONLY"],
+          "131072": flags["O_NOFOLLOW"],
+        };
+        // The 0 define must match on both sides, as otherwise we would not
+        // know to add it.
+        assert(NODEFS.flagsForNodeMap["0"] === 0);
+      },
+  convertNodeCode(e) {
+        var code = e.code;
+        assert(code in ERRNO_CODES, `unexpected node error code: ${code} (${e})`);
+        return ERRNO_CODES[code];
+      },
+  tryFSOperation(f) {
+        try {
+          return f();
+        } catch (e) {
+          if (!e.code) throw e;
+          // node under windows can return code 'UNKNOWN' here:
+          // https://github.com/emscripten-core/emscripten/issues/15468
+          if (e.code === 'UNKNOWN') throw new FS.ErrnoError(28);
+          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
+        }
+      },
+  mount(mount) {
+        assert(ENVIRONMENT_IS_NODE);
+        return NODEFS.createNode(null, '/', NODEFS.getMode(mount.opts.root), 0);
+      },
+  createNode(parent, name, mode, dev) {
+        if (!FS.isDir(mode) && !FS.isFile(mode) && !FS.isLink(mode)) {
+          throw new FS.ErrnoError(28);
+        }
+        var node = FS.createNode(parent, name, mode);
+        node.node_ops = NODEFS.node_ops;
+        node.stream_ops = NODEFS.stream_ops;
+        return node;
+      },
+  getMode(path) {
+        return NODEFS.tryFSOperation(() => {
+          var mode = fs.lstatSync(path).mode;
+          if (NODEFS.isWindows) {
+            // Windows does not report the 'x' permission bit, so propagate read
+            // bits to execute bits.
+            mode |= (mode & 292) >> 2;
+          }
+          return mode;
+        });
+      },
+  realPath(node) {
+        var parts = [];
+        while (node.parent !== node) {
+          parts.push(node.name);
+          node = node.parent;
+        }
+        parts.push(node.mount.opts.root);
+        parts.reverse();
+        return PATH.join(...parts);
+      },
+  flagsForNode(flags) {
+        flags &= ~2097152; // Ignore this flag from musl, otherwise node.js fails to open the file.
+        flags &= ~2048; // Ignore this flag from musl, otherwise node.js fails to open the file.
+        flags &= ~32768; // Ignore this flag from musl, otherwise node.js fails to open the file.
+        flags &= ~524288; // Some applications may pass it; it makes no sense for a single process.
+        flags &= ~65536; // Node.js doesn't need this passed in, it errors.
+        var newFlags = 0;
+        for (var k in NODEFS.flagsForNodeMap) {
+          if (flags & k) {
+            newFlags |= NODEFS.flagsForNodeMap[k];
+            flags ^= k;
+          }
+        }
+        if (flags) {
+          throw new FS.ErrnoError(28);
+        }
+        return newFlags;
+      },
+  getattr(func, node) {
+        var stat = NODEFS.tryFSOperation(func);
+        if (NODEFS.isWindows) {
+          // node.js v0.10.20 doesn't report blksize and blocks on Windows. Fake
+          // them with default blksize of 4096.
+          // See http://support.microsoft.com/kb/140365
+          if (!stat.blksize) {
+            stat.blksize = 4096;
+          }
+          if (!stat.blocks) {
+            stat.blocks = (stat.size+stat.blksize-1)/stat.blksize|0;
+          }
+          // Windows does not report the 'x' permission bit, so propagate read
+          // bits to execute bits.
+          stat.mode |= (stat.mode & 292) >> 2;
+        }
+        return {
+          dev: stat.dev,
+          ino: node.id,
+          mode: stat.mode,
+          nlink: stat.nlink,
+          uid: stat.uid,
+          gid: stat.gid,
+          rdev: stat.rdev,
+          size: stat.size,
+          atime: stat.atime,
+          mtime: stat.mtime,
+          ctime: stat.ctime,
+          blksize: stat.blksize,
+          blocks: stat.blocks
+        };
+      },
+  setattr(arg, node, attr, chmod, utimes, truncate, stat) {
+        NODEFS.tryFSOperation(() => {
+          if (attr.mode !== undefined) {
+            var mode = attr.mode;
+            if (NODEFS.isWindows) {
+              // Windows only supports S_IREAD / S_IWRITE (S_IRUSR / S_IWUSR)
+              // https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/chmod-wchmod
+              mode &= 384;
+            }
+            chmod(arg, mode);
+            // update the common node structure mode as well
+            node.mode = attr.mode;
+          }
+          if (typeof (attr.atime ?? attr.mtime) === "number") {
+            // Unfortunately, we have to stat the current value if we don't want
+            // to change it. On top of that, since the times don't round trip
+            // this will only keep the value nearly unchanged not exactly
+            // unchanged. See:
+            // https://github.com/nodejs/node/issues/56492
+            var atime = new Date(attr.atime ?? stat(arg).atime);
+            var mtime = new Date(attr.mtime ?? stat(arg).mtime);
+            utimes(arg, atime, mtime);
+          }
+          if (attr.size !== undefined) {
+            truncate(arg, attr.size);
+          }
+        });
+      },
+  node_ops:{
+  getattr(node) {
+          var path = NODEFS.realPath(node);
+          return NODEFS.getattr(() => fs.lstatSync(path), node);
+        },
+  setattr(node, attr) {
+          var path = NODEFS.realPath(node);
+          if (attr.mode != null && attr.dontFollow) {
+            throw new FS.ErrnoError(52);
+          }
+          NODEFS.setattr(path, node, attr, fs.chmodSync, fs.utimesSync, fs.truncateSync, fs.lstatSync);
+        },
+  lookup(parent, name) {
+          var path = PATH.join2(NODEFS.realPath(parent), name);
+          var mode = NODEFS.getMode(path);
+          return NODEFS.createNode(parent, name, mode);
+        },
+  mknod(parent, name, mode, dev) {
+          var node = NODEFS.createNode(parent, name, mode, dev);
+          // create the backing node for this in the fs root as well
+          var path = NODEFS.realPath(node);
+          NODEFS.tryFSOperation(() => {
+            if (FS.isDir(node.mode)) {
+              fs.mkdirSync(path, node.mode);
+            } else {
+              fs.writeFileSync(path, '', { mode: node.mode });
+            }
+          });
+          return node;
+        },
+  rename(oldNode, newDir, newName) {
+          var oldPath = NODEFS.realPath(oldNode);
+          var newPath = PATH.join2(NODEFS.realPath(newDir), newName);
+          try {
+            FS.unlink(newPath);
+          } catch(e) {}
+          NODEFS.tryFSOperation(() => fs.renameSync(oldPath, newPath));
+          oldNode.name = newName;
+        },
+  unlink(parent, name) {
+          var path = PATH.join2(NODEFS.realPath(parent), name);
+          NODEFS.tryFSOperation(() => fs.unlinkSync(path));
+        },
+  rmdir(parent, name) {
+          var path = PATH.join2(NODEFS.realPath(parent), name);
+          NODEFS.tryFSOperation(() => fs.rmdirSync(path));
+        },
+  readdir(node) {
+          var path = NODEFS.realPath(node);
+          return NODEFS.tryFSOperation(() => fs.readdirSync(path));
+        },
+  symlink(parent, newName, oldPath) {
+          var newPath = PATH.join2(NODEFS.realPath(parent), newName);
+          NODEFS.tryFSOperation(() => fs.symlinkSync(oldPath, newPath));
+        },
+  readlink(node) {
+          var path = NODEFS.realPath(node);
+          return NODEFS.tryFSOperation(() => fs.readlinkSync(path));
+        },
+  statfs(path) {
+          var stats = NODEFS.tryFSOperation(() => fs.statfsSync(path));
+          // Node.js doesn't provide frsize (fragment size). Set it to bsize (block size)
+          // as they're often the same in many file systems. May not be accurate for all.
+          stats.frsize = stats.bsize;
+          return stats;
+        },
+  },
+  stream_ops:{
+  getattr(stream) {
+          return NODEFS.getattr(() => fs.fstatSync(stream.nfd), stream.node);
+        },
+  setattr(stream, attr) {
+          NODEFS.setattr(stream.nfd, stream.node, attr, fs.fchmodSync, fs.futimesSync, fs.ftruncateSync, fs.fstatSync);
+        },
+  open(stream) {
+          var path = NODEFS.realPath(stream.node);
+          NODEFS.tryFSOperation(() => {
+            stream.shared.refcount = 1;
+            stream.nfd = fs.openSync(path, NODEFS.flagsForNode(stream.flags));
+          });
+        },
+  close(stream) {
+          NODEFS.tryFSOperation(() => {
+            if (stream.nfd && --stream.shared.refcount === 0) {
+              fs.closeSync(stream.nfd);
+            }
+          });
+        },
+  dup(stream) {
+          stream.shared.refcount++;
+        },
+  read(stream, buffer, offset, length, position) {
+          return NODEFS.tryFSOperation(() =>
+            fs.readSync(stream.nfd, new Int8Array(buffer.buffer, offset, length), 0, length, position)
+          );
+        },
+  write(stream, buffer, offset, length, position) {
+          return NODEFS.tryFSOperation(() =>
+            fs.writeSync(stream.nfd, new Int8Array(buffer.buffer, offset, length), 0, length, position)
+          );
+        },
+  llseek(stream, offset, whence) {
+          var position = offset;
+          if (whence === 1) {
+            position += stream.position;
+          } else if (whence === 2) {
+            if (FS.isFile(stream.node.mode)) {
+              NODEFS.tryFSOperation(() => {
+                var stat = fs.fstatSync(stream.nfd);
+                position += stat.size;
+              });
+            }
+          }
+  
+          if (position < 0) {
+            throw new FS.ErrnoError(28);
+          }
+  
+          return position;
+        },
+  mmap(stream, length, position, prot, flags) {
+          if (!FS.isFile(stream.node.mode)) {
+            throw new FS.ErrnoError(43);
+          }
+  
+          var ptr = mmapAlloc(length);
+  
+          NODEFS.stream_ops.read(stream, HEAP8, ptr, length, position);
+          return { ptr, allocated: true };
+        },
+  msync(stream, buffer, offset, length, mmapFlags) {
+          NODEFS.stream_ops.write(stream, buffer, 0, length, offset, false);
+          // should we check if bytesWritten and length are the same?
+          return 0;
+        },
+  },
+  };
+  
+  
+  
+  
+  
+  var NODERAWFS = {
+  lookup(parent, name) {
+        assert(parent)
+        assert(parent.path)
+        return FS.lookupPath(`${parent.path}/${name}`).node;
+      },
+  lookupPath(path, opts = {}) {
+        if (opts.parent) {
+          path = PATH.dirname(path);
+        }
+        var st = fs.lstatSync(path);
+        var mode = NODEFS.getMode(path);
+        return { path, node: { id: st.ino, mode, node_ops: NODERAWFS, path }};
+      },
+  createStandardStreams() {
+        // FIXME: tty is set to true to appease isatty(), the underlying ioctl syscalls still needs to be implemented, see issue #22264.
+        FS.createStream({ nfd: 0, position: 0, path: '/dev/stdin', flags: 0, tty: true, seekable: false }, 0);
+        var paths = [,'/dev/stdout', '/dev/stderr'];
+        for (var i = 1; i < 3; i++) {
+          FS.createStream({ nfd: i, position: 0, path: paths[i], flags: 577, tty: true, seekable: false }, i);
+        }
+      },
+  cwd() { return process.cwd(); },
+  chdir(...args) { process.chdir(...args); },
+  mknod(path, mode) {
+        if (FS.isDir(path)) {
+          fs.mkdirSync(path, mode);
+        } else {
+          fs.writeFileSync(path, '', { mode: mode });
+        }
+      },
+  mkdir(...args) { fs.mkdirSync(...args); },
+  symlink(...args) { fs.symlinkSync(...args); },
+  rename(...args) { fs.renameSync(...args); },
+  rmdir(...args) { fs.rmdirSync(...args); },
+  readdir(...args) { return ['.', '..'].concat(fs.readdirSync(...args)); },
+  unlink(...args) { fs.unlinkSync(...args); },
+  readlink(...args) { return fs.readlinkSync(...args); },
+  stat(path, dontFollow) {
+        var stat = dontFollow ? fs.lstatSync(path) : fs.statSync(path);
+        if (NODEFS.isWindows) {
+          // Windows does not report the 'x' permission bit, so propagate read
+          // bits to execute bits.
+          stat.mode |= (stat.mode & 292) >> 2;
+        }
+        return stat;
+      },
+  fstat(fd) {
+        var stream = FS.getStreamChecked(fd);
+        return fs.fstatSync(stream.nfd);
+      },
+  statfs(path) {
+        // Node's fs.statfsSync API doesn't provide these attributes so include
+        // some defaults.
+        var defaults = {
+          fsid: 42,
+          flags: 2,
+          namelen: 255,
+        }
+        return Object.assign(defaults, fs.statfsSync(path));
+      },
+  statfsStream(stream) {
+        return FS.statfs(stream.path);
+      },
+  chmod(path, mode, dontFollow) {
+        mode &= 4095;
+        if (NODEFS.isWindows) {
+          // Windows only supports S_IREAD / S_IWRITE (S_IRUSR / S_IWUSR)
+          // https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/chmod-wchmod
+          mode &= 384;
+        }
+        if (dontFollow && fs.lstatSync(path).isSymbolicLink()) {
+          // Node (and indeed linux) does not support chmod on symlinks
+          // https://nodejs.org/api/fs.html#fslchmodsyncpath-mode
+          throw new FS.ErrnoError(138);
+        }
+        fs.chmodSync(path, mode);
+      },
+  fchmod(fd, mode) {
+        var stream = FS.getStreamChecked(fd);
+        fs.fchmodSync(stream.nfd, mode);
+      },
+  chown(...args) { fs.chownSync(...args); },
+  fchown(fd, owner, group) {
+        var stream = FS.getStreamChecked(fd);
+        fs.fchownSync(stream.nfd, owner, group);
+      },
+  truncate(path, len) {
+        // See https://github.com/nodejs/node/issues/35632
+        if (len < 0) {
+          throw new FS.ErrnoError(28);
+        }
+        return fs.truncateSync(path, len);
+      },
+  ftruncate(fd, len) {
+        // See https://github.com/nodejs/node/issues/35632
+        if (len < 0) {
+          throw new FS.ErrnoError(28);
+        }
+        var stream = FS.getStreamChecked(fd);
+        fs.ftruncateSync(stream.nfd, len);
+      },
+  utime(path, atime, mtime) {
+        // null here for atime or mtime means UTIME_OMIT was passed.  Since node
+        // doesn't support this concept we need to first find the existing
+        // timestamps in order to preserve them.
+        if ((atime === null) || (mtime === null)) {
+          var st = fs.statSync(path);
+          atime ||= st.atimeMs;
+          mtime ||= st.mtimeMs;
+        }
+        fs.utimesSync(path, atime/1000, mtime/1000);
+      },
+  open(path, flags, mode) {
+        if (typeof flags == "string") {
+          flags = FS_modeStringToFlags(flags)
+        }
+        var pathTruncated = path.split('/').map((s) => s.slice(0, 255)).join('/');
+        var nfd = fs.openSync(pathTruncated, NODEFS.flagsForNode(flags), mode);
+        var st = fs.fstatSync(nfd);
+        if (flags & 65536 && !st.isDirectory()) {
+          fs.closeSync(nfd);
+          throw new FS.ErrnoError(ERRNO_CODES.ENOTDIR);
+        }
+        var newMode = NODEFS.getMode(pathTruncated);
+        var node = { id: st.ino, mode: newMode, node_ops: NODERAWFS, path }
+        return FS.createStream({ nfd, position: 0, path, flags, node, seekable: true });
+      },
+  createStream(stream, fd) {
+        // Call the original FS.createStream
+        var rtn = VFS.createStream(stream, fd);
+        if (typeof rtn.shared.refcnt == 'undefined') {
+          rtn.shared.refcnt = 1;
+        } else {
+          rtn.shared.refcnt++;
+        }
+        return rtn;
+      },
+  close(stream) {
+        VFS.closeStream(stream.fd);
+        // Don't close stdin/stdout/stderr since they are used by node itself.
+        if (!stream.stream_ops && --stream.shared.refcnt <= 0 && stream.nfd > 2) {
+          // This stream is created by our Node.js filesystem, close the
+          // native file descriptor when its reference count drops to 0.
+          fs.closeSync(stream.nfd);
+        }
+      },
+  llseek(stream, offset, whence) {
+        if (stream.stream_ops) {
+          // this stream is created by in-memory filesystem
+          return VFS.llseek(stream, offset, whence);
+        }
+        var position = offset;
+        if (whence === 1) {
+          position += stream.position;
+        } else if (whence === 2) {
+          position += fs.fstatSync(stream.nfd).size;
+        } else if (whence !== 0) {
+          throw new FS.ErrnoError(28);
+        }
+  
+        if (position < 0) {
+          throw new FS.ErrnoError(28);
+        }
+        stream.position = position;
+        return position;
+      },
+  read(stream, buffer, offset, length, position) {
+        if (stream.stream_ops) {
+          // this stream is created by in-memory filesystem
+          return VFS.read(stream, buffer, offset, length, position);
+        }
+        var seeking = typeof position != 'undefined';
+        if (!seeking && stream.seekable) position = stream.position;
+        var bytesRead = fs.readSync(stream.nfd, new Int8Array(buffer.buffer, offset, length), 0, length, position);
+        // update position marker when non-seeking
+        if (!seeking) stream.position += bytesRead;
+        return bytesRead;
+      },
+  write(stream, buffer, offset, length, position) {
+        if (stream.stream_ops) {
+          // this stream is created by in-memory filesystem
+          return VFS.write(stream, buffer, offset, length, position);
+        }
+        if (stream.flags & +"1024") {
+          // seek to the end before writing in append mode
+          FS.llseek(stream, 0, +"2");
+        }
+        var seeking = typeof position != 'undefined';
+        if (!seeking && stream.seekable) position = stream.position;
+        var bytesWritten = fs.writeSync(stream.nfd, new Int8Array(buffer.buffer, offset, length), 0, length, position);
+        // update position marker when non-seeking
+        if (!seeking) stream.position += bytesWritten;
+        return bytesWritten;
+      },
+  mmap(stream, length, position, prot, flags) {
+        if (!length) {
+          throw new FS.ErrnoError(28);
+        }
+        if (stream.stream_ops) {
+          // this stream is created by in-memory filesystem
+          return VFS.mmap(stream, length, position, prot, flags);
+        }
+  
+        var ptr = mmapAlloc(length);
+        FS.read(stream, HEAP8, ptr, length, position);
+        return { ptr, allocated: true };
+      },
+  msync(stream, buffer, offset, length, mmapFlags) {
+        if (stream.stream_ops) {
+          // this stream is created by in-memory filesystem
+          return VFS.msync(stream, buffer, offset, length, mmapFlags);
+        }
+  
+        FS.write(stream, buffer, 0, length, offset);
+        // should we check if bytesWritten and length are the same?
+        return 0;
+      },
+  ioctl() {
+        throw new FS.ErrnoError(59);
+      },
+  };
+  
+  
+  
+    /**
+     * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
+     * emscripten HEAP, returns a copy of that string as a Javascript String object.
+     *
+     * @param {number} ptr
+     * @param {number=} maxBytesToRead - An optional length that specifies the
+     *   maximum number of bytes to read. You can omit this parameter to scan the
+     *   string until the first 0 byte. If maxBytesToRead is passed, and the string
+     *   at [ptr, ptr+maxBytesToReadr[ contains a null byte in the middle, then the
+     *   string will cut short at that byte index.
+     * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
+     * @return {string}
+     */
+  var UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
+      assert(typeof ptr == 'number', `UTF8ToString expects a number (got ${typeof ptr})`);
+      return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead, ignoreNul) : '';
+    };
+  
+  var strError = (errno) => UTF8ToString(_strerror(errno));
+  
   var FS = {
   root:null,
   mounts:[],
@@ -3200,6 +3614,7 @@ async function createWasm() {
   
         FS.filesystems = {
           'MEMFS': MEMFS,
+          'NODEFS': NODEFS,
         };
       },
   init(input, output, error) {
@@ -3597,15 +4012,15 @@ async function createWasm() {
       },
   writeStatFs(buf, stats) {
         HEAP32[(((buf)+(4))>>2)] = stats.bsize;
-        HEAP32[(((buf)+(40))>>2)] = stats.bsize;
-        HEAP32[(((buf)+(8))>>2)] = stats.blocks;
-        HEAP32[(((buf)+(12))>>2)] = stats.bfree;
-        HEAP32[(((buf)+(16))>>2)] = stats.bavail;
-        HEAP32[(((buf)+(20))>>2)] = stats.files;
-        HEAP32[(((buf)+(24))>>2)] = stats.ffree;
-        HEAP32[(((buf)+(28))>>2)] = stats.fsid;
-        HEAP32[(((buf)+(44))>>2)] = stats.flags;  // ST_NOSUID
-        HEAP32[(((buf)+(36))>>2)] = stats.namelen;
+        HEAP32[(((buf)+(60))>>2)] = stats.bsize;
+        HEAP64[(((buf)+(8))>>3)] = BigInt(stats.blocks);
+        HEAP64[(((buf)+(16))>>3)] = BigInt(stats.bfree);
+        HEAP64[(((buf)+(24))>>3)] = BigInt(stats.bavail);
+        HEAP64[(((buf)+(32))>>3)] = BigInt(stats.files);
+        HEAP64[(((buf)+(40))>>3)] = BigInt(stats.ffree);
+        HEAP32[(((buf)+(48))>>2)] = stats.fsid;
+        HEAP32[(((buf)+(64))>>2)] = stats.flags;  // ST_NOSUID
+        HEAP32[(((buf)+(56))>>2)] = stats.namelen;
       },
   doMsync(addr, stream, len, flags, offset) {
         if (!FS.isFile(stream.node.mode)) {
@@ -4330,6 +4745,8 @@ async function createWasm() {
   }
   }
 
+
+
   var getCFunc = (ident) => {
       var func = Module['_' + ident]; // closure exported function
       assert(func, 'Cannot call unknown function ' + ident + ', make sure it is exported');
@@ -4612,8 +5029,44 @@ async function createWasm() {
       return ret;
     };
 
+
+  var FS_createPath = (...args) => FS.createPath(...args);
+
+
+
+  var FS_unlink = (...args) => FS.unlink(...args);
+
+  var FS_createLazyFile = (...args) => FS.createLazyFile(...args);
+
+  var FS_createDevice = (...args) => FS.createDevice(...args);
+
   FS.createPreloadedFile = FS_createPreloadedFile;
   FS.staticInit();;
+if (ENVIRONMENT_IS_NODE) { NODEFS.staticInit(); };
+
+      if (!ENVIRONMENT_IS_NODE) {
+        throw new Error("NODERAWFS is currently only supported on Node.js environment.")
+      }
+      var _wrapNodeError = function(func) {
+        return function(...args) {
+          try {
+            return func(...args)
+          } catch (e) {
+            if (e.code) {
+              throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            }
+            throw e;
+          }
+        }
+      };
+      // Use this to reference our in-memory filesystem
+      /** @suppress {partialAlias} */
+      var VFS = {...FS};
+      // Wrap the whole in-memory filesystem API with
+      // our Node.js based functions
+      for (var _key in NODERAWFS) {
+        FS[_key] = _wrapNodeError(NODERAWFS[_key]);
+      };
 // End JS library code
 
 // include: postlibrary.js
@@ -4654,6 +5107,8 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
 }
 
 // Begin runtime exports
+  Module['addRunDependency'] = addRunDependency;
+  Module['removeRunDependency'] = removeRunDependency;
   Module['ccall'] = ccall;
   Module['cwrap'] = cwrap;
   Module['addFunction'] = addFunction;
@@ -4662,6 +5117,14 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   Module['getValue'] = getValue;
   Module['UTF8ToString'] = UTF8ToString;
   Module['stringToUTF8'] = stringToUTF8;
+  Module['lengthBytesUTF8'] = lengthBytesUTF8;
+  Module['FS_createPreloadedFile'] = FS_createPreloadedFile;
+  Module['FS_unlink'] = FS_unlink;
+  Module['FS_createPath'] = FS_createPath;
+  Module['FS_createDevice'] = FS_createDevice;
+  Module['FS'] = FS;
+  Module['FS_createDataFile'] = FS_createDataFile;
+  Module['FS_createLazyFile'] = FS_createLazyFile;
   Module['allocate'] = allocate;
   var missingLibrarySymbols = [
   'writeI53ToI64',
@@ -4812,8 +5275,6 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
 
   var unexportedSymbols = [
   'run',
-  'addRunDependency',
-  'removeRunDependency',
   'out',
   'err',
   'callMain',
@@ -4871,7 +5332,6 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'UTF8Decoder',
   'UTF8ArrayToString',
   'stringToUTF8Array',
-  'lengthBytesUTF8',
   'intArrayFromString',
   'UTF16Decoder',
   'stringToUTF8OnStack',
@@ -4912,16 +5372,11 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'ydayFromDate',
   'SYSCALLS',
   'preloadPlugins',
-  'FS_createPreloadedFile',
   'FS_modeStringToFlags',
   'FS_getMode',
   'FS_stdin_getChar_buffer',
   'FS_stdin_getChar',
-  'FS_unlink',
-  'FS_createPath',
-  'FS_createDevice',
   'FS_readFile',
-  'FS',
   'FS_root',
   'FS_mounts',
   'FS_devices',
@@ -5025,9 +5480,7 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'FS_findObject',
   'FS_analyzePath',
   'FS_createFile',
-  'FS_createDataFile',
   'FS_forceLoadFile',
-  'FS_createLazyFile',
   'FS_absolutePath',
   'FS_createFolder',
   'FS_createLink',
@@ -5038,6 +5491,9 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'TTY',
   'PIPEFS',
   'SOCKFS',
+  'NODEFS',
+  'NODERAWFS',
+  'nodePath',
   'tempFixedLengthArray',
   'miniTempWebGLFloatBuffers',
   'miniTempWebGLIntBuffers',
@@ -5070,6 +5526,7 @@ function checkIncomingModuleAPI() {
 
 // Imports from the Wasm binary.
 var _OpenDb = Module['_OpenDb'] = makeInvalidEarlyAccess('_OpenDb');
+var _IsOpened = Module['_IsOpened'] = makeInvalidEarlyAccess('_IsOpened');
 var _ExecuteSql = Module['_ExecuteSql'] = makeInvalidEarlyAccess('_ExecuteSql');
 var _PrepareQuery = Module['_PrepareQuery'] = makeInvalidEarlyAccess('_PrepareQuery');
 var _BindText = Module['_BindText'] = makeInvalidEarlyAccess('_BindText');
@@ -5099,7 +5556,8 @@ var _GetAffectedRows = Module['_GetAffectedRows'] = makeInvalidEarlyAccess('_Get
 var _GetLastInsertedId = Module['_GetLastInsertedId'] = makeInvalidEarlyAccess('_GetLastInsertedId');
 var _CloseReader = Module['_CloseReader'] = makeInvalidEarlyAccess('_CloseReader');
 var _CloseDb = Module['_CloseDb'] = makeInvalidEarlyAccess('_CloseDb');
-var _malloc = makeInvalidEarlyAccess('_malloc');
+var _free = Module['_free'] = makeInvalidEarlyAccess('_free');
+var _malloc = Module['_malloc'] = makeInvalidEarlyAccess('_malloc');
 var _fflush = makeInvalidEarlyAccess('_fflush');
 var _emscripten_stack_get_end = makeInvalidEarlyAccess('_emscripten_stack_get_end');
 var _emscripten_stack_get_base = makeInvalidEarlyAccess('_emscripten_stack_get_base');
@@ -5113,6 +5571,7 @@ var _emscripten_stack_get_current = makeInvalidEarlyAccess('_emscripten_stack_ge
 
 function assignWasmExports(wasmExports) {
   Module['_OpenDb'] = _OpenDb = createExportWrapper('OpenDb', 1);
+  Module['_IsOpened'] = _IsOpened = createExportWrapper('IsOpened', 1);
   Module['_ExecuteSql'] = _ExecuteSql = createExportWrapper('ExecuteSql', 2);
   Module['_PrepareQuery'] = _PrepareQuery = createExportWrapper('PrepareQuery', 2);
   Module['_BindText'] = _BindText = createExportWrapper('BindText', 3);
@@ -5142,7 +5601,8 @@ function assignWasmExports(wasmExports) {
   Module['_GetLastInsertedId'] = _GetLastInsertedId = createExportWrapper('GetLastInsertedId', 1);
   Module['_CloseReader'] = _CloseReader = createExportWrapper('CloseReader', 1);
   Module['_CloseDb'] = _CloseDb = createExportWrapper('CloseDb', 1);
-  _malloc = createExportWrapper('malloc', 1);
+  Module['_free'] = _free = createExportWrapper('free', 1);
+  Module['_malloc'] = _malloc = createExportWrapper('malloc', 1);
   _fflush = createExportWrapper('fflush', 1);
   _emscripten_stack_get_end = wasmExports['emscripten_stack_get_end'];
   _emscripten_stack_get_base = wasmExports['emscripten_stack_get_base'];

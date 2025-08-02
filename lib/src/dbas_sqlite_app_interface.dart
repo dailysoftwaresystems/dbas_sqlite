@@ -395,6 +395,13 @@ class DbasSqliteLinux extends DbasSqliteApp {
 class DbasSqliteWindows extends DbasSqliteApp {
   @override
   Future<void> internalInitialize() async {
-    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open(path.join(DbasSqlitePlatform.basePath, 'windows', 'dbas_sqlite.dll')));
+    String archFolder = '';
+    if (sizeOf<IntPtr>() == 8) {
+      archFolder = 'x64';
+    } else {
+      archFolder = 'x86';
+    }
+
+    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open(path.join(DbasSqlitePlatform.basePath, 'windows', archFolder, 'dbas_sqlite.dll')));
   }
 }
