@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'dbas_sqlite_db.dart';
@@ -17,6 +18,11 @@ class DbasSqliteWeb extends DbasSqlitePlatform {
       DbasSqliteWeb._sqlite = DbasSqliteNativeWeb();
       await DbasSqliteWeb._sqlite!.initialize();
     }
+  }
+
+  @override
+  bool isTest() {
+    return Platform.environment['FLUTTER_TEST'] == 'true';
   }
 
   @override

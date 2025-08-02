@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
@@ -16,6 +17,11 @@ abstract class DbasSqliteApp extends DbasSqlitePlatform {
     if (DbasSqliteApp._sqlite == null) {
       await internalInitialize();
     }
+  }
+
+  @override
+  bool isTest() {
+    return Platform.environment['FLUTTER_TEST'] == 'true';
   }
 
   Future<void> internalInitialize();
@@ -381,7 +387,19 @@ class DbasSqliteIOS extends DbasSqliteApp {
 class DbasSqliteMacOS extends DbasSqliteApp {
   @override
   Future<void> internalInitialize() async {
-    DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.process());
+    if (isTest()) {
+      final result = Process.runSync('uname', ['-m']);
+      final arch = result.stdout.toString().trim();
+      final libName = switch (arch) {
+        'arm64' => 'a64',
+        'x86_64' => 'x86',
+        _ => throw UnsupportedError('Unsupported architecture $arch flutter test with MacOS'),
+      };
+
+      DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.open(path.join(DbasSqlitePlatform.basePath, 'macos', libName, 'dbas_sqlite.dylib')));
+    } else {
+      DbasSqliteApp._sqlite = await Future.value(DynamicLibrary.process());
+    }
   }
 }
 

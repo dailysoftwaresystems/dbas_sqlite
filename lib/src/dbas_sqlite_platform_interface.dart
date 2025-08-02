@@ -23,6 +23,7 @@ abstract class DbasSqlitePlatform {
 
   static final basePath = path.join(Directory.current.path, 'native_libs', 'sqlite');
   Future<void> initialize();
+  bool isTest();
 
   Future<Pointer<DbasSqliteDb>> openDb(String fileName);
   Future<int> executeSql(Pointer<DbasSqliteDb> dbPtr, String sql);
