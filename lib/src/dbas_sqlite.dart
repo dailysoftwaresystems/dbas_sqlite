@@ -1,53 +1,59 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:typed_data';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform_interface.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
 import 'package:decimal/decimal.dart';
 
 class DbasSqlite {
   static DbasSqlite? _instance;
-  Pointer<DbasSqliteDb>? _dbPtr;
+  final DbasSqlitePlatform _platform;
+  DbasSqliteDb? _db;
+
+  DbasSqlite(this._platform);
 
   static Future<DbasSqlite> getInstance() async {
-    if (DbasSqlite._instance == null) {
-      await DbasSqlitePlatform.instance.initialize();
-      _instance = DbasSqlite();
-    }
-
+    _instance ??= DbasSqlite(await DbasSqlitePlatform.getInstance());
     return _instance!;
   }
 
   Future<void> openDb(String fileName) async {
-    _dbPtr = await DbasSqlitePlatform.instance.openDb(fileName);
+    _db = await _platform.openDb(fileName);
   }
 
   bool isOpened() {
-    return _dbPtr != null;
+    return _db != null && _platform.isOpened(_db!);
   }
 
   Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
-    int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    int prepared = await _platform.prepareQuery(_db!, sql);
     if (prepared == 1) {
-      throw Exception(["It was not possible to prepare the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+      throw Exception(["It was not possible to prepare the query: ${_platform.getLastDbError(_db!)}"]);
     }
 
     _bindParameters(params);
     _bindNameParameters(nameParams);
 
     if (readRow()) {
-      return DbasSqlitePlatform.instance.getAffectedRows(_dbPtr!);
+      return _platform.getAffectedRows(_db!);
     } else {
       return 0;
     }
   }
 
   Future<int> executeReader(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
-    int prepared = await DbasSqlitePlatform.instance.prepareQuery(_dbPtr!, sql);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    int prepared = await _platform.prepareQuery(_db!, sql);
     if (prepared == 1) {
-      throw Exception(["It was not possible to prepare the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+      throw Exception(["It was not possible to prepare the query: ${_platform.getLastDbError(_db!)}"]);
     }
 
     _bindParameters(params);
@@ -57,84 +63,119 @@ class DbasSqlite {
   }
 
   bool readRow() {
-    int result = DbasSqlitePlatform.instance.readRow(_dbPtr!);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    int result = _platform.readRow(_db!);
     if (result == -1) {
-      throw Exception(["It was not possible to run the query: ${DbasSqlitePlatform.instance.getLastDbError(_dbPtr!)}"]);
+      throw Exception(["It was not possible to run the query: ${_platform.getLastDbError(_db!)}"]);
     }
     return result == 1;
   }
 
   bool isColumnNull(int idx) {
-    return DbasSqlitePlatform.instance.isNull(_dbPtr!, idx) == 1;
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    return _platform.isNull(_db!, idx);
   }
 
   String getColumnText(int idx) {
-    return DbasSqlitePlatform.instance.getColumnText(_dbPtr!, idx);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    return _platform.getColumnText(_db!, idx);
   }
 
   String? getColumnNullableText(int idx) {
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
     if (isColumnNull(idx)) {
       return null;
     }
 
-    return DbasSqlitePlatform.instance.getColumnText(_dbPtr!, idx);
+    return _platform.getColumnText(_db!, idx);
   }
 
   int getColumnInt(int idx) {
-    return DbasSqlitePlatform.instance.getColumnInt(_dbPtr!, idx);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    return _platform.getColumnInt(_db!, idx);
   }
 
   Decimal getColumnDecimal(int idx) {
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
     if (isColumnNull(idx)) {
       return Decimal.zero;
     }
-
-    return DbasSqlitePlatform.instance.getColumnDecimal(_dbPtr!, idx);
+    final doubleValue = _platform.getColumnDouble(_db!, idx);
+    return Decimal.parse(doubleValue.toString());
   }
 
   double getColumnDouble(int idx) {
-    return DbasSqlitePlatform.instance.getColumnDouble(_dbPtr!, idx);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    return _platform.getColumnDouble(_db!, idx);
   }
 
   Uint8List getColumnBlob(int idx) {
-    final length = DbasSqlitePlatform.instance.getColumnBytes(_dbPtr!, idx);
-    final ptr = DbasSqlitePlatform.instance.getColumnBlob(_dbPtr!, idx);
-
-    if (length == 0 || ptr == nullptr) {
-      return Uint8List(0); // Empty blob
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
 
-    // Copy native memory bytes to Dart Uint8List
-    final bytes = ptr.asTypedList(length);
-    return Uint8List.fromList(bytes);
+    return _platform.getColumnBlob(_db!, idx);
   }
 
   SqliteColumnType getColumnType(int idx) {
-    return SqliteColumnType.fromInt( DbasSqlitePlatform.instance.getColumnType(_dbPtr!, idx));
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    return SqliteColumnType.fromInt( _platform.getColumnType(_db!, idx));
   }
 
   int getColumnCount() {
-    return DbasSqlitePlatform.instance.getColumnCount(_dbPtr!);
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
+    return _platform.getColumnCount(_db!);
   }
 
   void _bindParameters(List<Object?>? parameters) {
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
     if (parameters != null && parameters.isNotEmpty) {
       for (int i = 0; i < parameters.length; i++) {
         final index = i + 1; // SQLite index are based on starting 1
         final value = parameters[i];
 
         if (value == null) {
-          DbasSqlitePlatform.instance.bindNull(_dbPtr!, index);
+          _platform.bindNull(_db!, index);
         } else if (value is int) {
-          DbasSqlitePlatform.instance.bindInt(_dbPtr!, index, value);
+          _platform.bindInt(_db!, index, value);
         } else if (value is double) {
-          DbasSqlitePlatform.instance.bindDouble(_dbPtr!, index, value);
+          _platform.bindDouble(_db!, index, value);
         } else if (value is Decimal) {
-          DbasSqlitePlatform.instance.bindDouble(_dbPtr!, index, value as double);
+          _platform.bindDouble(_db!, index, value as double);
         } else if (value is String) {
-          DbasSqlitePlatform.instance.bindText(_dbPtr!, index, value);
+          _platform.bindText(_db!, index, value);
         } else if (value is Uint8List) {
-          DbasSqlitePlatform.instance.bindBlob(_dbPtr!, index, value);
+          _platform.bindBlob(_db!, index, value);
         } else {
           throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
         }
@@ -143,6 +184,10 @@ class DbasSqlite {
   }
 
   void _bindNameParameters(Map<String, Object?>? parameters) {
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
+    }
+
     if (parameters != null && parameters.isNotEmpty) {
       parameters.forEach((key, value) {
         final paramName = key.startsWith(':') || key.startsWith('@') || key.startsWith(r'$')
@@ -150,17 +195,17 @@ class DbasSqlite {
             : ':$key';
 
         if (value == null) {
-          DbasSqlitePlatform.instance.bindNameNull(_dbPtr!, paramName);
+          _platform.bindNameNull(_db!, paramName);
         } else if (value is int) {
-          DbasSqlitePlatform.instance.bindNameInt(_dbPtr!, paramName, value);
+          _platform.bindNameInt(_db!, paramName, value);
         } else if (value is double) {
-          DbasSqlitePlatform.instance.bindNameDouble(_dbPtr!, paramName, value);
+          _platform.bindNameDouble(_db!, paramName, value);
         } else if (value is Decimal) {
-          DbasSqlitePlatform.instance.bindNameDecimal(_dbPtr!, paramName, value);
+          _platform.bindNameDecimal(_db!, paramName, value);
         } else if (value is String) {
-          DbasSqlitePlatform.instance.bindNameText(_dbPtr!, paramName, value);
+          _platform.bindNameText(_db!, paramName, value);
         } else if (value is Uint8List) {
-          DbasSqlitePlatform.instance.bindNameBlob(_dbPtr!, paramName, value);
+          _platform.bindNameBlob(_db!, paramName, value);
         } else {
           throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
         }
@@ -168,9 +213,13 @@ class DbasSqlite {
     }
   }
 
-
   Future<void> closeDb() async {
-    await DbasSqlitePlatform.instance.closeDb(_dbPtr!);
-    _dbPtr = null;
+    if (!isOpened()) {
+      _db = null;
+      return;
+    }
+
+    await _platform.closeDb(_db!);
+    _db = null;
   }
 }

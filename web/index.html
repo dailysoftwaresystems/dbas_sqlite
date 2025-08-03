@@ -18,6 +18,10 @@
       return dbPtr;
     }
 
+    function isOpened(dbPtr) {
+      return ModuleInstance.IsOpened(dbPtr) === 1;
+    }
+
     function executeSql(dbPtr, sql) {
       const ptr = ModuleInstance._malloc(ModuleInstance.lengthBytesUTF8(sql) + 1);
       ModuleInstance.stringToUTF8(sql, ptr, ModuleInstance.lengthBytesUTF8(sql) + 1);
