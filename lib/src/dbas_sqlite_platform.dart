@@ -23,8 +23,22 @@ final class DbasSqlitePlatform {
   Future<void> initialize() => _delegate.initialize();
 
   Future<DbasSqliteDb> openDb(String path) async {
-    final ptr = _delegate.openDb(path.toNativeUtf8());
-    return DbasSqliteDb(ptr);
+    final dbPathPtr = path.toNativeUtf8();
+    final dbPtr = _delegate.openDb(dbPathPtr);
+    malloc.free(dbPathPtr);
+
+    final isOpened = _delegate.isOpened(dbPtr);
+    Pointer<Utf8>? lastError = isOpened ? nullptr : _delegate.getLastDbError(dbPtr);
+
+    if (dbPtr == nullptr || !isOpened) {
+      String lastErrorMessage = (lastError != '' && lastError != nullptr)
+          ? lastError.toDartString()
+          : 'Unknown error';
+      malloc.free(dbPtr);
+      throw Exception('Failed to open db in: $path. Reason: $lastErrorMessage');
+    }
+
+    return DbasSqliteDb(dbPtr);
   }
 
   bool isOpened(DbasSqliteDb db) {
@@ -97,8 +111,13 @@ final class DbasSqlitePlatform {
       _delegate.getColumnType(db.ptr, colIndex);
   int getColumnCount(DbasSqliteDb db) => _delegate.getColumnCount(db.ptr);
 
-  String getLastDbError(DbasSqliteDb db) =>
-      _delegate.getLastDbError(db.ptr).toDartString();
+  String getLastDbError(DbasSqliteDb db) {
+    final errPtr = _delegate.getLastDbError(db.ptr);
+
+    return errPtr != nullptr && errPtr.address != 0
+        ? errPtr.toDartString()
+        : 'OK';
+  }
   int getAffectedRows(DbasSqliteDb db) => _delegate.getAffectedRows(db.ptr);
   int getLastInsertedId(DbasSqliteDb db) => _delegate.getLastInsertedId(db.ptr);
 

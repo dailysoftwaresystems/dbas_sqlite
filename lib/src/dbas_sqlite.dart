@@ -39,11 +39,13 @@ class DbasSqlite {
     _bindParameters(params);
     _bindNameParameters(nameParams);
 
+    int result = 0;
     if (readRow()) {
-      return _platform.getAffectedRows(_db!);
-    } else {
-      return 0;
+      result = _platform.getAffectedRows(_db!);
     }
+
+    _platform.closeReader(_db!);
+    return result;
   }
 
   Future<int> executeReader(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
@@ -63,38 +65,23 @@ class DbasSqlite {
   }
 
   bool readRow() {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     int result = _platform.readRow(_db!);
     if (result == -1) {
       throw Exception(["It was not possible to run the query: ${_platform.getLastDbError(_db!)}"]);
     }
+
     return result == 1;
   }
 
   bool isColumnNull(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return _platform.isNull(_db!, idx);
   }
 
   String getColumnText(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return _platform.getColumnText(_db!, idx);
   }
 
   String? getColumnNullableText(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     if (isColumnNull(idx)) {
       return null;
     }
@@ -103,18 +90,10 @@ class DbasSqlite {
   }
 
   int getColumnInt(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return _platform.getColumnInt(_db!, idx);
   }
 
   Decimal getColumnDecimal(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     if (isColumnNull(idx)) {
       return Decimal.zero;
     }
@@ -123,42 +102,22 @@ class DbasSqlite {
   }
 
   double getColumnDouble(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return _platform.getColumnDouble(_db!, idx);
   }
 
   Uint8List getColumnBlob(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return _platform.getColumnBlob(_db!, idx);
   }
 
   SqliteColumnType getColumnType(int idx) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return SqliteColumnType.fromInt( _platform.getColumnType(_db!, idx));
   }
 
   int getColumnCount() {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     return _platform.getColumnCount(_db!);
   }
 
   void _bindParameters(List<Object?>? parameters) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     if (parameters != null && parameters.isNotEmpty) {
       for (int i = 0; i < parameters.length; i++) {
         final index = i + 1; // SQLite index are based on starting 1
@@ -184,10 +143,6 @@ class DbasSqlite {
   }
 
   void _bindNameParameters(Map<String, Object?>? parameters) {
-    if (!isOpened()) {
-      throw StateError('Database is not opened. Please open the database before executing SQL commands.');
-    }
-
     if (parameters != null && parameters.isNotEmpty) {
       parameters.forEach((key, value) {
         final paramName = key.startsWith(':') || key.startsWith('@') || key.startsWith(r'$')
@@ -214,11 +169,6 @@ class DbasSqlite {
   }
 
   Future<void> closeDb() async {
-    if (!isOpened()) {
-      _db = null;
-      return;
-    }
-
     await _platform.closeDb(_db!);
     _db = null;
   }
