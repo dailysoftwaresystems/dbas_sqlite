@@ -1,0 +1,1 @@
+framework module DbasSqlite { header "dbas_sqlite.h" export * }
