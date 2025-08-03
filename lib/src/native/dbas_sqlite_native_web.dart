@@ -1,5 +1,4 @@
 import 'dart:ffi';
-import 'dart:typed_data';
 import 'dart:js_interop';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 import 'package:ffi/ffi.dart';
@@ -28,14 +27,14 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external void bindFloat(int stmt, int index, double value);
   external void bindDouble(int stmt, int index, double value);
   external void bindText(int stmt, int index, String value);
-  external void bindBlob(int stmt, int index, Uint8List value);
+  external void bindBlob(int stmt, int index, Pointer<Uint8> value);
 
   external void bindNameNull(int stmt, String name);
   external void bindNameInt(int stmt, String name, int value);
   external void bindNameFloat(int stmt, String name, double value);
   external void bindNameDouble(int stmt, String name, double value);
   external void bindNameText(int stmt, String name, String value);
-  external void bindNameBlob(int stmt, String name, Uint8List value);
+  external void bindNameBlob(int stmt, String name, Pointer<Uint8> value);
 
   external int readRow(int stmt);
   external int isNull(int stmt, int colIndex);
@@ -44,7 +43,7 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external int getColumnInt(int stmt, int colIndex);
   external double getColumnFloat(int stmt, int colIndex);
   external double getColumnDouble(int stmt, int colIndex);
-  external Uint8List getColumnBlob(int stmt, int columnIndex);
+  external Pointer<Uint8> getColumnBlob(int stmt, int columnIndex);
   external int getColumnBytes(int stmt, int columnIndex);
   external int getColumnType(int stmt, int colIndex);
   external int getColumnCount(int stmt);
@@ -116,7 +115,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _js.bindText(dbPtr.address, index, value.toDartString());
 
   @override
-  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Uint8List value) =>
+  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value) =>
       _js.bindBlob(dbPtr.address, index, value);
 
   @override
@@ -140,7 +139,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _js.bindNameText(dbPtr.address, name.toDartString(), value.toDartString());
 
   @override
-  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Uint8List value) =>
+  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value) =>
       _js.bindNameBlob(dbPtr.address, name.toDartString(), value);
 
   @override
@@ -174,12 +173,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) {
-    final blob = _js.getColumnBlob(dbPtr.address, columnIndex);
-    if (blob.isEmpty) return nullptr;
-    final ptr = calloc<Uint8>(blob.length);
-    final nativeList = ptr.asTypedList(blob.length);
-    nativeList.setAll(0, blob);
-    return ptr;
+    return _js.getColumnBlob(dbPtr.address, columnIndex);
   }
 
   @override

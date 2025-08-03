@@ -44,8 +44,12 @@ final class DbasSqlitePlatform {
   void bindDecimal(DbasSqliteDb db, int index, Decimal value) => _delegate.bindDouble(db.ptr, index, double.parse(value.toString()));
   void bindText(DbasSqliteDb db, int index, String value) =>
       _delegate.bindText(db.ptr, index, value.toNativeUtf8());
-  void bindBlob(DbasSqliteDb db, int index, Uint8List value) =>
-      _delegate.bindBlob(db.ptr, index, value);
+  void bindBlob(DbasSqliteDb db, int index, Uint8List value) {
+    final ptr = malloc<Uint8>(value.length);
+    ptr.asTypedList(value.length).setAll(0, value);
+    _delegate.bindBlob(db.ptr, index, ptr);
+    malloc.free(ptr);
+  }
 
   void bindNameNull(DbasSqliteDb db, String name) =>
       _delegate.bindNameNull(db.ptr, name.toNativeUtf8());
@@ -59,8 +63,12 @@ final class DbasSqlitePlatform {
       _delegate.bindNameDouble(db.ptr, name.toNativeUtf8(), double.parse(value.toString()));
   void bindNameText(DbasSqliteDb db, String name, String value) =>
       _delegate.bindNameText(db.ptr, name.toNativeUtf8(), value.toNativeUtf8());
-  void bindNameBlob(DbasSqliteDb db, String name, Uint8List value) =>
-      _delegate.bindNameBlob(db.ptr, name.toNativeUtf8(), value);
+  void bindNameBlob(DbasSqliteDb db, String name, Uint8List value) {
+    final ptr = malloc<Uint8>(value.length);
+    ptr.asTypedList(value.length).setAll(0, value);
+    _delegate.bindNameBlob(db.ptr, name.toNativeUtf8(), ptr);
+    malloc.free(ptr);
+  }
 
   int readRow(DbasSqliteDb db) => _delegate.readRow(db.ptr);
   bool isNull(DbasSqliteDb db, int colIndex) => _delegate.isNull(db.ptr, colIndex) == 1;
