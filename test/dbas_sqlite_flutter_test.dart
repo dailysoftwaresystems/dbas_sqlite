@@ -23,7 +23,9 @@ void main() async {
   test('Test Open, create table, insert, select and close', () async {
     final dbasSqlite = await DbasSqlite.getInstance();
     await dbasSqlite.openDb(db);
-    expect(dbasSqlite.isOpened(), isTrue);
+
+    expect(await fileDb.exists(), isTrue, reason: 'DB file should exist after opening the database.');
+    expect(dbasSqlite.isOpened(), isTrue, reason: 'Database should be opened after calling openDb.');
 
     await dbasSqlite.executeSql('''
       CREATE TABLE users (
