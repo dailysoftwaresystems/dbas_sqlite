@@ -1,13 +1,37 @@
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
+import 'package:path/path.dart' as path;
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
+  static final basePath = path.join(Directory.current.path, 'native_libs', 'sqlite');
+
   @override
   Future<void> initialize() async {
+    if (Platform.isIOS) {
+      DynamicLibrary.process();
+      return;
+    }
 
+    String libPath;
+    if (Platform.isAndroid) {
+      libPath = 'dbas_sqlite.so';
+    } else if (Platform.isWindows) {
+      final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
+      libPath = path.join(basePath, 'windows', arch, 'dbas_sqlite.dll');
+    } else if (Platform.isMacOS) {
+      final arch = Platform.version.toLowerCase().contains('arm64') ? 'a64' : 'x86';
+      libPath = path.join(basePath, 'macos', arch, 'dbas_sqlite.dylib');
+    } else if (Platform.isLinux) {
+      libPath = path.join(basePath, 'linux', 'dbas_sqlite.so');
+    } else {
+      throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
+    }
+
+    DynamicLibrary.open(libPath);
   }
 
   @override
