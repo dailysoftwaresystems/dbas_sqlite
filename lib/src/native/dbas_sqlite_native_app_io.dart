@@ -1,18 +1,11 @@
 import 'dart:ffi';
-import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @override
-  Future<void> initialize() async {
-    if (Platform.isIOS) {
-      DynamicLibrary.process();
-    } else {
-      DynamicLibrary.open(getLibraryPath());
-    }
-  }
+  Future<void> initialize() async {}
 
   @override
   @Native<Pointer<DbasSqliteDbStruct> Function(Handle, Pointer<Utf8>)>(symbol: 'OpenDb')
