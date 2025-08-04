@@ -1,5 +1,6 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'package:path/path.dart' as path;
 
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_app_selector.dart';
 import 'package:dbas_sqlite_flutter/src/native/stub/dbas_sqlite_native_web_stub.dart'
@@ -11,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import '../dbas_sqlite_db.dart';
 
 abstract class DbasSqliteNativeInterface {
+  static final basePath = path.join(Directory.current.path, 'native_libs', 'sqlite');
   static final DbasSqliteNativeInterface instance = _getPlatform();
 
   static DbasSqliteNativeInterface _getPlatform() {
@@ -24,6 +26,24 @@ abstract class DbasSqliteNativeInterface {
   }
 
   Future<void> initialize();
+
+  String getLibraryPath() {
+    if (Platform.isAndroid) {
+      return 'dbas_sqlite.so';
+    } else if (Platform.isWindows) {
+      final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
+      return path.join(basePath, 'windows', arch, 'dbas_sqlite.dll');
+    } else if (Platform.isMacOS) {
+      final arch = Platform.version.toLowerCase().contains('arm64') ? 'a64' : 'x86';
+      return path.join(basePath, 'macos', arch, 'dbas_sqlite.dylib');
+    } else if (Platform.isLinux) {
+      return path.join(basePath, 'linux', 'dbas_sqlite.so');
+    } else if (kIsWeb) {
+      return path.join(basePath, 'web', 'dbas_sqlite.js');
+    } else {
+      throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
+    }
+  }
 
   Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path);
   bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr);

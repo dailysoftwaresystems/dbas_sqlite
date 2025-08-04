@@ -9,6 +9,9 @@ class DbasSqliteNativeWeb implements DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native web.');
 
   @override
+  String getLibraryPath() => throw UnsupportedError('Not supported in native app.');
+
+  @override
   Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path) =>
       throw UnsupportedError('Not supported in native web.');
 
