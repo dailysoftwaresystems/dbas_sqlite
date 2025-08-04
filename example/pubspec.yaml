@@ -18,6 +18,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  decimal: ^3.2.4
 
   dbas_sqlite_flutter:
     # When depending on this package from a real application you should use:
@@ -36,7 +37,6 @@ dev_dependencies:
     sdk: flutter
   flutter_test:
     sdk: flutter
-  decimal: ^2.3.2
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

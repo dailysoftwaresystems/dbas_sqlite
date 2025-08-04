@@ -1,4 +1,4 @@
-package com.dailysoftwaresystems.dbas_sqlite_flutter_example
+package com.dailysoftwaresystems.dbas_sqlite_flutter.example
 
 import io.flutter.embedding.android.FlutterActivity
 

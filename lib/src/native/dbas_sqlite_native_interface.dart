@@ -33,10 +33,8 @@ abstract class DbasSqliteNativeInterface {
       String arch;
       if (version.contains('arm64')) {
         arch = 'a64';
-      } else if (version.contains('x86_64')) {
-        arch = 'x86_64';
       } else if (version.contains('x86')) {
-        arch = 'x86';
+        arch = 'x86_64';
       } else {
         arch = 'armeabi';
       }
