@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import 'dart:async';
+import 'package:path/path.dart' as path;
 
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
 
@@ -23,6 +26,13 @@ class _MyAppState extends State<MyApp> {
     initPlatformState();
   }
 
+  Future<String> getDatabasePath(String dbName) async {
+    final directory = await getApplicationDocumentsDirectory();
+    final dirPath = '${directory.path}/dbas/$dbName';
+    await Directory(path.dirname(dirPath)).create(recursive: true);
+    return dirPath;
+  }
+
   // Platform messages are asynchronous, so we initialize in an async method.
   Future<void> initPlatformState() async {
     bool isOpened = false;
@@ -30,7 +40,9 @@ class _MyAppState extends State<MyApp> {
     // We also handle the message potentially returning null.
     try {
       final DbasSqlite plugin = await DbasSqlite.getInstance();
-      await plugin.openDb('test/db/test.db');
+      final dbPath = await getDatabasePath('dbas.db');
+      print('Opening database at: $dbPath');
+      await plugin.openDb(dbPath);
       isOpened = plugin.isOpened();
     } on Exception catch (e) {
       print('Failed to open db: ${e.toString()}');
