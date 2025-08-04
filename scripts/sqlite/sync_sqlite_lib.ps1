@@ -51,10 +51,16 @@ Write-Host "Copying android binaries..."
 New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a" | Out-Null
 New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a" | Out-Null
 New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64" | Out-Null
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../windows/libs" | Out-Null
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../linux/libs" | Out-Null
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../web/libs" | Out-Null
 
 Copy-Item "$OUT_DIR/android/a64/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a" -Recurse -Force
 Copy-Item "$OUT_DIR/android/armeabi/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a" -Recurse -Force
 Copy-Item "$OUT_DIR/android/x86_64/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64" -Recurse -Force
+Copy-Item "$OUT_DIR/windows/*" -Destination "$SCRIPT_DIR/../../windows/libs" -Recurse -Force
+Copy-Item "$OUT_DIR/linux/*" -Destination "$SCRIPT_DIR/../../linux/libs" -Recurse -Force
+Copy-Item "$OUT_DIR/web/*" -Destination "$SCRIPT_DIR/../../web/libs" -Recurse -Force
 
 Write-Host "Copying ios binaries..."
 Copy-Item "$OUT_DIR/ios/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../ios" -Recurse -Force
