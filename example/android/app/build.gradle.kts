@@ -9,11 +9,23 @@ android {
     namespace = "com.dailysoftwaresystems.dbas_sqlite_flutter.example"
     compileSdk = flutter.compileSdkVersion
     //ndkVersion = flutter.ndkVersion
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "27.3.13750724"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+        pickFirsts += listOf(
+            "lib/armeabi-v7a/libc++_shared.so",
+            "lib/arm64-v8a/libc++_shared.so",
+            "lib/x86/libc++_shared.so",
+            "lib/x86_64/libc++_shared.so"
+        )
     }
 
     kotlinOptions {
