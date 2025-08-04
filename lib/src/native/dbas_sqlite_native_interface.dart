@@ -38,25 +38,30 @@ abstract class DbasSqliteNativeInterface {
     if (Platform.isWindows) {
       final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
       libAssetName = 'dbas_sqlite.dll';
-      libAsset = path.join('packages', 'dbas_sqlite_flutter', 'windows', 'libs', arch, libAssetName);
+      libAsset = path.join('windows', 'libs', arch, libAssetName);
     } else if (Platform.isLinux) {
       libAssetName = 'dbas_sqlite.so';
-      libAsset = path.join('packages', 'dbas_sqlite_flutter', 'libs', libAssetName);
+      libAsset = path.join('libs', libAssetName);
     } else if (kIsWeb) {
       libAssetName = 'dbas_sqlite.js';
-      libAsset = path.join('packages', 'dbas_sqlite_flutter', 'libs', libAssetName);
+      libAsset = path.join('dbas_sqlite_flutter', 'libs', libAssetName);
     }
 
     final dir = await getApplicationSupportDirectory();
-    final libPath = '${dir.path}/libs/$libAssetName';
+    final libDir = '${dir.path}/libs';
+    if (!await Directory(libDir).exists()) {
+      await Directory(libDir).create(recursive: true);
+    }
 
+    final libPath = '$libDir/$libAssetName';
     final dllFile = File(libPath);
     if (await dllFile.exists()) {
       await dllFile.delete();
     }
 
-    final bytes = await rootBundle.load(libAsset);
-    await dllFile.writeAsBytes(bytes.buffer.asUint8List());
+    libAsset = 'packages/dbas_sqlite_flutter/${libAsset.replaceAll('\\', '/')}';
+    final buffer = await rootBundle.load(libAsset);
+    await dllFile.writeAsBytes(buffer.buffer.asUint8List());
   }
 
   Future<String> getLibraryPath() async {

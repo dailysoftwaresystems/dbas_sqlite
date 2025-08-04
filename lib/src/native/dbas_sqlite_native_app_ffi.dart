@@ -46,7 +46,8 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       _lib = DynamicLibrary.process();
     } else {
       await prepareLibIfNeeded();
-      _lib = DynamicLibrary.open(await getLibraryPath());
+      final libPath = await getLibraryPath();
+      _lib = DynamicLibrary.open(libPath);
     }
 
     _openDb = _lib.lookupFunction<
