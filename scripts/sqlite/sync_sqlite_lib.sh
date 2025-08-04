@@ -45,9 +45,11 @@ echo "All binaries downloaded in: $OUT_DIR, copying binaries to respective platf
 echo "Copying android binaries..."
 mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a"
 mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a"
+mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64"
 
 cp -r "$OUT_DIR/android/a64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a/"
 cp -r "$OUT_DIR/android/armeabi/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a/"
+cp -r "$OUT_DIR/android/x86_64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64/"
 
 echo "Copying ios binaries..."
 mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"

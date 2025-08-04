@@ -29,7 +29,18 @@ abstract class DbasSqliteNativeInterface {
 
   String getLibraryPath() {
     if (Platform.isAndroid) {
-      return 'dbas_sqlite.so';
+      final version = Platform.version.toLowerCase();
+      String arch;
+      if (version.contains('arm64')) {
+        arch = 'a64';
+      } else if (version.contains('x86_64')) {
+        arch = 'x86_64';
+      } else if (version.contains('x86')) {
+        arch = 'x86';
+      } else {
+        arch = 'armeabi';
+      }
+      return path.join(basePath, 'android', arch, 'dbas_sqlite.so');
     } else if (Platform.isWindows) {
       final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
       return path.join(basePath, 'windows', arch, 'dbas_sqlite.dll');
