@@ -1,4 +1,3 @@
-import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
@@ -7,11 +6,8 @@ import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_app_selector.d
 import 'package:dbas_sqlite_flutter/src/native/stub/dbas_sqlite_native_web_stub.dart'
 if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_web.dart';
 
-import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
-
-import '../dbas_sqlite_db.dart';
 
 abstract class DbasSqliteNativeInterface {
   static final DbasSqliteNativeInterface instance = _getPlatform();
@@ -36,7 +32,7 @@ abstract class DbasSqliteNativeInterface {
     late String libAsset;
     late String libAssetName;
     if (Platform.isWindows) {
-      final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
+      final arch = Platform.version.endsWith('x64') ? 'x64' : 'x86';
       libAssetName = 'dbas_sqlite.dll';
       libAsset = path.join('windows', 'libs', arch, libAssetName);
     } else if (Platform.isLinux) {
@@ -85,42 +81,42 @@ abstract class DbasSqliteNativeInterface {
     }
   }
 
-  Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path);
-  bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr);
+  int openDb(String path);
+  bool isOpened(int dbPtr);
 
-  int executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
-  int prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
+  int executeSql(int dbPtr, String sql);
+  int prepareQuery(int dbPtr, String sql);
 
-  void bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index);
-  void bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value);
-  void bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value);
-  void bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value);
-  void bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value);
-  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value);
+  void bindNull(int stmt, int index);
+  void bindInt(int stmt, int index, int value);
+  void bindFloat(int stmt, int index, double value);
+  void bindDouble(int stmt, int index, double value);
+  void bindText(int stmt, int index, String value);
+  void bindBlob(int stmt, int index, List<int> value);
 
-  void bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name);
-  void bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value);
-  void bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value);
-  void bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value);
-  void bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value);
-  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value);
+  void bindNameNull(int stmt, String name);
+  void bindNameInt(int stmt, String name, int value);
+  void bindNameFloat(int stmt, String name, double value);
+  void bindNameDouble(int stmt, String name, double value);
+  void bindNameText(int stmt, String name, String value);
+  void bindNameBlob(int stmt, String name, List<int> value);
 
-  int readRow(Pointer<DbasSqliteDbStruct> dbPtr);
-  int isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  int readRow(int stmt);
+  bool isNull(int stmt, int colIndex);
 
-  Pointer<Utf8> getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
-  int getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
-  double getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
-  double getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
-  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
-  int getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
-  int getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
-  int getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr);
+  String getColumnText(int stmt, int colIndex);
+  int getColumnInt(int stmt, int colIndex);
+  double getColumnFloat(int stmt, int colIndex);
+  double getColumnDouble(int stmt, int colIndex);
+  List<int> getColumnBlob(int stmt, int columnIndex);
+  int getColumnBytes(int stmt, int columnIndex);
+  int getColumnType(int stmt, int colIndex);
+  int getColumnCount(int stmt);
 
-  Pointer<Utf8> getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr);
-  int getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr);
-  int getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr);
+  String getLastDbError(int dbPtr);
+  int getAffectedRows(int dbPtr);
+  int getLastInsertedId(int dbPtr);
 
-  void closeReader(Pointer<DbasSqliteDbStruct> dbPtr);
-  void closeDb(Pointer<DbasSqliteDbStruct> dbPtr);
+  void closeReader(int stmt);
+  void closeDb(int dbPtr);
 }

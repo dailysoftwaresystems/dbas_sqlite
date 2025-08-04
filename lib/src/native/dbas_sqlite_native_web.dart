@@ -1,7 +1,4 @@
-import 'dart:ffi';
 import 'dart:js_interop';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
-import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
 
 @JS('initDbasSqlite')
@@ -27,14 +24,14 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external void bindFloat(int stmt, int index, double value);
   external void bindDouble(int stmt, int index, double value);
   external void bindText(int stmt, int index, String value);
-  external void bindBlob(int stmt, int index, Pointer<Uint8> value);
+  external void bindBlob(int stmt, int index, List<int> value);
 
   external void bindNameNull(int stmt, String name);
   external void bindNameInt(int stmt, String name, int value);
   external void bindNameFloat(int stmt, String name, double value);
   external void bindNameDouble(int stmt, String name, double value);
   external void bindNameText(int stmt, String name, String value);
-  external void bindNameBlob(int stmt, String name, Pointer<Uint8> value);
+  external void bindNameBlob(int stmt, String name, List<int> value);
 
   external int readRow(int stmt);
   external int isNull(int stmt, int colIndex);
@@ -43,7 +40,7 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external int getColumnInt(int stmt, int colIndex);
   external double getColumnFloat(int stmt, int colIndex);
   external double getColumnDouble(int stmt, int colIndex);
-  external Pointer<Uint8> getColumnBlob(int stmt, int columnIndex);
+  external List<int> getColumnBlob(int stmt, int columnIndex);
   external int getColumnBytes(int stmt, int columnIndex);
   external int getColumnType(int stmt, int colIndex);
   external int getColumnCount(int stmt);
@@ -67,146 +64,101 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
-  Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path) {
-    final dartPath = path.toDartString();
-    final ptr = Pointer.fromAddress(_js.openDb(dartPath)).cast<DbasSqliteDbStruct>();
-    calloc.free(path);
-    return ptr;
+  int openDb(String path) => _js.openDb(path);
+
+  @override
+  bool isOpened(int dbPtr) => _js.isOpened(dbPtr);
+
+  @override
+  int executeSql(int dbPtr, String sql) => _js.executeSql(dbPtr, sql);
+
+  @override
+  int prepareQuery(int dbPtr, String sql) => _js.prepareQuery(dbPtr, sql);
+
+  @override
+  void bindNull(int stmt, int index) => _js.bindNull(stmt, index);
+
+  @override
+  void bindInt(int stmt, int index, int value) => _js.bindInt(stmt, index, value);
+
+  @override
+  void bindFloat(int stmt, int index, double value) => _js.bindFloat(stmt, index, value);
+
+  @override
+  void bindDouble(int stmt, int index, double value) => _js.bindDouble(stmt, index, value);
+
+  @override
+  void bindText(int stmt, int index, String value) => _js.bindText(stmt, index, value);
+
+  @override
+  void bindBlob(int stmt, int index, List<int> value) {
+    _js.bindBlob(stmt, index, value);
   }
 
   @override
-  bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.isOpened(dbPtr.address);
+  void bindNameNull(int stmt, String name) => _js.bindNameNull(stmt, name);
 
   @override
-  int executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) {
-    final dartSql = sql.toDartString();
-    final result = _js.executeSql(dbPtr.address, dartSql);
-    calloc.free(sql);
-    return result;
+  void bindNameInt(int stmt, String name, int value) => _js.bindNameInt(stmt, name, value);
+
+  @override
+  void bindNameFloat(int stmt, String name, double value) => _js.bindNameFloat(stmt, name, value);
+
+  @override
+  void bindNameDouble(int stmt, String name, double value) => _js.bindNameDouble(stmt, name, value);
+
+  @override
+  void bindNameText(int stmt, String name, String value) => _js.bindNameText(stmt, name, value);
+
+  @override
+  void bindNameBlob(int stmt, String name, List<int> value) {
+    _js.bindNameBlob(stmt, name, value);
   }
 
   @override
-  int prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) {
-    final dartSql = sql.toDartString();
-    final result = _js.prepareQuery(dbPtr.address, dartSql);
-    calloc.free(sql);
-    return result;
+  int readRow(int stmt) => _js.readRow(stmt);
+
+  @override
+  bool isNull(int stmt, int colIndex) => _js.isNull(stmt, colIndex) == 1;
+
+  @override
+  String getColumnText(int stmt, int colIndex) => _js.getColumnText(stmt, colIndex);
+
+  @override
+  int getColumnInt(int stmt, int colIndex) => _js.getColumnInt(stmt, colIndex);
+
+  @override
+  double getColumnFloat(int stmt, int colIndex) => _js.getColumnFloat(stmt, colIndex);
+
+  @override
+  double getColumnDouble(int stmt, int colIndex) => _js.getColumnDouble(stmt, colIndex);
+
+  @override
+  List<int> getColumnBlob(int stmt, int columnIndex) {
+    return _js.getColumnBlob(stmt, columnIndex);
   }
 
   @override
-  void bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index) =>
-      _js.bindNull(dbPtr.address, index);
+  int getColumnBytes(int stmt, int columnIndex) => _js.getColumnBytes(stmt, columnIndex);
 
   @override
-  void bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value) =>
-      _js.bindInt(dbPtr.address, index, value);
+  int getColumnType(int stmt, int colIndex) => _js.getColumnType(stmt, colIndex);
 
   @override
-  void bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) =>
-      _js.bindFloat(dbPtr.address, index, value);
+  int getColumnCount(int stmt) => _js.getColumnCount(stmt);
 
   @override
-  void bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) =>
-      _js.bindDouble(dbPtr.address, index, value);
+  String getLastDbError(int dbPtr) => _js.getLastDbError(dbPtr);
 
   @override
-  void bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value) =>
-      _js.bindText(dbPtr.address, index, value.toDartString());
+  int getAffectedRows(int dbPtr) => _js.getAffectedRows(dbPtr);
 
   @override
-  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value) =>
-      _js.bindBlob(dbPtr.address, index, value);
+  int getLastInsertedId(int dbPtr) => _js.getLastInsertedId(dbPtr);
 
   @override
-  void bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name) =>
-      _js.bindNameNull(dbPtr.address, name.toDartString());
+  void closeReader(int stmt) => _js.closeReader(stmt);
 
   @override
-  void bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value) =>
-      _js.bindNameInt(dbPtr.address, name.toDartString(), value);
-
-  @override
-  void bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) =>
-      _js.bindNameFloat(dbPtr.address, name.toDartString(), value);
-
-  @override
-  void bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) =>
-      _js.bindNameDouble(dbPtr.address, name.toDartString(), value);
-
-  @override
-  void bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value) =>
-      _js.bindNameText(dbPtr.address, name.toDartString(), value.toDartString());
-
-  @override
-  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value) =>
-      _js.bindNameBlob(dbPtr.address, name.toDartString(), value);
-
-  @override
-  int readRow(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.readRow(dbPtr.address);
-
-  @override
-  int isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      _js.isNull(dbPtr.address, colIndex);
-
-  @override
-  Pointer<Utf8> getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) {
-    if (dbPtr.address == 0) {
-      return nullptr;
-    }
-    final value = _js.getColumnText(dbPtr.address, colIndex);
-    return value.toNativeUtf8();
-  }
-
-  @override
-  int getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      _js.getColumnInt(dbPtr.address, colIndex);
-
-  @override
-  double getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      _js.getColumnFloat(dbPtr.address, colIndex);
-
-  @override
-  double getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      _js.getColumnDouble(dbPtr.address, colIndex);
-
-  @override
-  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) {
-    return _js.getColumnBlob(dbPtr.address, columnIndex);
-  }
-
-  @override
-  int getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) =>
-      _js.getColumnBytes(dbPtr.address, columnIndex);
-
-  @override
-  int getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      _js.getColumnType(dbPtr.address, colIndex);
-
-  @override
-  int getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.getColumnCount(dbPtr.address);
-
-  @override
-  Pointer<Utf8> getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr) {
-    final value = _js.getLastDbError(dbPtr.address);
-    return value.toNativeUtf8();
-  }
-
-  @override
-  int getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.getAffectedRows(dbPtr.address);
-
-  @override
-  int getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.getLastInsertedId(dbPtr.address);
-
-  @override
-  void closeReader(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.closeReader(dbPtr.address);
-
-  @override
-  void closeDb(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      _js.closeDb(dbPtr.address);
+  Future<void> closeDb(int dbPtr) async => _js.closeDb(dbPtr);
 }

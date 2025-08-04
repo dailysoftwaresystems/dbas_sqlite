@@ -4,132 +4,237 @@ import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
-  @override
-  Future<void> initialize() async {}
-
-  @override
   @Native<Pointer<DbasSqliteDbStruct> Function(Handle, Pointer<Utf8>)>(symbol: 'OpenDb')
-  external Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path);
+  external Pointer<DbasSqliteDbStruct> _openDb(Pointer<Utf8> path);
 
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'IsOpened')
   external int _isOpened(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @override
-  bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr) => _isOpened(dbPtr) == 1;
-
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>)>(symbol: 'ExecuteSql')
-  external int executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
+  external int _executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>)>(symbol: 'PrepareQuery')
-  external int prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
+  external int _prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'BindNull')
-  external void bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index);
+  external void _bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Int32, Int32)>(symbol: 'BindInt')
-  external void bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value);
+  external void _bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Int32, Float)>(symbol: 'BindFloat')
-  external void bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value);
+  external void _bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Int32, Double)>(symbol: 'BindDouble')
-  external void bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value);
+  external void _bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Int32, Pointer<Utf8>)>(symbol: 'BindText')
-  external void bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value);
+  external void _bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Int32, Pointer<Uint8>)>(symbol: 'BindBlob')
-  external void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value);
+  external void _bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>)>(symbol: 'BindNameNull')
-  external void bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name);
+  external void _bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>, Int32)>(symbol: 'BindNameInt')
-  external void bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value);
+  external void _bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>, Float)>(symbol: 'BindNameFloat')
-  external void bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value);
+  external void _bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>, Double)>(symbol: 'BindNameDouble')
-  external void bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value);
+  external void _bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>, Pointer<Utf8>)>(symbol: 'BindNameText')
-  external void bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value);
+  external void _bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>, Pointer<Utf8>, Pointer<Uint8>)>(symbol: 'BindNameBlob')
-  external void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value);
+  external void _bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'ReadRow')
-  external int readRow(Pointer<DbasSqliteDbStruct> dbPtr);
+  external int _readRow(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'IsNull')
-  external int isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  external int _isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
-  @override
   @Native<Pointer<Utf8> Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnText')
-  external Pointer<Utf8> getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  external Pointer<Utf8> _getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnInt')
-  external int getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  external int _getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
-  @override
   @Native<Float Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnFloat')
-  external double getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  external double _getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
-  @override
   @Native<Double Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnDouble')
-  external double getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  external double _getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
-  @override
   @Native<Pointer<Uint8> Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnBlob')
-  external Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
+  external Pointer<Uint8> _getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnBytes')
-  external int getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
+  external int _getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnType')
-  external int getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
+  external int _getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetColumnCount')
-  external int getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr);
+  external int _getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @override
   @Native<Pointer<Utf8> Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetLastDbError')
-  external Pointer<Utf8> getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr);
+  external Pointer<Utf8> _getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetAffectedRows')
-  external int getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr);
+  external int _getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @override
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetLastInsertedId')
-  external int getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr);
+  external int _getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @override
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'CloseReader')
-  external void closeReader(Pointer<DbasSqliteDbStruct> dbPtr);
+  external void _closeReader(Pointer<DbasSqliteDbStruct> dbPtr);
+
+  @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'CloseDb')
+  external void _closeDb(Pointer<DbasSqliteDbStruct> dbPtr);
+
+  Pointer<DbasSqliteDbStruct> _dbPtr(int address) =>
+      Pointer<DbasSqliteDbStruct>.fromAddress(address);
 
   @override
-  @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'CloseDb')
-  external void closeDb(Pointer<DbasSqliteDbStruct> dbPtr);
+  Future<void> initialize() async {}
+
+  @override
+  int openDb(String path) {
+    final ptr = _openDb(path.toNativeUtf8());
+    return ptr.address;
+  }
+
+  @override
+  bool isOpened(int dbPtr) => _isOpened(_dbPtr(dbPtr)) == 1;
+
+  @override
+  int executeSql(int dbPtr, String sql) =>
+      _executeSql(_dbPtr(dbPtr), sql.toNativeUtf8());
+
+  @override
+  int prepareQuery(int dbPtr, String sql) =>
+      _prepareQuery(_dbPtr(dbPtr), sql.toNativeUtf8());
+
+  @override
+  void bindNull(int stmt, int index) =>
+      _bindNull(_dbPtr(stmt), index);
+
+  @override
+  void bindInt(int stmt, int index, int value) =>
+      _bindInt(_dbPtr(stmt), index, value);
+
+  @override
+  void bindFloat(int stmt, int index, double value) =>
+      _bindFloat(_dbPtr(stmt), index, value);
+
+  @override
+  void bindDouble(int stmt, int index, double value) =>
+      _bindDouble(_dbPtr(stmt), index, value);
+
+  @override
+  void bindText(int stmt, int index, String value) =>
+      _bindText(_dbPtr(stmt), index, value.toNativeUtf8());
+
+  @override
+  void bindBlob(int stmt, int index, List<int> value) {
+    final ptr = calloc<Uint8>(value.length);
+    for (var i = 0; i < value.length; i++) {
+      ptr[i] = value[i];
+    }
+    _bindBlob(_dbPtr(stmt), index, ptr);
+    calloc.free(ptr);
+  }
+
+  @override
+  void bindNameNull(int stmt, String name) =>
+      _bindNameNull(_dbPtr(stmt), name.toNativeUtf8());
+
+  @override
+  void bindNameInt(int stmt, String name, int value) =>
+      _bindNameInt(_dbPtr(stmt), name.toNativeUtf8(), value);
+
+  @override
+  void bindNameFloat(int stmt, String name, double value) =>
+      _bindNameFloat(_dbPtr(stmt), name.toNativeUtf8(), value);
+
+  @override
+  void bindNameDouble(int stmt, String name, double value) =>
+      _bindNameDouble(_dbPtr(stmt), name.toNativeUtf8(), value);
+
+  @override
+  void bindNameText(int stmt, String name, String value) =>
+      _bindNameText(_dbPtr(stmt), name.toNativeUtf8(), value.toNativeUtf8());
+
+  @override
+  void bindNameBlob(int stmt, String name, List<int> value) {
+    final namePtr = name.toNativeUtf8();
+    final ptr = calloc<Uint8>(value.length);
+    for (var i = 0; i < value.length; i++) {
+      ptr[i] = value[i];
+    }
+    _bindNameBlob(_dbPtr(stmt), namePtr, ptr);
+    calloc.free(ptr);
+    calloc.free(namePtr);
+  }
+
+  @override
+  int readRow(int stmt) => _readRow(_dbPtr(stmt));
+
+  @override
+  bool isNull(int stmt, int colIndex) => _isNull(_dbPtr(stmt), colIndex) == 1;
+
+  @override
+  String getColumnText(int stmt, int colIndex) =>
+      _getColumnText(_dbPtr(stmt), colIndex).toDartString();
+
+  @override
+  int getColumnInt(int stmt, int colIndex) =>
+      _getColumnInt(_dbPtr(stmt), colIndex);
+
+  @override
+  double getColumnFloat(int stmt, int colIndex) =>
+      _getColumnFloat(_dbPtr(stmt), colIndex);
+
+  @override
+  double getColumnDouble(int stmt, int colIndex) =>
+      _getColumnDouble(_dbPtr(stmt), colIndex);
+
+  @override
+  List<int> getColumnBlob(int stmt, int columnIndex) {
+    final ptr = _getColumnBlob(_dbPtr(stmt), columnIndex);
+    final length = _getColumnBytes(_dbPtr(stmt), columnIndex);
+    return ptr.asTypedList(length);
+  }
+
+  @override
+  int getColumnBytes(int stmt, int columnIndex) =>
+      _getColumnBytes(_dbPtr(stmt), columnIndex);
+
+  @override
+  int getColumnType(int stmt, int colIndex) =>
+      _getColumnType(_dbPtr(stmt), colIndex);
+
+  @override
+  int getColumnCount(int stmt) => _getColumnCount(_dbPtr(stmt));
+
+  @override
+  String getLastDbError(int dbPtr) =>
+      _getLastDbError(_dbPtr(dbPtr)).toDartString();
+
+  @override
+  int getAffectedRows(int dbPtr) => _getAffectedRows(_dbPtr(dbPtr));
+
+  @override
+  int getLastInsertedId(int dbPtr) => _getLastInsertedId(_dbPtr(dbPtr));
+
+  @override
+  void closeReader(int stmt) => _closeReader(_dbPtr(stmt));
+
+  @override
+  void closeDb(int dbPtr) => _closeDb(_dbPtr(dbPtr));
 }

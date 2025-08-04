@@ -1,140 +1,139 @@
-import 'dart:ffi';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
-import 'package:ffi/ffi.dart';
-import '../dbas_sqlite_native_interface.dart';
+import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 
-class DbasSqliteNativeWeb implements DbasSqliteNativeInterface {
+class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   Future<void> initialize() async =>
-      throw UnsupportedError('Not supported in native web.');
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Future<void> prepareLibIfNeeded() => throw UnsupportedError('Not supported in native app.');
+  Future<void> prepareLibIfNeeded() async =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Future<String> getLibraryPath() => throw UnsupportedError('Not supported in native app.');
+  Future<String> getLibraryPath() async =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path) =>
-      throw UnsupportedError('Not supported in native web.');
+  int openDb(String path) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  bool isOpened(int dbPtr) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) =>
-      throw UnsupportedError('Not supported in native web.');
+  int executeSql(int dbPtr, String sql) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) =>
-      throw UnsupportedError('Not supported in native web.');
+  int prepareQuery(int dbPtr, String sql) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNull(int stmt, int index) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindInt(int stmt, int index, int value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindFloat(int stmt, int index, double value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindDouble(int stmt, int index, double value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindText(int stmt, int index, String value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindBlob(int stmt, int index, List<int> value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNameNull(int stmt, String name) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNameInt(int stmt, String name, int value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNameFloat(int stmt, String name, double value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNameDouble(int stmt, String name, double value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNameText(int stmt, String name, String value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value) =>
-      throw UnsupportedError('Not supported in native web.');
+  void bindNameBlob(int stmt, String name, List<int> value) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int readRow(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  int readRow(int stmt) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  bool isNull(int stmt, int colIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Pointer<Utf8> getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  String getColumnText(int stmt, int colIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  int getColumnInt(int stmt, int colIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  double getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  double getColumnFloat(int stmt, int colIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  double getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  double getColumnDouble(int stmt, int colIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  List<int> getColumnBlob(int stmt, int columnIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  int getColumnBytes(int stmt, int columnIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
-      throw UnsupportedError('Not supported in native web.');
+  int getColumnType(int stmt, int colIndex) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  int getColumnCount(int stmt) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Pointer<Utf8> getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  String getLastDbError(int dbPtr) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  int getAffectedRows(int dbPtr) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  int getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  int getLastInsertedId(int dbPtr) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  void closeReader(Pointer<DbasSqliteDbStruct> dbPtr) =>
-      throw UnsupportedError('Not supported in native web.');
+  void closeReader(int stmt) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
-  Future<void> closeDb(Pointer<DbasSqliteDbStruct> dbPtr) async =>
-      throw UnsupportedError('Not supported in native web.');
+  Future<void> closeDb(int dbPtr) async =>
+      throw UnsupportedError('Not supported in web.');
 }

@@ -2,7 +2,8 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
-import '../dbas_sqlite_db.dart';
+import '../dbas_sqlite_db.dart'
+  if (dart.library.interop) '../stub/dbas_sqlite_db_stub.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   late DynamicLibrary _lib;
@@ -176,95 +177,246 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   }
 
   @override
-  Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path) => _openDb(path);
+  int openDb(String path) {
+    Pointer<Utf8> pathPtr = nullptr;
+    try {
+      pathPtr = path.toNativeUtf8();
+      final ptr = _openDb(pathPtr);
+      return ptr.address;
+    } finally {
+      if (pathPtr != nullptr) {
+        calloc.free(pathPtr);
+      }
+    }
+  }
+
+  Pointer<DbasSqliteDbStruct> _dbPtr(int address) {
+    if (address <= 0) {
+      throw ArgumentError('Invalid database pointer input: $address');
+    }
+
+    final result = Pointer<DbasSqliteDbStruct>.fromAddress(address);
+
+    if (result == nullptr || result.address == 0) {
+      throw ArgumentError('Invalid database pointer: $address');
+    }
+
+    if (_isOpened(result) != 1) {
+      throw ArgumentError('Database $address is not opened');
+    }
+
+    return result;
+  }
 
   @override
-  bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr) => _isOpened(dbPtr) == 1;
+  bool isOpened(int dbPtr) => _isOpened(_dbPtr(dbPtr)) == 1;
 
   @override
-  int executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) => _executeSql(dbPtr, sql);
+  int executeSql(int dbPtr, String sql) {
+    Pointer<Utf8> sqlPtr = nullptr;
+    try {
+      sqlPtr = sql.toNativeUtf8();
+      final result = _executeSql(_dbPtr(dbPtr), sqlPtr);
+      return result;
+    } finally {
+      if (sqlPtr != nullptr) {
+        calloc.free(sqlPtr);
+      }
+    }
+  }
 
   @override
-  int prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) => _prepareQuery(dbPtr, sql);
+  int prepareQuery(int dbPtr, String sql) {
+    Pointer<Utf8> sqlPtr = nullptr;
+    try {
+      sqlPtr = sql.toNativeUtf8();
+      final result = _prepareQuery(_dbPtr(dbPtr), sqlPtr);
+      return result;
+    } finally {
+      if (sqlPtr != nullptr) {
+        calloc.free(sqlPtr);
+      }
+    }
+  }
 
   @override
-  void bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index) => _bindNull(dbPtr, index);
+  void bindNull(int stmt, int index) =>
+    _bindNull(_dbPtr(stmt), index);
 
   @override
-  void bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value) => _bindInt(dbPtr, index, value);
+  void bindInt(int stmt, int index, int value) =>
+    _bindInt(_dbPtr(stmt), index, value);
 
   @override
-  void bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) => _bindFloat(dbPtr, index, value);
+  void bindFloat(int stmt, int index, double value) =>
+    _bindFloat(_dbPtr(stmt), index, value);
 
   @override
-  void bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) => _bindDouble(dbPtr, index, value);
+  void bindDouble(int stmt, int index, double value) =>
+    _bindDouble(_dbPtr(stmt), index, value);
 
   @override
-  void bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value) => _bindText(dbPtr, index, value);
+  void bindText(int stmt, int index, String value) {
+    Pointer<Utf8> valuePtr = nullptr;
+    try {
+      valuePtr = value.toNativeUtf8();
+      _bindText(_dbPtr(stmt), index, valuePtr);
+    } finally {
+      if (valuePtr != nullptr) {
+        calloc.free(valuePtr);
+      }
+    }
+  }
 
   @override
-  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value) => _bindBlob(dbPtr, index, value);
+  void bindBlob(int stmt, int index, List<int> value) {
+    Pointer<Uint8> ptr = nullptr;
+    try {
+      ptr = calloc<Uint8>(value.length);
+      for (var i = 0; i < value.length; i++) {
+        ptr[i] = value[i];
+      }
+      _bindBlob(_dbPtr(stmt), index, ptr);
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
 
   @override
-  void bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name) => _bindNameNull(dbPtr, name);
+  void bindNameNull(int stmt, String name) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      _bindNameNull(_dbPtr(stmt), namePtr);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  void bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value) => _bindNameInt(dbPtr, name, value);
+  void bindNameInt(int stmt, String name, int value) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      _bindNameInt(_dbPtr(stmt), namePtr, value);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  void bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) => _bindNameFloat(dbPtr, name, value);
+  void bindNameFloat(int stmt, String name, double value) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      _bindNameFloat(_dbPtr(stmt), namePtr, value);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  void bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) => _bindNameDouble(dbPtr, name, value);
+  void bindNameDouble(int stmt, String name, double value) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      _bindNameDouble(_dbPtr(stmt), namePtr, value);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  void bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value) => _bindNameText(dbPtr, name, value);
+  void bindNameText(int stmt, String name, String value) {
+    Pointer<Utf8> namePtr = nullptr;
+    Pointer<Utf8> valuePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      valuePtr = value.toNativeUtf8();
+      _bindNameText(_dbPtr(stmt), namePtr, valuePtr);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+      if (valuePtr != nullptr) calloc.free(valuePtr);
+    }
+  }
 
   @override
-  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value) => _bindNameBlob(dbPtr, name, value);
+  void bindNameBlob(int stmt, String name, List<int> value) {
+    Pointer<Utf8> namePtr = nullptr;
+    Pointer<Uint8> ptr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      ptr = calloc<Uint8>(value.length);
+      for (var i = 0; i < value.length; i++) {
+        ptr[i] = value[i];
+      }
+      _bindNameBlob(_dbPtr(stmt), namePtr, ptr);
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  int readRow(Pointer<DbasSqliteDbStruct> dbPtr) => _readRow(dbPtr);
+  int readRow(int stmt) => _readRow(_dbPtr(stmt));
 
   @override
-  int isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) => _isNull(dbPtr, colIndex);
+  bool isNull(int stmt, int colIndex) => _isNull(_dbPtr(stmt), colIndex) == 1;
 
   @override
-  Pointer<Utf8> getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) => _getColumnText(dbPtr, colIndex);
+  String getColumnText(int stmt, int colIndex) =>
+    _getColumnText(_dbPtr(stmt), colIndex).toDartString();
 
   @override
-  int getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) => _getColumnInt(dbPtr, colIndex);
+  int getColumnInt(int stmt, int colIndex) =>
+    _getColumnInt(_dbPtr(stmt), colIndex);
 
   @override
-  double getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) => _getColumnFloat(dbPtr, colIndex);
+  double getColumnFloat(int stmt, int colIndex) =>
+    _getColumnFloat(_dbPtr(stmt), colIndex);
 
   @override
-  double getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) => _getColumnDouble(dbPtr, colIndex);
+  double getColumnDouble(int stmt, int colIndex) =>
+    _getColumnDouble(_dbPtr(stmt), colIndex);
 
   @override
-  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) => _getColumnBlob(dbPtr, columnIndex);
+  List<int> getColumnBlob(int stmt, int columnIndex) {
+    final ptr = _getColumnBlob(_dbPtr(stmt), columnIndex);
+    final length = _getColumnBytes(_dbPtr(stmt), columnIndex);
+    return ptr.asTypedList(length);
+  }
 
   @override
-  int getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) => _getColumnBytes(dbPtr, columnIndex);
+  int getColumnBytes(int stmt, int columnIndex) =>
+    _getColumnBytes(_dbPtr(stmt), columnIndex);
 
   @override
-  int getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) => _getColumnType(dbPtr, colIndex);
+  int getColumnType(int stmt, int colIndex) =>
+    _getColumnType(_dbPtr(stmt), colIndex);
 
   @override
-  int getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr) => _getColumnCount(dbPtr);
+  int getColumnCount(int stmt) => _getColumnCount(_dbPtr(stmt));
 
   @override
-  Pointer<Utf8> getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr) => _getLastDbError(dbPtr);
+  String getLastDbError(int dbPtr) {
+    final errorPtr = _getLastDbError(_dbPtr(dbPtr));
+
+    if (errorPtr == nullptr || errorPtr.address == 0) {
+      return 'No SQLite error found.';
+    }
+
+    return errorPtr.toDartString();
+  }
 
   @override
-  int getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr) => _getAffectedRows(dbPtr);
+  int getAffectedRows(int dbPtr) => _getAffectedRows(_dbPtr(dbPtr));
 
   @override
-  int getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr) => _getLastInsertedId(dbPtr);
+  int getLastInsertedId(int dbPtr) => _getLastInsertedId(_dbPtr(dbPtr));
 
   @override
-  void closeReader(Pointer<DbasSqliteDbStruct> dbPtr) => _closeReader(dbPtr);
+  void closeReader(int stmt) => _closeReader(_dbPtr(stmt));
 
   @override
-  void closeDb(Pointer<DbasSqliteDbStruct> dbPtr) => _closeDb(dbPtr);
+  void closeDb(int dbPtr) => _closeDb(_dbPtr(dbPtr));
 }

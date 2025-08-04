@@ -2,7 +2,7 @@ import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 
 class DbasSqliteDb {
-  final Pointer<DbasSqliteDbStruct> ptr;
+  final int ptr;
   DbasSqliteDb(this.ptr);
 }
 

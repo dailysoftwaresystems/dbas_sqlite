@@ -1,140 +1,139 @@
-import 'dart:ffi';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
-import 'package:ffi/ffi.dart';
-import '../dbas_sqlite_native_interface.dart';
+import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 
-class DbasSqliteNativeApp implements DbasSqliteNativeInterface {
+class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @override
   Future<void> initialize() async =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Future<void> prepareLibIfNeeded() => throw UnsupportedError('Not supported in native app.');
-
-  @override
-  Future<String> getLibraryPath() => throw UnsupportedError('Not supported in native app.');
-
-  @override
-  Pointer<DbasSqliteDbStruct> openDb(Pointer<Utf8> path) =>
+  Future<void> prepareLibIfNeeded() async =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  bool isOpened(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  Future<String> getLibraryPath() async =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int executeSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) =>
+  int openDb(String path) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int prepareQuery(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql) =>
+  bool isOpened(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNull(Pointer<DbasSqliteDbStruct> dbPtr, int index) =>
+  int executeSql(int dbPtr, String sql) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindInt(Pointer<DbasSqliteDbStruct> dbPtr, int index, int value) =>
+  int prepareQuery(int dbPtr, String sql) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindFloat(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) =>
+  void bindNull(int stmt, int index) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindDouble(Pointer<DbasSqliteDbStruct> dbPtr, int index, double value) =>
+  void bindInt(int stmt, int index, int value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindText(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Utf8> value) =>
+  void bindFloat(int stmt, int index, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindBlob(Pointer<DbasSqliteDbStruct> dbPtr, int index, Pointer<Uint8> value) =>
+  void bindDouble(int stmt, int index, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameNull(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name) =>
+  void bindText(int stmt, int index, String value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameInt(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, int value) =>
+  void bindBlob(int stmt, int index, List<int> value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameFloat(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) =>
+  void bindNameNull(int stmt, String name) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameDouble(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, double value) =>
+  void bindNameInt(int stmt, String name, int value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameText(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Utf8> value) =>
+  void bindNameFloat(int stmt, String name, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameBlob(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> name, Pointer<Uint8> value) =>
+  void bindNameDouble(int stmt, String name, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int readRow(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  void bindNameText(int stmt, String name, String value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int isNull(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
+  void bindNameBlob(int stmt, String name, List<int> value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Pointer<Utf8> getColumnText(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
+  int readRow(int stmt) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnInt(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
+  bool isNull(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  double getColumnFloat(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
+  String getColumnText(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  double getColumnDouble(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
+  int getColumnInt(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Pointer<Uint8> getColumnBlob(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) =>
+  double getColumnFloat(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex) =>
+  double getColumnDouble(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex) =>
+  List<int> getColumnBlob(int stmt, int columnIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnCount(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  int getColumnBytes(int stmt, int columnIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Pointer<Utf8> getLastDbError(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  int getColumnType(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  int getColumnCount(int stmt) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  String getLastDbError(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void closeReader(Pointer<DbasSqliteDbStruct> dbPtr) =>
+  int getAffectedRows(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Future<void> closeDb(Pointer<DbasSqliteDbStruct> dbPtr) async =>
+  int getLastInsertedId(int dbPtr) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  void closeReader(int stmt) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<void> closeDb(int dbPtr) async =>
       throw UnsupportedError('Not supported in native app.');
 }
