@@ -48,6 +48,10 @@ DownloadRecursive $BASE_URL $OUT_DIR
 Write-Host "All binaries downloaded in: $OUT_DIR, copying binaries to respective platform directories..."
 
 Write-Host "Copying android binaries..."
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a" | Out-Null
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a" | Out-Null
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64" | Out-Null
+
 Copy-Item "$OUT_DIR/android/a64/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a" -Recurse -Force
 Copy-Item "$OUT_DIR/android/armeabi/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a" -Recurse -Force
 Copy-Item "$OUT_DIR/android/x86_64/*" -Destination "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64" -Recurse -Force
