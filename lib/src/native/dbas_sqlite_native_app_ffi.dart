@@ -1,7 +1,6 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
-import 'package:flutter/foundation.dart';
 import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
 
