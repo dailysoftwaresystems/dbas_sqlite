@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
 
@@ -41,10 +42,11 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
 
   @override
   Future<void> initialize() async {
-    if (Platform.isIOS) {
+    if (Platform.isIOS || Platform.isMacOS) {
       _lib = DynamicLibrary.process();
     } else {
-      _lib = DynamicLibrary.open(getLibraryPath());
+      await prepareLibIfNeeded();
+      _lib = DynamicLibrary.open(await getLibraryPath());
     }
 
     _openDb = _lib.lookupFunction<

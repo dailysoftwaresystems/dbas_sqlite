@@ -1,5 +1,6 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_app_selector.dart';
@@ -8,11 +9,11 @@ if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/native/dbas_sqlite
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../dbas_sqlite_db.dart';
 
 abstract class DbasSqliteNativeInterface {
-  static final basePath = path.join(Directory.current.path, 'native_libs', 'sqlite');
   static final DbasSqliteNativeInterface instance = _getPlatform();
 
   static DbasSqliteNativeInterface _getPlatform() {
@@ -27,19 +28,53 @@ abstract class DbasSqliteNativeInterface {
 
   Future<void> initialize();
 
-  String getLibraryPath() {
+  Future<void> prepareLibIfNeeded() async {
+    if (!Platform.isLinux && !Platform.isWindows && !kIsWeb) {
+      return;
+    }
+
+    late String libAsset;
+    late String libAssetName;
+    if (Platform.isWindows) {
+      final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
+      libAssetName = 'dbas_sqlite.dll';
+      libAsset = path.join('packages', 'dbas_sqlite_flutter', 'windows', 'libs', arch, libAssetName);
+    } else if (Platform.isLinux) {
+      libAssetName = 'dbas_sqlite.so';
+      libAsset = path.join('packages', 'dbas_sqlite_flutter', 'libs', libAssetName);
+    } else if (kIsWeb) {
+      libAssetName = 'dbas_sqlite.js';
+      libAsset = path.join('packages', 'dbas_sqlite_flutter', 'libs', libAssetName);
+    }
+
+    final dir = await getApplicationSupportDirectory();
+    final libPath = '${dir.path}/libs/$libAssetName';
+
+    final dllFile = File(libPath);
+    if (await dllFile.exists()) {
+      await dllFile.delete();
+    }
+
+    final bytes = await rootBundle.load(libAsset);
+    await dllFile.writeAsBytes(bytes.buffer.asUint8List());
+  }
+
+  Future<String> getLibraryPath() async {
+    if (Platform.isIOS || Platform.isMacOS) {
+      return '';
+    }
+
     if (Platform.isAndroid) {
       return 'dbas_sqlite.so';
     } else if (Platform.isWindows) {
-      final arch = sizeOf<IntPtr>() == 8 ? 'x64' : 'x86';
-      return path.join(basePath, 'windows', arch, 'dbas_sqlite.dll');
-    } else if (Platform.isMacOS) {
-      final arch = Platform.version.toLowerCase().contains('arm64') ? 'a64' : 'x86';
-      return path.join(basePath, 'macos', arch, 'dbas_sqlite.dylib');
+      final dir = await getApplicationSupportDirectory();
+      return path.join(dir.path, 'libs', 'dbas_sqlite.dll');
     } else if (Platform.isLinux) {
-      return path.join(basePath, 'linux', 'dbas_sqlite.so');
+      final dir = await getApplicationSupportDirectory();
+      return path.join(dir.path, 'libs', 'dbas_sqlite.so');
     } else if (kIsWeb) {
-      return path.join(basePath, 'web', 'dbas_sqlite.js');
+      final dir = await getApplicationSupportDirectory();
+      return path.join(dir.path, 'libs', 'dbas_sqlite.js');
     } else {
       throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
     }
