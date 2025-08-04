@@ -1,1 +1,1 @@
-void main() => print('DBAS SQLite started');
+//Empty main for packages

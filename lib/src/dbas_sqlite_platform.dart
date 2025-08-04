@@ -31,7 +31,7 @@ final class DbasSqlitePlatform {
     Pointer<Utf8>? lastError = isOpened ? nullptr : _delegate.getLastDbError(dbPtr);
 
     if (dbPtr == nullptr || !isOpened) {
-      String lastErrorMessage = (lastError != '' && lastError != nullptr)
+      String lastErrorMessage = (lastError != nullptr)
           ? lastError.toDartString()
           : 'Unknown error';
       malloc.free(dbPtr);

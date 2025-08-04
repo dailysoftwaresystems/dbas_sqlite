@@ -1,8 +1,7 @@
 import 'dart:ffi';
 import 'dart:io';
 
-import 'package:dbas_sqlite_flutter/src/native/stub/dbas_sqlite_native_app_stub.dart'
-if (dart.library.ffi) 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_app.dart';
+import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_app_selector.dart';
 import 'package:dbas_sqlite_flutter/src/native/stub/dbas_sqlite_native_web_stub.dart'
 if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_web.dart';
 
