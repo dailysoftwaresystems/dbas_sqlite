@@ -10,7 +10,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-    DLL_EXPORT typedef struct SQLiteDb {
+    typedef struct SQLiteDb {
         sqlite3* db;
         sqlite3_stmt* stmt;
         char* lastError;
