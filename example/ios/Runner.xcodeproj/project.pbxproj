@@ -481,6 +481,13 @@
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
+					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -667,6 +674,13 @@
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
+					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -689,6 +703,13 @@
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
+					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
