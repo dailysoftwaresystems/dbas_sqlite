@@ -1,17 +1,20 @@
 import 'dart:js_interop';
+import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+
 import 'dbas_sqlite_native_interface.dart';
 
+@JS('waitForDbasSqlite')
+external JSPromise<JSAny?> _waitForDbasSqlite();
+
 @JS('initDbasSqlite')
-external Object _initDbasSqlite();
+external JSPromise<JSAny?> _initDbasSqlite();
 
 @JS('DbasSqlite')
 external DbasSqliteNativeWebJS get _dbasSqliteNativeWebJS;
 
 @JS()
 @staticInterop
-class DbasSqliteNativeWebJS {
-  external factory DbasSqliteNativeWebJS();
-}
+class DbasSqliteNativeWebJS {}
 
 extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external int openDb(String path);
@@ -24,14 +27,14 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external void bindFloat(int stmt, int index, double value);
   external void bindDouble(int stmt, int index, double value);
   external void bindText(int stmt, int index, String value);
-  external void bindBlob(int stmt, int index, List<int> value);
+  external void bindBlob(int stmt, int index, JSArray<JSNumber> value);
 
   external void bindNameNull(int stmt, String name);
   external void bindNameInt(int stmt, String name, int value);
   external void bindNameFloat(int stmt, String name, double value);
   external void bindNameDouble(int stmt, String name, double value);
   external void bindNameText(int stmt, String name, String value);
-  external void bindNameBlob(int stmt, String name, List<int> value);
+  external void bindNameBlob(int stmt, String name, JSArray<JSNumber> value);
 
   external int readRow(int stmt);
   external int isNull(int stmt, int colIndex);
@@ -40,7 +43,7 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external int getColumnInt(int stmt, int colIndex);
   external double getColumnFloat(int stmt, int colIndex);
   external double getColumnDouble(int stmt, int colIndex);
-  external List<int> getColumnBlob(int stmt, int columnIndex);
+  external JSArray<JSNumber> getColumnBlob(int stmt, int columnIndex);
   external int getColumnBytes(int stmt, int columnIndex);
   external int getColumnType(int stmt, int colIndex);
   external int getColumnCount(int stmt);
@@ -55,11 +58,19 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
 
 class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   late final DbasSqliteNativeWebJS _js;
+  static JSObject? _module;
+
+  static void registerWith(Registrar registrar) {
+    // This method is called by the Flutter framework to register the plugin.
+  }
 
   @override
   Future<void> initialize() async {
+    if (_module != null) {
+      return;
+    }
+    _module = await _waitForDbasSqlite().toDart as JSObject;
     final result = _initDbasSqlite();
-    if (result is Future) await result;
     _js = _dbasSqliteNativeWebJS;
   }
 
@@ -90,9 +101,15 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   void bindText(int stmt, int index, String value) => _js.bindText(stmt, index, value);
 
+  JSArray<JSNumber> _jsArrayFromIntList(List<int> value) =>
+      (value.map((e) => e.toJS).toList() as List<JSNumber>).toJS;
+
+  List<int> _intListFromJSArray(JSArray<JSNumber> jsArray) =>
+      jsArray.toDart.cast<num>().map((e) => e.toInt()).toList();
+
   @override
   void bindBlob(int stmt, int index, List<int> value) {
-    _js.bindBlob(stmt, index, value);
+    _js.bindBlob(stmt, index, _jsArrayFromIntList(value));
   }
 
   @override
@@ -112,7 +129,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   void bindNameBlob(int stmt, String name, List<int> value) {
-    _js.bindNameBlob(stmt, name, value);
+    _js.bindNameBlob(stmt, name, _jsArrayFromIntList(value));
   }
 
   @override
@@ -135,7 +152,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   List<int> getColumnBlob(int stmt, int columnIndex) {
-    return _js.getColumnBlob(stmt, columnIndex);
+    return _intListFromJSArray(_js.getColumnBlob(stmt, columnIndex));
   }
 
   @override

@@ -52,7 +52,7 @@ flutter:
       windows:
         ffiPlugin: true
       web:
-        pluginClass: DbasSqliteWeb
+        pluginClass: DbasSqliteNativeWeb
         fileName: src/native/dbas_sqlite_native_web.dart
   assets:
     - windows/libs/x64/dbas_sqlite.dll
