@@ -32,7 +32,7 @@ abstract class DbasSqliteNativeInterface {
     late String libAsset;
     late String libAssetName;
     if (Platform.isWindows) {
-      final arch = Platform.version.endsWith('x64') ? 'x64' : 'x86';
+      final arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
       libAssetName = 'dbas_sqlite.dll';
       libAsset = path.join('windows', 'libs', arch, libAssetName);
     } else if (Platform.isLinux) {
@@ -65,20 +65,21 @@ abstract class DbasSqliteNativeInterface {
       return '';
     }
 
+    late String libPath;
     if (Platform.isAndroid) {
       return 'dbas_sqlite.so';
     } else if (Platform.isWindows) {
-      final dir = await getApplicationSupportDirectory();
-      return path.join(dir.path, 'libs', 'dbas_sqlite.dll');
+      libPath = path.join('libs', 'dbas_sqlite.dll');
     } else if (Platform.isLinux) {
-      final dir = await getApplicationSupportDirectory();
-      return path.join(dir.path, 'libs', 'dbas_sqlite.so');
+      libPath = path.join('libs', 'dbas_sqlite.so');
     } else if (kIsWeb) {
-      final dir = await getApplicationSupportDirectory();
-      return path.join(dir.path, 'libs', 'dbas_sqlite.js');
+      libPath = path.join('libs', 'dbas_sqlite.js');
     } else {
       throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
     }
+
+    final dir = await getApplicationSupportDirectory();
+    return path.join(dir.path, libPath).replaceAll('\\', '/');
   }
 
   int openDb(String path);

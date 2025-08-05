@@ -27,8 +27,8 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<String> getDatabasePath(String dbName) async {
-    final directory = await getApplicationDocumentsDirectory();
-    final dirPath = '${directory.path}/dbas/$dbName';
+    final directory = await getApplicationSupportDirectory();
+    final dirPath = '${directory.path}/dbas/$dbName'.replaceAll('\\', '/');
     await Directory(path.dirname(dirPath)).create(recursive: true);
     return dirPath;
   }
