@@ -19,8 +19,6 @@ dependencies:
   flutter:
     sdk: flutter
   decimal: ^3.2.4
-  path: ^1.9.1
-  path_provider: ^2.1.5
 
   dbas_sqlite_flutter:
     # When depending on this package from a real application you should use:
