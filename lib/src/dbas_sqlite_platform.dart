@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
-import 'dbas_sqlite_db.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
+  if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:decimal/decimal.dart';
 
 final class DbasSqlitePlatform {

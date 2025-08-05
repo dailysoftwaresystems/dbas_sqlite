@@ -2,8 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
-import '../dbas_sqlite_db.dart'
-  if (dart.library.interop) '../stub/dbas_sqlite_db_stub.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   late DynamicLibrary _lib;

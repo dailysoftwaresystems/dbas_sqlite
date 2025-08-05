@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
+  if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
 import 'package:decimal/decimal.dart';
 
