@@ -81,3 +81,75 @@ if(e.preInit)for("function"==typeof e.preInit&&(e.preInit=[e.preInit]);0<e.preIn
 
 // Export for global access (better for Dart JS interop)
 globalThis.DbasSqlite = DbasSqlite;
+
+// Initialize persistent file system support
+globalThis.initPersistentFS = async function() {
+  const module = await DbasSqlite();
+  
+  // Create a persistent directory for databases
+  try {
+    module.FS.mkdir('/data');
+    module.FS.mkdir('/data/databases');
+  } catch (e) {
+    // Directory might already exist
+    console.log('Directory creation info:', e.message);
+  }
+  
+  // Try to mount IndexedDB file system for persistence
+  if (typeof window !== 'undefined' && 'indexedDB' in window) {
+    try {
+      // Check if IDBFS is available
+      if (module.FS.filesystems && module.FS.filesystems.IDBFS) {
+        module.FS.mount(module.FS.filesystems.IDBFS, {}, '/data');
+        console.log('Mounted IDBFS for persistence');
+        
+        // Synchronize from IndexedDB to memory on startup
+        return new Promise((resolve, reject) => {
+          module.FS.syncfs(true, (err) => {
+            if (err) {
+              console.warn('Failed to sync from IndexedDB:', err);
+            } else {
+              console.log('Successfully synced from IndexedDB');
+            }
+            resolve(module);
+          });
+        });
+      } else {
+        console.warn('IDBFS not available, using MEMFS only');
+      }
+    } catch (e) {
+      console.warn('IndexedDB persistence setup failed:', e);
+    }
+  } else {
+    console.warn('IndexedDB not available');
+  }
+  
+  return module;
+};
+
+// Function to persist data to IndexedDB
+globalThis.persistDB = function() {
+  const module = globalThis.dbasSqliteModule;
+  if (module && module.FS && module.FS.syncfs) {
+    return new Promise((resolve, reject) => {
+      try {
+        // Synchronize from memory to IndexedDB for persistence
+        module.FS.syncfs(false, (err) => {
+          if (err) {
+            console.warn('Failed to persist to IndexedDB:', err);
+            reject(err);
+          } else {
+            console.log('Database successfully persisted to IndexedDB');
+            resolve();
+          }
+        });
+      } catch (e) {
+        console.warn('Error during persistence sync:', e);
+        reject(e);
+      }
+    });
+  } else {
+    console.warn('Persistence not available - module or FS not ready');
+    return Promise.resolve();
+  }
+};

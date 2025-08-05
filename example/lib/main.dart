@@ -26,13 +26,6 @@ class _MyAppState extends State<MyApp> {
     initPlatformState();
   }
 
-  Future<String> getDatabasePath(String dbName) async {
-    final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/dbas/$dbName'.replaceAll('\\', '/');
-    await Directory(path.dirname(dirPath)).create(recursive: true);
-    return dirPath;
-  }
-
   // Platform messages are asynchronous, so we initialize in an async method.
   Future<void> initPlatformState() async {
     bool isOpened = false;
@@ -40,7 +33,7 @@ class _MyAppState extends State<MyApp> {
     // We also handle the message potentially returning null.
     try {
       final DbasSqlite plugin = await DbasSqlite.getInstance();
-      final dbPath = await getDatabasePath('dbas.db');
+      final dbPath = await plugin.getAppDatabasePath('dbas.db');
       print('Opening database at: $dbPath');
       await plugin.openDb(dbPath);
       isOpened = plugin.isOpened();

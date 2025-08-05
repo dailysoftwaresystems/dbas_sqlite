@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -6,6 +7,9 @@ import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
   if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
 import 'package:decimal/decimal.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+import 'package:flutter/foundation.dart';
 
 class DbasSqlite {
   static DbasSqlite? _instance;
@@ -17,6 +21,17 @@ class DbasSqlite {
   static Future<DbasSqlite> getInstance() async {
     _instance ??= DbasSqlite(await DbasSqlitePlatform.getInstance());
     return _instance!;
+  }
+
+  Future<String> getAppDatabasePath(String dbName) async {
+    if (kIsWeb) {
+      return '/data/databases/$dbName';
+    }
+
+    final directory = await getApplicationSupportDirectory();
+    final dirPath = '${directory.path}/databases/$dbName'.replaceAll('\\', '/');
+    await Directory(path.dirname(dirPath)).create(recursive: true);
+    return dirPath;
   }
 
   Future<void> openDb(String fileName) async {
