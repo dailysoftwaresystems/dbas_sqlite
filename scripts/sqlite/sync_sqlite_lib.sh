@@ -49,7 +49,6 @@ mkdir -p "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64"
 mkdir -p "$SCRIPT_DIR/../../windows/libs"
 mkdir -p "$SCRIPT_DIR/../../linux/libs"
 mkdir -p "$SCRIPT_DIR/../../web/libs"
-mkdir -p "$SCRIPT_DIR/../../example/web/libs"
 
 cp -r "$OUT_DIR/android/a64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a"
 cp -r "$OUT_DIR/android/armeabi/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a"
@@ -57,7 +56,6 @@ cp -r "$OUT_DIR/android/x86_64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/x8
 cp -r "$OUT_DIR/windows/*"* "$SCRIPT_DIR/../../windows/libs"
 cp -r "$OUT_DIR/linux/*"* "$SCRIPT_DIR/../../linux/libs"
 cp -r "$OUT_DIR/web/*"* "$SCRIPT_DIR/../../web/libs"
-cp -r "$OUT_DIR/web/*"* "$SCRIPT_DIR/../../example/web/libs"
 
 echo "Copying ios binaries..."
 mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"

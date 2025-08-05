@@ -1,5 +1,6 @@
 import 'dart:js_interop';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'package:path/path.dart';
 
 import 'dbas_sqlite_native_interface.dart';
 
@@ -69,9 +70,24 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     if (_module != null) {
       return;
     }
-    _module = await _waitForDbasSqlite().toDart as JSObject;
-    final result = _initDbasSqlite();
-    _js = _dbasSqliteNativeWebJS;
+
+    try {
+      await loadDbasSqliteModule();
+      //await _waitForDbasSqlite().toDart;
+      //await _initDbasSqlite().toDart;
+      _js = _dbasSqliteNativeWebJS;
+    } catch (e) {
+      throw Exception('Failed to initialize DbasSqliteNativeWeb: ${e.toString()}');
+    }
+  }
+
+  Future<JSObject> loadDbasSqliteModule() async {
+    final promise = _globalThis.callMethod('import'.toJS, <JSAny>['libs/dbas_sqlite.js'.toJS]);
+    final module = await promise.toDart as JSObject;
+    final dbasSqliteFactory = module.getProperty('default');
+    final dbasSqliteInstance = await (dbasSqliteFactory.callAsFunction([]) as JSPromise).toDart;
+    _module = dbasSqliteInstance as JSObject;
+    return _module;
   }
 
   @override
@@ -102,7 +118,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   void bindText(int stmt, int index, String value) => _js.bindText(stmt, index, value);
 
   JSArray<JSNumber> _jsArrayFromIntList(List<int> value) =>
-      (value.map((e) => e.toJS).toList() as List<JSNumber>).toJS;
+      (value.map((e) => e.toJS).toList()).toJS;
 
   List<int> _intListFromJSArray(JSArray<JSNumber> jsArray) =>
       jsArray.toDart.cast<num>().map((e) => e.toInt()).toList();
