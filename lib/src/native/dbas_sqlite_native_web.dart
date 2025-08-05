@@ -1,17 +1,11 @@
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
-import 'package:path/path.dart';
 
 import 'dbas_sqlite_native_interface.dart';
 
-@JS('waitForDbasSqlite')
-external JSPromise<JSAny?> _waitForDbasSqlite();
-
-@JS('initDbasSqlite')
-external JSPromise<JSAny?> _initDbasSqlite();
-
-@JS('DbasSqlite')
-external DbasSqliteNativeWebJS get _dbasSqliteNativeWebJS;
+@JS('globalThis')
+external JSObject get _globalThis;
 
 @JS()
 @staticInterop
@@ -72,22 +66,28 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     }
 
     try {
-      await loadDbasSqliteModule();
-      //await _waitForDbasSqlite().toDart;
-      //await _initDbasSqlite().toDart;
-      _js = _dbasSqliteNativeWebJS;
+      _module = await loadDbasSqliteModule();
+      _js = _module! as DbasSqliteNativeWebJS;
     } catch (e) {
       throw Exception('Failed to initialize DbasSqliteNativeWeb: ${e.toString()}');
     }
   }
 
   Future<JSObject> loadDbasSqliteModule() async {
-    final promise = _globalThis.callMethod('import'.toJS, <JSAny>['libs/dbas_sqlite.js'.toJS]);
-    final module = await promise.toDart as JSObject;
-    final dbasSqliteFactory = module.getProperty('default');
-    final dbasSqliteInstance = await (dbasSqliteFactory.callAsFunction([]) as JSPromise).toDart;
-    _module = dbasSqliteInstance as JSObject;
-    return _module;
+    try {
+      final dbasSqliteFunction = _globalThis['DbasSqlite'] as JSFunction?;
+      
+      if (dbasSqliteFunction == null) {
+        throw Exception('DbasSqlite function not found on global object. Make sure dbas_sqlite.js is loaded.');
+      }
+
+      final modulePromise = dbasSqliteFunction.callAsFunction(_globalThis) as JSPromise;
+      _module = await modulePromise.toDart as JSObject;
+      
+      return _module!;
+    } catch (e) {
+      throw Exception('Failed to load DbasSqlite module: $e');
+    }
   }
 
   @override
