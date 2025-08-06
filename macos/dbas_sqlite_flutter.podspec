@@ -19,6 +19,10 @@ Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and We
 
   s.pod_target_xcconfig = { 
     'DEFINES_MODULE' => 'YES',
+    'OTHER_LDFLAGS' => '-all_load',
+    'CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES' => 'YES'
+  }
+  s.user_target_xcconfig = {
     'OTHER_LDFLAGS' => '-all_load'
   }
   s.swift_version = '5.0'

@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+if [[ " $@ " =~ " --force-head " ]]; then
+  echo "Forcing HEAD reset and pull"
+  git reset --hard
+  git pull
+fi
+
 dir=$(dirname "$0")
 cd "$dir/../../example"
 
