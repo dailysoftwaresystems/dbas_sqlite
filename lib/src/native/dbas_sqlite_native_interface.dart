@@ -55,7 +55,7 @@ abstract class DbasSqliteNativeInterface {
       libAsset = path.join('windows', 'libs', arch, libAssetName);
     } else if (Platform.isLinux) {
       libAssetName = 'dbas_sqlite.so';
-      libAsset = path.join('libs', libAssetName);
+      libAsset = path.join('linux', 'libs', libAssetName);
     } else if (kIsWeb) {
       libAssetName = 'dbas_sqlite.js';
       libAsset = path.join('dbas_sqlite_flutter', 'libs', libAssetName);
