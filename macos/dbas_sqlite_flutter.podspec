@@ -15,7 +15,7 @@ Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and We
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'FlutterMacOS'
-  s.platform = :osx, '10.11'
+  s.platform = :osx, '11.0'
 
   s.pod_target_xcconfig = { 
     'DEFINES_MODULE' => 'YES',
