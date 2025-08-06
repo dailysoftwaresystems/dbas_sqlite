@@ -1,1 +1,3 @@
-//Empty main for packages
+void main() {
+  //Empty main for packages
+}
