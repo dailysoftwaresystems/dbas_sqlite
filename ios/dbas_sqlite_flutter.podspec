@@ -18,7 +18,7 @@ Pod::Spec.new do |s|
   s.platform = :ios, '12.0'
 
   s.swift_version = '5.0'
-  s.vendored_frameworks = 'dbas_sqlite.xcframework'
+  s.vendored_frameworks = 'ios/dbas_sqlite.xcframework'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'OTHER_LDFLAGS' => '-all_load',
