@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.dailysoftwaresystems.dbas_sqlite_flutter.example">
+    package="com.dailysoftwaresystems.dbas.sqlite.flutter.example">
 
     <application
         android:label="dbas_sqlite_flutter_example"
         android:icon="@mipmap/ic_launcher">
         <activity
-            android:name="com.dailysoftwaresystems.dbas_sqlite_flutter.example.MainActivity"
+            android:name="com.dailysoftwaresystems.dbas.sqlite.flutter.example.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""

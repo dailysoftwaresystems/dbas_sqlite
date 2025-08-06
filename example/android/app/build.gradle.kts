@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.dailysoftwaresystems.dbas_sqlite_flutter.example"
+    namespace = "com.dailysoftwaresystems.dbas.sqlite.flutter.example"
     compileSdk = flutter.compileSdkVersion
     //ndkVersion = flutter.ndkVersion
     ndkVersion = "27.3.13750724"
@@ -34,8 +34,8 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.dailysoftwaresystems.dbas_sqlite_flutter.example"
-        manifestPlaceholders.putAll(mapOf("applicationName" to "com.dailysoftwaresystems.dbas_sqlite_flutter.example"))
+        applicationId = "com.dailysoftwaresystems.dbas.sqlite.flutter.example"
+        manifestPlaceholders.putAll(mapOf("applicationName" to "com.dailysoftwaresystems.dbas.sqlite.flutter.example"))
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

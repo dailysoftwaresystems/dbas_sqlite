@@ -1,4 +1,4 @@
-package com.dailysoftwaresystems.dbas_sqlite_flutter
+package com.dailysoftwaresystems.dbas.sqlite.flutter
 
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
