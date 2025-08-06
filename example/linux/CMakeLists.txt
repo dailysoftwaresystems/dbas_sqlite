@@ -1,5 +1,5 @@
 # Project-level configuration.
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.14...3.27)
 project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
@@ -11,7 +11,7 @@ set(APPLICATION_ID "com.dailysoftwaresystems.dbas_sqlite_flutter")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
-cmake_policy(SET CMP0063 NEW)
+cmake_policy(VERSION 3.14...3.27)
 
 # Load bundled libraries from the lib/ directory relative to the binary.
 set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
