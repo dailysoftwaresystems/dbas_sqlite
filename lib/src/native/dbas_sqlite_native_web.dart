@@ -12,42 +12,73 @@ external JSObject get _globalThis;
 class DbasSqliteNativeWebJS {}
 
 extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
+  // ignore: non_constant_identifier_names
   external int _OpenDb(String path);
+  // ignore: non_constant_identifier_names
   external int _IsOpened(int dbPtr);
+  // ignore: non_constant_identifier_names
   external int _ExecuteSql(int dbPtr, String sql);
+  // ignore: non_constant_identifier_names
   external int _PrepareQuery(int dbPtr, String sql);
 
+  // ignore: non_constant_identifier_names
   external void _BindNull(int stmt, int index);
+  // ignore: non_constant_identifier_names
   external void _BindInt(int stmt, int index, int value);
+  // ignore: non_constant_identifier_names
   external void _BindFloat(int stmt, int index, double value);
+  // ignore: non_constant_identifier_names
   external void _BindDouble(int stmt, int index, double value);
+  // ignore: non_constant_identifier_names
   external void _BindText(int stmt, int index, String value);
+  // ignore: non_constant_identifier_names
   external void _BindBlob(int stmt, int index, JSArray<JSNumber> value);
 
+  // ignore: non_constant_identifier_names
   external void _BindNameNull(int stmt, String name);
+  // ignore: non_constant_identifier_names
   external void _BindNameInt(int stmt, String name, int value);
+  // ignore: non_constant_identifier_names
   external void _BindNameFloat(int stmt, String name, double value);
+  // ignore: non_constant_identifier_names
   external void _BindNameDouble(int stmt, String name, double value);
+  // ignore: non_constant_identifier_names
   external void _BindNameText(int stmt, String name, String value);
+  // ignore: non_constant_identifier_names
   external void _BindNameBlob(int stmt, String name, JSArray<JSNumber> value);
 
+  // ignore: non_constant_identifier_names
   external int _ReadRow(int stmt);
+  // ignore: non_constant_identifier_names
   external int _IsNull(int stmt, int colIndex);
 
+  // ignore: non_constant_identifier_names
   external String _GetColumnText(int stmt, int colIndex);
+  // ignore: non_constant_identifier_names
   external int _GetColumnInt(int stmt, int colIndex);
+  // ignore: non_constant_identifier_names
   external double _GetColumnFloat(int stmt, int colIndex);
+  // ignore: non_constant_identifier_names
   external double _GetColumnDouble(int stmt, int colIndex);
+  // ignore: non_constant_identifier_names
   external JSArray<JSNumber> _GetColumnBlob(int stmt, int columnIndex);
+  // ignore: non_constant_identifier_names
   external int _GetColumnBytes(int stmt, int columnIndex);
+  // ignore: non_constant_identifier_names
   external int _GetColumnType(int stmt, int colIndex);
+  // ignore: non_constant_identifier_names
   external int _GetColumnCount(int stmt);
 
+  // ignore: non_constant_identifier_names
   external String _GetLastDbError(int dbPtr);
+  // ignore: non_constant_identifier_names
   external int _GetAffectedRows(int dbPtr);
+  // ignore: non_constant_identifier_names
   external int _GetLastInsertedId(int dbPtr);
 
+  // ignore: non_constant_identifier_names
   external void _CloseReader(int stmt);
+  // ignore: non_constant_identifier_names
   external void _CloseDb(int dbPtr);
 }
 
