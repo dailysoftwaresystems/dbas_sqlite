@@ -73,8 +73,11 @@ abstract class DbasSqliteNativeInterface {
   }
 
   Future<String> getLibraryPath() async {
-    if (Platform.isIOS || Platform.isMacOS) {
+    if (Platform.isIOS || (Platform.isMacOS && !isTest)) {
       return '';
+    } else if (Platform.isMacOS) {
+      String arch = Platform.version.contains('arm64') || Platform.version.toLowerCase().contains('arm64') ? 'a64' : 'x86';
+      return path.join(Directory.current.path, 'macos', 'libs', arch, 'dbas_sqlite.dylib');
     }
 
     late String libPath;
@@ -83,20 +86,20 @@ abstract class DbasSqliteNativeInterface {
     } else if (Platform.isWindows) {
       if (isTest) {
         String arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
-        libPath = path.join(Directory.current.path, Platform.operatingSystem, 'libs', arch, 'dbas_sqlite.dll');
+        libPath = path.join(Directory.current.path, 'windows', 'libs', arch, 'dbas_sqlite.dll');
       } else {
         // For production Windows builds, the DLL should be bundled with the app
         libPath = 'dbas_sqlite.dll';
       }
     } else if (Platform.isLinux) {
       if (isTest) {
-        libPath = path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.so');
+        libPath = path.join(Directory.current.path, 'linux', 'libs', 'dbas_sqlite.so');
       } else {
         // For production Linux builds, the SO should be bundled with the app
         libPath = 'dbas_sqlite.so';
       }
     } else if (kIsWeb) {
-      libPath = isTest ? path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.js') : path.join('libs', 'dbas_sqlite.js');
+      libPath = isTest ? path.join(Directory.current.path, 'web', 'libs', 'dbas_sqlite.js') : path.join('libs', 'dbas_sqlite.js');
       if (!isTest) {
         libPath = path.join((await getApplicationSupportDirectory()).path, libPath);
       }

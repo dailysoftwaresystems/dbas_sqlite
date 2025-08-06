@@ -43,7 +43,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
 
   @override
   Future<void> initialize() async {
-    if (Platform.isIOS || Platform.isMacOS) {
+    if (!isTest && (Platform.isIOS || Platform.isMacOS)) {
       _lib = DynamicLibrary.process();
     } else {
       await prepareLibIfNeeded();
