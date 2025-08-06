@@ -43,20 +43,14 @@ abstract class DbasSqliteNativeInterface {
   }
 
   Future<void> prepareLibIfNeeded() async {
-    if ((!Platform.isLinux && !Platform.isWindows && !kIsWeb) || isTest) {
+    // Only web needs to load libraries from assets
+    if (!kIsWeb || isTest) {
       return;
     }
 
     late String libAsset;
     late String libAssetName;
-    if (Platform.isWindows) {
-      final arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
-      libAssetName = 'dbas_sqlite.dll';
-      libAsset = path.join('windows', 'libs', arch, libAssetName);
-    } else if (Platform.isLinux) {
-      libAssetName = 'dbas_sqlite.so';
-      libAsset = path.join('linux', 'libs', libAssetName);
-    } else if (kIsWeb) {
+    if (kIsWeb) {
       libAssetName = 'dbas_sqlite.js';
       libAsset = path.join('dbas_sqlite_flutter', 'libs', libAssetName);
     }
@@ -91,18 +85,23 @@ abstract class DbasSqliteNativeInterface {
         String arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
         libPath = path.join(Directory.current.path, Platform.operatingSystem, 'libs', arch, 'dbas_sqlite.dll');
       } else {
-        libPath = path.join('libs', 'dbas_sqlite.dll');
+        // For production Windows builds, the DLL should be bundled with the app
+        libPath = 'dbas_sqlite.dll';
       }
     } else if (Platform.isLinux) {
-      libPath = isTest ? path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.so') : path.join('libs', 'dbas_sqlite.so');
+      if (isTest) {
+        libPath = path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.so');
+      } else {
+        // For production Linux builds, the SO should be bundled with the app
+        libPath = 'dbas_sqlite.so';
+      }
     } else if (kIsWeb) {
       libPath = isTest ? path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.js') : path.join('libs', 'dbas_sqlite.js');
+      if (!isTest) {
+        libPath = path.join((await getApplicationSupportDirectory()).path, libPath);
+      }
     } else {
       throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
-    }
-
-    if (!isTest) {
-      libPath = path.join((await getApplicationSupportDirectory()).path, libPath);
     }
 
     return libPath.replaceAll('\\', '/');

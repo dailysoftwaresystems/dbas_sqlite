@@ -41,7 +41,7 @@ class DbasSqlite {
     }
 
     final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/databases/$dbName'.replaceAll('\\', '/');
+    final dirPath = '${directory.path}/data/$dbName'.replaceAll('\\', '/');
     await Directory(path.dirname(dirPath)).create(recursive: true);
     return dirPath;
   }

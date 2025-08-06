@@ -55,9 +55,6 @@ flutter:
         pluginClass: DbasSqliteNativeWeb
         fileName: src/native/dbas_sqlite_native_web.dart
   assets:
-    - windows/libs/x64/dbas_sqlite.dll
-    - windows/libs/x86/dbas_sqlite.dll
-    - linux/libs/dbas_sqlite.so
     - web/libs/dbas_sqlite.js
   # To add assets to your plugin package, add an assets section, like this:
   # assets:
