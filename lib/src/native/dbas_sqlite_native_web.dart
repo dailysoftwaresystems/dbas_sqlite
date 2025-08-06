@@ -84,19 +84,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
       final modulePromise = initPersistentFS.callAsFunction(_globalThis) as JSPromise;
       _module = await modulePromise.toDart as JSObject;
-      print('SQLite initialized with persistent file system');
-
-      /*if (initPersistentFS == null) {
-        final dbasSqliteFunction = _globalThis.getProperty('DbasSqlite'.toJS) as JSFunction?;
-        
-        if (dbasSqliteFunction == null) {
-          throw Exception('DbasSqlite function not found on global object. Make sure dbas_sqlite.js is loaded.');
-        }
-
-        final modulePromise = dbasSqliteFunction.callAsFunction(_globalThis) as JSPromise;
-        _module = await modulePromise.toDart as JSObject;
-        print('SQLite initialized with memory-only file system');
-      }*/
       
       return _module!;
     } catch (e) {
