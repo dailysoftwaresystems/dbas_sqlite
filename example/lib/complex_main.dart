@@ -43,13 +43,13 @@ class _TestPageState extends State<TestPage> {
         _status = 'Getting database instance...';
       });
 
-      _db = await DbasSqlite.getInstance();
+      _db = await DbasSqlite.getInstance(dbName: 'test_persistence.db');
       
       setState(() {
         _status = 'Getting database path...';
       });
 
-      final dbPath = await _db!.getAppDatabasePath('test_persistence.db');
+      final dbPath = await _db!.getAppDatabasePath();
       
       setState(() {
         _status = 'Opening database at: $dbPath';

@@ -55,6 +55,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   late final DbasSqliteNativeWebJS _js;
   static JSObject? _module;
 
+  DbasSqliteNativeWeb(super.dbName);
+
   static void registerWith(Registrar registrar) {
     // This method is called by the Flutter framework to register the plugin.
   }
@@ -82,7 +84,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         throw Exception('Failed to load DbasSqlite persistence functionality.');
       }
 
-      final modulePromise = initPersistentFS.callAsFunction(_globalThis) as JSPromise;
+      final modulePromise = initPersistentFS.callAsFunction(_globalThis, dbName.toJS) as JSPromise;
       _module = await modulePromise.toDart as JSObject;
       
       return _module!;

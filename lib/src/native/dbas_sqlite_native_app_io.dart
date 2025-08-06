@@ -4,6 +4,8 @@ import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
+  DbasSqliteNativeApp(super.dbName);
+
   @Native<Pointer<DbasSqliteDbStruct> Function(Handle, Pointer<Utf8>)>(symbol: 'OpenDb')
   external Pointer<DbasSqliteDbStruct> _openDb(Pointer<Utf8> path);
 

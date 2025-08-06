@@ -39,6 +39,8 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   late void Function(Pointer<DbasSqliteDbStruct>) _closeReader;
   late void Function(Pointer<DbasSqliteDbStruct>) _closeDb;
 
+  DbasSqliteNativeApp(super.dbName);
+
   @override
   Future<void> initialize() async {
     if (Platform.isIOS || Platform.isMacOS) {
@@ -189,7 +191,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
     }
   }
 
-  Pointer<DbasSqliteDbStruct> _dbPtr(int address) {
+  Pointer<DbasSqliteDbStruct> _dbPtr(int address, { bool checkOpened = true }) {
     if (address <= 0) {
       throw ArgumentError('Invalid database pointer input: $address');
     }
@@ -200,7 +202,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw ArgumentError('Invalid database pointer: $address');
     }
 
-    if (_isOpened(result) != 1) {
+    if (checkOpened && _isOpened(result) != 1) {
       throw ArgumentError('Database $address is not opened');
     }
 
@@ -357,44 +359,44 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   }
 
   @override
-  int readRow(int stmt) => _readRow(_dbPtr(stmt));
+  int readRow(int stmt) => _readRow(_dbPtr(stmt, checkOpened: false));
 
   @override
-  bool isNull(int stmt, int colIndex) => _isNull(_dbPtr(stmt), colIndex) == 1;
+  bool isNull(int stmt, int colIndex) => _isNull(_dbPtr(stmt, checkOpened: false), colIndex) == 1;
 
   @override
   String getColumnText(int stmt, int colIndex) =>
-    _getColumnText(_dbPtr(stmt), colIndex).toDartString();
+    _getColumnText(_dbPtr(stmt, checkOpened: false), colIndex).toDartString();
 
   @override
   int getColumnInt(int stmt, int colIndex) =>
-    _getColumnInt(_dbPtr(stmt), colIndex);
+    _getColumnInt(_dbPtr(stmt, checkOpened: false), colIndex);
 
   @override
   double getColumnFloat(int stmt, int colIndex) =>
-    _getColumnFloat(_dbPtr(stmt), colIndex);
+    _getColumnFloat(_dbPtr(stmt, checkOpened: false), colIndex);
 
   @override
   double getColumnDouble(int stmt, int colIndex) =>
-    _getColumnDouble(_dbPtr(stmt), colIndex);
+    _getColumnDouble(_dbPtr(stmt, checkOpened: false), colIndex);
 
   @override
   List<int> getColumnBlob(int stmt, int columnIndex) {
-    final ptr = _getColumnBlob(_dbPtr(stmt), columnIndex);
-    final length = _getColumnBytes(_dbPtr(stmt), columnIndex);
+    final ptr = _getColumnBlob(_dbPtr(stmt, checkOpened: false), columnIndex);
+    final length = _getColumnBytes(_dbPtr(stmt, checkOpened: false), columnIndex);
     return ptr.asTypedList(length);
   }
 
   @override
   int getColumnBytes(int stmt, int columnIndex) =>
-    _getColumnBytes(_dbPtr(stmt), columnIndex);
+    _getColumnBytes(_dbPtr(stmt, checkOpened: false), columnIndex);
 
   @override
   int getColumnType(int stmt, int colIndex) =>
-    _getColumnType(_dbPtr(stmt), colIndex);
+    _getColumnType(_dbPtr(stmt, checkOpened: false), colIndex);
 
   @override
-  int getColumnCount(int stmt) => _getColumnCount(_dbPtr(stmt));
+  int getColumnCount(int stmt) => _getColumnCount(_dbPtr(stmt, checkOpened: false));
 
   @override
   String getLastDbError(int dbPtr) {
@@ -414,8 +416,8 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   int getLastInsertedId(int dbPtr) => _getLastInsertedId(_dbPtr(dbPtr));
 
   @override
-  void closeReader(int stmt) => _closeReader(_dbPtr(stmt));
+  void closeReader(int stmt) => _closeReader(_dbPtr(stmt, checkOpened: false));
 
   @override
-  void closeDb(int dbPtr) => _closeDb(_dbPtr(dbPtr));
+  void closeDb(int dbPtr) => _closeDb(_dbPtr(dbPtr, checkOpened: false));
 }

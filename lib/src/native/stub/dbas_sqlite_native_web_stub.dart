@@ -1,6 +1,8 @@
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 
 class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
+  DbasSqliteNativeWeb(super.dbName);
+
   @override
   Future<void> initialize() async =>
       throw UnsupportedError('Not supported in web.');

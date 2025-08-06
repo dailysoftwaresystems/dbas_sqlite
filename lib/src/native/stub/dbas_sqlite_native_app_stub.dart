@@ -1,6 +1,8 @@
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
+  DbasSqliteNativeApp(super.dbName);
+
   @override
   Future<void> initialize() async =>
       throw UnsupportedError('Not supported in native app.');

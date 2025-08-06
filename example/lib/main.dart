@@ -29,8 +29,8 @@ class _MyAppState extends State<MyApp> {
     // Platform messages may fail, so we use a try/catch PlatformException.
     // We also handle the message potentially returning null.
     try {
-      final DbasSqlite plugin = await DbasSqlite.getInstance();
-      final dbPath = await plugin.getAppDatabasePath('dbas.db');
+      final DbasSqlite plugin = await DbasSqlite.getInstance(dbName: 'dbas.db');
+      final dbPath = await plugin.getAppDatabasePath();
       print('Opening database at: $dbPath');
       await plugin.openDb(dbPath);
       isOpened = plugin.isOpened();

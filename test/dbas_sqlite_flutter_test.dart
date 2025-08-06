@@ -1,30 +1,19 @@
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:path/path.dart' as path;
 import 'dart:io';
 
 void main() async {
-  String dbPath = path.join(Directory.current.path, 'test', 'db');
-  String db = path.join(Directory.current.path, 'test', 'db', 'test.db');
-
-  final dirDbPath = Directory(dbPath);
-  final fileDb = File(db);
-
-  if (!await dirDbPath.exists()) {
-    print('Creating parent test db path in $dbPath.');
-    await dirDbPath.create(recursive: true);
-  }
-
-  if (await fileDb.exists()) {
-    await fileDb.delete();
-    print('Deleting previously existing test db in $dbPath.');
-  }
-
   test('Test Open, create table, insert, select and close', () async {
-    final dbasSqlite = await DbasSqlite.getInstance();
-    await dbasSqlite.openDb(db);
+    final dbasSqlite = await DbasSqlite.getInstance(dbName: 'test.db');
 
-    expect(await fileDb.exists(), isTrue, reason: 'DB file should exist after opening the database.');
+    File dbFile = File(await dbasSqlite.getAppDatabasePath());
+    if (await dbFile.exists()) {
+      dbFile.delete();
+    }
+
+    await dbasSqlite.openDb(await dbasSqlite.getAppDatabasePath());
+
+    expect(await dbFile.exists(), isTrue, reason: 'DB file should exist after opening the database.');
     expect(dbasSqlite.isOpened(), isTrue, reason: 'Database should be opened after calling openDb.');
 
     await dbasSqlite.executeSql('''

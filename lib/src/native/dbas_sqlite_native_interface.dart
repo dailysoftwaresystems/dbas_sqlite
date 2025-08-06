@@ -10,22 +10,40 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 abstract class DbasSqliteNativeInterface {
-  static final DbasSqliteNativeInterface instance = _getPlatform();
+  static DbasSqliteNativeInterface? _instance;
+  final String _dbName;
 
-  static DbasSqliteNativeInterface _getPlatform() {
+  DbasSqliteNativeInterface(this._dbName);
+
+  static DbasSqliteNativeInterface getInstance({String dbName = 'dbas.db'}) {
+    if (_instance != null) {
+      return _instance!;
+    }
+
+    _instance = _getPlatform(dbName: dbName);
+    return _instance!;
+  }
+
+  static DbasSqliteNativeInterface _getPlatform({String dbName = 'dbas.db'}) {
     if (kIsWeb) {
-      return DbasSqliteNativeWeb();
+      return DbasSqliteNativeWeb(dbName);
     }
     if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
-      return DbasSqliteNativeApp();
+      return DbasSqliteNativeApp(dbName);
     }
     throw UnsupportedError("Platform not supported: ${Platform.operatingSystem}");
   }
 
   Future<void> initialize();
 
+  String get dbName => _dbName;
+
+  bool get isTest {
+    return !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+  }
+
   Future<void> prepareLibIfNeeded() async {
-    if (!Platform.isLinux && !Platform.isWindows && !kIsWeb) {
+    if ((!Platform.isLinux && !Platform.isWindows && !kIsWeb) || isTest) {
       return;
     }
 
@@ -43,7 +61,7 @@ abstract class DbasSqliteNativeInterface {
       libAsset = path.join('dbas_sqlite_flutter', 'libs', libAssetName);
     }
 
-    final dir = await getApplicationSupportDirectory();
+    final dir = isTest ? Directory.current : await getApplicationSupportDirectory();
     final libDir = '${dir.path}/libs';
     if (!await Directory(libDir).exists()) {
       await Directory(libDir).create(recursive: true);
@@ -69,17 +87,25 @@ abstract class DbasSqliteNativeInterface {
     if (Platform.isAndroid) {
       return 'dbas_sqlite.so';
     } else if (Platform.isWindows) {
-      libPath = path.join('libs', 'dbas_sqlite.dll');
+      if (isTest) {
+        String arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
+        libPath = path.join(Directory.current.path, Platform.operatingSystem, 'libs', arch, 'dbas_sqlite.dll');
+      } else {
+        libPath = path.join('libs', 'dbas_sqlite.dll');
+      }
     } else if (Platform.isLinux) {
-      libPath = path.join('libs', 'dbas_sqlite.so');
+      libPath = isTest ? path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.so') : path.join('libs', 'dbas_sqlite.so');
     } else if (kIsWeb) {
-      libPath = path.join('libs', 'dbas_sqlite.js');
+      libPath = isTest ? path.join(Directory.current.path, Platform.operatingSystem, 'libs', 'dbas_sqlite.js') : path.join('libs', 'dbas_sqlite.js');
     } else {
       throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
     }
 
-    final dir = await getApplicationSupportDirectory();
-    return path.join(dir.path, libPath).replaceAll('\\', '/');
+    if (!isTest) {
+      libPath = path.join((await getApplicationSupportDirectory()).path, libPath);
+    }
+
+    return libPath.replaceAll('\\', '/');
   }
 
   int openDb(String path);

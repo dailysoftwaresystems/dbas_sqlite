@@ -16,20 +16,30 @@ class DbasSqlite {
   final DbasSqlitePlatform _platform;
   DbasSqliteDb? _db;
 
-  DbasSqlite(this._platform);
+  DbasSqlite._dbasSqlite(this._platform);
 
-  static Future<DbasSqlite> getInstance() async {
-    _instance ??= DbasSqlite(await DbasSqlitePlatform.getInstance());
+  static Future<DbasSqlite> getInstance({String dbName = 'dbas.db'}) async {
+    _instance ??= DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName));
     return _instance!;
   }
 
-  Future<String> getAppDatabasePath(String dbName) async {
+  Future<String> getAppDatabasePath() async {
+    if (_platform.isTest) {
+      String dbPath = path.join(Directory.current.path, 'test', 'db');
+      Directory dbDir = Directory(dbPath);
+      if (!await dbDir.exists()) {
+        await dbDir.create(recursive: true);
+      }
+
+      return path.join(dbPath, _platform.dbName);
+    }
+
     if (kIsWeb) {
-      return '/data/databases/$dbName';
+      return '/data/${_platform.dbName}';
     }
 
     final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/databases/$dbName'.replaceAll('\\', '/');
+    final dirPath = '${directory.path}/databases/${_platform.dbName}'.replaceAll('\\', '/');
     await Directory(path.dirname(dirPath)).create(recursive: true);
     return dirPath;
   }
