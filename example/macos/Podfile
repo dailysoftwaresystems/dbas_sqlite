@@ -47,4 +47,22 @@ post_install do |installer|
       end
     end
   end
+  
+  # Fix "Run Script" warning by configuring Flutter scripts properly
+  installer.pods_project.targets.each do |target|
+    if target.name == 'Runner'
+      target.build_phases.each do |phase|
+        if phase.is_a?(Xcodeproj::Project::Object::PBXShellScriptBuildPhase) && 
+           phase.name == 'Run Script'
+          # Set the script to run based on dependency analysis
+          phase.always_out_of_date = false
+          # Add output files to make Xcode track dependencies properly
+          phase.output_paths = [
+            "$(DERIVED_FILE_DIR)/flutter_assets_path",
+            "$(BUILT_PRODUCTS_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/App.framework"
+          ]
+        end
+      end
+    end
+  end
 end
