@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
