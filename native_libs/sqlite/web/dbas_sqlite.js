@@ -79,7 +79,7 @@ e.cwrap=(a,b,c,d)=>{var f=!c||c.every(g=>"number"===g||"boolean"===g);return"str
 e.addFunction=(a,b)=>{if(!W){W=new WeakMap;var c=V.length;if(W)for(var d=0;d<0+c;d++){var f=Wb(d);f&&W.set(f,d)}}if(c=W.get(a)||0)return c;c=Xb.length?Xb.pop():V.grow(1);try{V.set(c,a),Vb[c]=V.get(c)}catch(g){if(!(g instanceof TypeError))throw g;b=Uint8Array.of(0,97,115,109,1,0,0,0,1,...Sb([1,96,...Ub(b.slice(1)),...Ub("v"===b[0]?"":b[0])]),2,7,1,1,101,1,102,0,0,7,5,1,1,102,0,0);b=new WebAssembly.Module(b);b=(new WebAssembly.Instance(b,{e:{f:a}})).exports.f;V.set(c,b);Vb[c]=V.get(c)}W.set(a,c);return c};
 e.removeFunction=a=>{W.delete(Wb(a));V.set(a,null);Vb[a]=V.get(a);Xb.push(a)};e.setValue=function(a,b,c="i8"){c.endsWith("*")&&(c="*");switch(c){case "i1":r[a]=b;break;case "i8":r[a]=b;break;case "i16":pa[a>>1]=b;break;case "i32":v[a>>2]=b;break;case "i64":x[a>>3]=BigInt(b);break;case "float":qa[a>>2]=b;break;case "double":ra[a>>3]=b;break;case "*":w[a>>2]=b;break;default:xa(`invalid type for setValue: ${c}`)}};
 e.getValue=function(a,b="i8"){b.endsWith("*")&&(b="*");switch(b){case "i1":return r[a];case "i8":return r[a];case "i16":return pa[a>>1];case "i32":return v[a>>2];case "i64":return x[a>>3];case "float":return qa[a>>2];case "double":return ra[a>>3];case "*":return w[a>>2];default:xa(`invalid type for getValue: ${b}`)}};e.UTF8ToString=(a,b,c)=>a?G(u,a,b,c):"";e.stringToUTF8=(a,b,c)=>I(a,u,b,c);e.lengthBytesUTF8=Ra;e.FS_createPreloadedFile=gb;e.FS_unlink=(...a)=>F.unlink(...a);
-e.FS_createPath=(...a)=>Bb(...a);e.FS_createDevice=(...a)=>F.Ia(...a);e.FS=F;e.FS_createDataFile=(...a)=>fb(...a);e.FS_createLazyFile=(...a)=>Eb(...a);e.allocate=(a,b)=>{b=1==b?Ob(a.length):Zb(a.length);a.subarray||a.slice||(a=new Uint8Array(a));u.set(a,b);return b};e.NODEFS=Q;
+e.FS_createPath=(...a)=>Bb(...a);e.FS_createDevice=(...a)=>F.Ia(...a);e.FS=F;e.FS_createDataFile=(...a)=>fb(...a);e.FS_createLazyFile=(...a)=>Eb(...a);e.allocate=(a,b)=>{b=1==b?Ob(a.length):Zb(a.length);a.subarray||a.slice||(a=new Uint8Array(a));u.set(a,b);return b};e.IDBFS=N;e.NODEFS=Q;
 var Zb,Za,Qb,Ob,Pb,$b={i:function(a,b){try{return a=a?G(u,a):"",F.chmod(a,b),0}catch(c){if("undefined"==typeof F||"ErrnoError"!==c.name)throw c;return-c.ya}},G:function(a,b,c){try{b=b?G(u,b):"";b=Fb(a,b);if(c&-8)return-28;var d=O(b,{Da:!0}).node;if(!d)return-44;a="";c&4&&(a+="r");c&2&&(a+="w");c&1&&(a+="x");return a&&S(d,a)?-2:0}catch(f){if("undefined"==typeof F||"ErrnoError"!==f.name)throw f;return-f.ya}},m:function(a,b){try{return F.fchmod(a,b),0}catch(c){if("undefined"==typeof F||"ErrnoError"!==
 c.name)throw c;return-c.ya}},h:function(a,b,c){try{return F.fchown(a,b,c),0}catch(d){if("undefined"==typeof F||"ErrnoError"!==d.name)throw d;return-d.ya}},a:function(a,b,c){Hb=c;try{var d=U(a);switch(b){case 0:var f=Ib();if(0>f)break;for(;F.streams[f];)f++;return sb(d,f).fd;case 1:case 2:return 0;case 3:return d.flags;case 4:return f=Ib(),d.flags|=f,0;case 12:return f=Ib(),pa[f+0>>1]=2,0;case 13:case 14:return 0}return-28}catch(g){if("undefined"==typeof F||"ErrnoError"!==g.name)throw g;return-g.ya}},
 g:function(a,b){try{return Gb(b,F.fstat(a))}catch(c){if("undefined"==typeof F||"ErrnoError"!==c.name)throw c;return-c.ya}},D:function(a,b){b=-9007199254740992>b||9007199254740992<b?NaN:Number(b);try{if(isNaN(b))return-61;var c=U(a);if(0>b||0===(c.flags&2097155))throw new F.ta(28);yb(c,c.node,b);return 0}catch(d){if("undefined"==typeof F||"ErrnoError"!==d.name)throw d;return-d.ya}},C:function(a,b){try{if(0===b)return-28;var c=F.cwd(),d=Ra(c)+1;if(b<d)return-68;I(c,u,a,b);return d}catch(f){if("undefined"==
@@ -103,94 +103,351 @@ if(e.preInit)for("function"==typeof e.preInit&&(e.preInit=[e.preInit]);0<e.preIn
 if (typeof DbasSqlite !== 'undefined') {
   globalThis.DbasSqlite = DbasSqlite;
 } else {
-  console.error('DbasSqlite is not defined');
+  console.error('❌ DbasSqlite is not defined');
 }
 
-// Initialize persistent file system support
-globalThis.initPersistentFS = async function() {
+// Check if file system is available and ready
+function isFsAvailable(module) {
+  // Simple check - just need module.FS to exist for direct IDBFS
+  return module && module.FS;
+}
+
+// Check if IndexedDB file system is available
+function isIdbfsAvailable(module) {
+  if (!isFsAvailable(module)) {
+    return { available: false, idbfs: null, location: null };
+  }
+  
+  let idbfs = null;
+  let location = '';
+  
+  // First check the exported IDBFS (should be the primary location now)
+  if (module.IDBFS) {
+    idbfs = module.IDBFS;
+    location = 'module.IDBFS';
+  } else if (module.FS && module.FS.Nb && module.FS.Nb.IDBFS) {
+    idbfs = module.FS.Nb.IDBFS;
+    location = 'FS.Nb.IDBFS';
+  } else if (module.FS && module.FS.filesystems && module.FS.filesystems.IDBFS) {
+    idbfs = module.FS.filesystems.IDBFS;
+    location = 'FS.filesystems.IDBFS';
+  } else if (module.FS && module.FS.IDBFS) {
+    idbfs = module.FS.IDBFS;
+    location = 'FS.IDBFS';
+  } else if (globalThis.IDBFS) {
+    idbfs = globalThis.IDBFS;
+    location = 'globalThis.IDBFS';
+  }
+  
+  return {
+    available: !!idbfs,
+    idbfs: idbfs,
+    location: location
+  };
+}
+
+// Expose helper functions globally for testing
+globalThis.isFsAvailable = isFsAvailable;
+globalThis.isIdbfsAvailable = isIdbfsAvailable;
+
+// Initialize persistent file system support with direct IDBFS
+globalThis.initPersistentFS = async function(dbName = 'dbas.db') {
   if (typeof DbasSqlite === 'undefined') {
+    console.error('❌ DbasSqlite is not available');
     throw new Error('DbasSqlite is not available');
   }
+  
   const module = await DbasSqlite();
   
-  // Create a persistent directory for databases
+  // Store module reference and database name for direct IDBFS access
+  globalThis.DbasSqliteModule = module;
+  globalThis.DbasSqliteDBName = dbName;
+  globalThis.DbasSqliteFSDBName = 'dbas_sqlite';
+  // Ensure we don't double-add .db extension
+  const dbPath = dbName.endsWith('.db') ? `/data/${dbName}` : `/data/${dbName}.db`;
+  globalThis.DbasSqliteDBPath = dbPath;
+  
+  // Create persistent directories
   try {
-    module.FS.mkdir('/data');
-    module.FS.mkdir('/data/databases');
+    if (!module.FS.analyzePath('/data').exists) {
+      module.FS.mkdir('/data');
+    }
   } catch (e) {
-    // Directory might already exist
-    console.log('Directory creation info:', e.message);
+    // Directory might already exist or analyzePath not available
+    try {
+      module.FS.mkdir('/data');
+    } catch (e2) {
+      // Directory likely already exists, continue
+    }
   }
   
-  // Try to mount IndexedDB file system for persistence
+  // Setup direct IDBFS access
   if (typeof window !== 'undefined' && 'indexedDB' in window) {
-    try {
-      // Check if IDBFS is available
-      if (module.FS.filesystems && module.FS.filesystems.IDBFS) {
-        module.FS.mount(module.FS.filesystems.IDBFS, {}, '/data');
-        console.log('Mounted IDBFS for persistence');
-        
-        // Synchronize from IndexedDB to memory on startup
-        return new Promise((resolve, reject) => {
-          module.FS.syncfs(true, (err) => {
-            if (err) {
-              console.warn('Failed to sync from IndexedDB:', err);
-            } else {
-              console.log('Successfully synced from IndexedDB');
-            }
-            // Store module reference for later use
-            globalThis.DbasSqliteModule = module;
-            
-            // Start auto-persist automatically
-            startAutoPersist();
-            
-            resolve(module);
-          });
-        });
-      } else {
-        console.warn('IDBFS not available, using MEMFS only');
-      }
-    } catch (e) {
-      console.warn('IndexedDB persistence setup failed:', e);
+    const idbfsResult = isIdbfsAvailable(module);
+    
+    if (idbfsResult.available) {
+      // Store IDBFS reference for direct access
+      globalThis.IDBFS_INSTANCE = idbfsResult.idbfs;
+    } else {
+      console.warn('❌ IDBFS not available');
     }
   } else {
-    console.warn('IndexedDB not available');
+    console.warn('⚠️ IndexedDB not available in this environment');
   }
   
-  // Store module reference for later use (fallback for non-IndexedDB cases)
-  globalThis.DbasSqliteModule = module;
+  // Try to restore data from IndexedDB on startup
+  await restoreDB();
   
-  // Start auto-persist automatically (even without IndexedDB)
+  // Start auto-persist mechanism
   startAutoPersist();
   
+  console.log('DBAS SQLite ready to use');
   return module;
 };
 
-// Function to persist data to IndexedDB
+// 🚀 DIRECT IDBFS: Optimized persistence without syncfs dependency
 globalThis.persistDB = function() {
   const module = globalThis.DbasSqliteModule;
-  if (module && module.FS && module.FS.syncfs) {
+  
+  // Use direct IDBFS approach (no syncfs dependency)
+  if (globalThis.IDBFS_INSTANCE && typeof window !== 'undefined' && 'indexedDB' in window) {
+    return persistDBDirect();
+  }
+  
+  console.warn('⚠️ Direct IDBFS persistence not available');
+  return Promise.resolve();
+};
+
+// 🚀 OPTIMIZED: Direct IDBFS persistence with performance enhancements
+function persistDBDirect() {
+  const module = globalThis.DbasSqliteModule;
+  
+  return new Promise((resolve, reject) => {
+    try {
+      // Use IndexedDB directly to store database files
+      const request = indexedDB.open(globalThis.DbasSqliteFSDBName, 1);
+      let dbUpgraded = false;
+      
+      request.onerror = () => {
+        console.warn('❌ Failed to open IndexedDB for persistence');
+        reject(new Error('IndexedDB open failed'));
+      };
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        
+        if (!db.objectStoreNames.contains('files')) {
+          const store = db.createObjectStore('files', { keyPath: 'path' });
+          // Add index for faster queries
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+          dbUpgraded = true;
+        }
+      };
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        
+        // Function to proceed with persistence
+        const proceedWithPersistence = () => {
+          // Ensure the object store exists before proceeding
+          if (!db.objectStoreNames.contains('files')) {
+            console.warn('❌ Object store "files" not found in IndexedDB');
+            reject(new Error('Object store "files" not found'));
+            return;
+          }
+          
+          const transaction = db.transaction(['files'], 'readwrite');
+          const store = transaction.objectStore('files');
+        
+          // 📊 PERFORMANCE: Batch all database files in one transaction
+          const filesToPersist = [];
+          
+          // Use the configured database path
+          const dbPath = globalThis.DbasSqliteDBPath || '/data/dbas.db';
+          
+          try {
+            const data = module.FS.readFile(dbPath);
+            if (data && data.length > 0) {
+              filesToPersist.push({
+                path: dbPath,
+                data: data,
+                timestamp: Date.now(),
+                size: data.length,
+                type: 'database'
+              });
+            }
+          } catch (e) {
+            // Database file may not exist yet
+          }
+          
+          // Also check for SQLite auxiliary files (WAL, SHM, etc.)
+          const baseName = dbPath.replace(/\.db$/, '');
+          const auxiliaryExtensions = ['-wal', '-shm', '-journal'];
+          
+          auxiliaryExtensions.forEach(ext => {
+            const auxPath = baseName + ext;
+            try {
+              const data = module.FS.readFile(auxPath);
+              if (data && data.length > 0) {
+                filesToPersist.push({
+                  path: auxPath,
+                  data: data,
+                  timestamp: Date.now(),
+                  size: data.length,
+                  type: 'auxiliary'
+                });
+              }
+            } catch (e) {
+              // Auxiliary files may not exist, this is normal
+            }
+          });
+          
+          if (filesToPersist.length === 0) {
+            resolve();
+            return;
+          }
+          
+          // 🚀 PERFORMANCE: Use batch operations
+          let completed = 0;
+          const total = filesToPersist.length;
+          
+          filesToPersist.forEach(fileEntry => {
+            const putRequest = store.put(fileEntry);
+            
+            putRequest.onsuccess = () => {
+              completed++;
+              if (completed === total) {
+                resolve();
+              }
+            };
+            
+            putRequest.onerror = () => {
+              console.warn(`❌ Failed to store ${fileEntry.path}`);
+              completed++;
+              if (completed === total) {
+                resolve(); // Continue even if some files fail
+              }
+            };
+          });
+          
+          // 📊 PERFORMANCE: Add cleanup for old files (keep last 10 versions)
+          const cleanupTransaction = db.transaction(['files'], 'readwrite');
+          const cleanupStore = cleanupTransaction.objectStore('files');
+          const timestampIndex = cleanupStore.index('timestamp');
+          
+          const cleanupRequest = timestampIndex.openCursor(null, 'prev');
+          let fileCount = 0;
+          
+          cleanupRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+              fileCount++;
+              if (fileCount > 10) { // Keep only last 10 versions
+                cursor.delete();
+              }
+              cursor.continue();
+            }
+          };
+        };
+        
+        // If database was upgraded, wait a moment for transaction to complete
+        if (dbUpgraded) {
+          setTimeout(proceedWithPersistence, 50);
+        } else {
+          proceedWithPersistence();
+        }
+      };
+      
+    } catch (e) {
+      console.warn('❌ Error in optimized direct IDBFS persistence:', e);
+      reject(e);
+    }
+  });
+}
+
+// Function to restore data from IndexedDB
+globalThis.restoreDB = function() {
+  const module = globalThis.DbasSqliteModule;
+  
+  // If we have direct IDBFS access, try to restore from IndexedDB
+  if (globalThis.IDBFS_INSTANCE && typeof window !== 'undefined' && 'indexedDB' in window) {
     return new Promise((resolve, reject) => {
       try {
-        // Synchronize from memory to IndexedDB for persistence
-        module.FS.syncfs(false, (err) => {
-          if (err) {
-            console.warn('Failed to persist to IndexedDB:', err);
-            reject(err);
-          } else {
-            console.log('Database successfully persisted to IndexedDB');
+        const request = indexedDB.open(globalThis.DbasSqliteFSDBName, 1);
+        
+        request.onerror = () => {
+          resolve(); // Not an error, just no data to restore
+        };
+        
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          
+          if (!db.objectStoreNames.contains('files')) {
             resolve();
+            return;
           }
-        });
+          
+          const transaction = db.transaction(['files'], 'readonly');
+          const store = transaction.objectStore('files');
+          
+          // Use the configured database path
+          const dbPath = globalThis.DbasSqliteDBPath || '/data/test.db';
+          
+          const getRequest = store.get(dbPath);
+          
+          getRequest.onsuccess = () => {
+            const result = getRequest.result;
+            if (result && result.data) {
+              try {
+                // Write data back to memory filesystem
+                module.FS.writeFile(dbPath, result.data);
+                
+                // Also try to restore auxiliary files
+                const baseName = dbPath.replace(/\.db$/, '');
+                const auxiliaryExtensions = ['-wal', '-shm', '-journal'];
+                
+                let auxRestored = 0;
+                auxiliaryExtensions.forEach(ext => {
+                  const auxPath = baseName + ext;
+                  const auxRequest = store.get(auxPath);
+                  
+                  auxRequest.onsuccess = () => {
+                    const auxResult = auxRequest.result;
+                    if (auxResult && auxResult.data) {
+                      try {
+                        module.FS.writeFile(auxPath, auxResult.data);
+                        auxRestored++;
+                      } catch (e) {
+                        console.warn(`⚠️ Error restoring auxiliary file ${auxPath}:`, e.message);
+                      }
+                    }
+                  };
+                });
+                
+                resolve();
+              } catch (e) {
+                console.warn('❌ Error writing restored data:', e.message);
+                reject(e);
+              }
+            } else {
+              resolve();
+            }
+          };
+          
+          getRequest.onerror = () => {
+            console.warn('❌ Error reading from IndexedDB');
+            reject(new Error('IndexedDB read failed'));
+          };
+        };
+        
       } catch (e) {
-        console.warn('Error during persistence sync:', e);
+        console.warn('❌ Error in restore operation:', e);
         reject(e);
       }
     });
-  } else {
-    console.warn('Persistence not available - module or FS not ready');
-    return Promise.resolve();
   }
+  
+  return Promise.resolve();
 };
 
 // Start automatic periodic persistence
@@ -198,15 +455,17 @@ let autoInterval;
 globalThis.startAutoPersist = function(intervalMs = 15000) {
   globalThis.stopAutoPersist(); // Clear any existing interval
   
-  // Only start if IndexedDB persistence is actually available
-  const module = globalThis.DbasSqliteModule;
-  if (module && module.FS && module.FS.syncfs) {
+  // Start auto-persist with direct IDBFS
+  const hasDirectPersistence = globalThis.IDBFS_INSTANCE && typeof window !== 'undefined' && 'indexedDB' in window;
+  
+  if (hasDirectPersistence) {
     autoInterval = setInterval(async () => {
-      await persistDB();
+      try {
+        await persistDB();
+      } catch (error) {
+        console.warn('⚠️ Auto-persist failed:', error.message);
+      }
     }, intervalMs);
-    console.log(`Auto-persist started: every ${intervalMs}ms`);
-  } else {
-    console.log('Auto-persist not started: IndexedDB persistence not available');
   }
 };
 
@@ -214,7 +473,6 @@ globalThis.stopAutoPersist = function() {
   if (autoInterval) {
     clearInterval(autoInterval);
     autoInterval = null;
-    console.log('Auto-persist stopped');
   }
 };
 
@@ -238,3 +496,6 @@ if (typeof globalThis.window !== 'undefined') {
     stopAutoPersist();
   });
 }
+
+globalThis.isFsAvailable = isFsAvailable;
+globalThis.isIdbfsAvailable = isIdbfsAvailable;
