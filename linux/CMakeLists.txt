@@ -53,6 +53,14 @@ set(dbas_sqlite_flutter_bundled_libraries
   PARENT_SCOPE
 )
 
+# --- Automatically copy SQLite SO after build ---
+set(SQLITE_SO "${CMAKE_CURRENT_LIST_DIR}/../native_libs/sqlite/linux/dbas_sqlite.so")
+set(SQLITE_SO_DEST "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/libs/dbas_sqlite.so")
+add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/libs"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SQLITE_SO}" "${SQLITE_SO_DEST}"
+)
+
 # === Tests ===
 # These unit tests can be run from a terminal after building the example.
 

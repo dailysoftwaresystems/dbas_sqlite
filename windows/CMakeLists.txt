@@ -59,6 +59,16 @@ else()
     set(ARCH "x86")
 endif()
 
+
+# --- Automatically copy SQLite DLL after build ---
+set(SQLITE_DLL "${CMAKE_CURRENT_LIST_DIR}/../native_libs/sqlite/windows/${ARCH}/dbas_sqlite.dll")
+set(SQLITE_DLL_DEST "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/libs/${ARCH}/dbas_sqlite.dll")
+add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/libs/${ARCH}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SQLITE_DLL}" "${SQLITE_DLL_DEST}"
+)
+
+# List of absolute paths to libraries that should be bundled with the plugin.
 set(dbas_sqlite_flutter_bundled_libraries
   "${CMAKE_CURRENT_SOURCE_DIR}/libs/${ARCH}/dbas_sqlite.dll"
   PARENT_SCOPE
