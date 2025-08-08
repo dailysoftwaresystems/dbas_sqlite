@@ -112,6 +112,10 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
+  String getColumnName(int stmt, int columnIndex) =>
+      throw UnsupportedError('Not supported in web.');
+
+  @override
   int getColumnType(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in web.');
 

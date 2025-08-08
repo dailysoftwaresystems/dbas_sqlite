@@ -112,6 +112,10 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
+  String getColumnName(int stmt, int columnIndex) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
   int getColumnType(int stmt, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 

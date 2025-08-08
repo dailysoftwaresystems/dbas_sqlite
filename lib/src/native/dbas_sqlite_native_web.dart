@@ -65,6 +65,8 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   // ignore: non_constant_identifier_names
   external int _GetColumnBytes(int stmt, int columnIndex);
   // ignore: non_constant_identifier_names
+  external String _GetColumnName(int stmt, int colIndex);
+  // ignore: non_constant_identifier_names
   external int _GetColumnType(int stmt, int colIndex);
   // ignore: non_constant_identifier_names
   external int _GetColumnCount(int stmt);
@@ -207,6 +209,9 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   int getColumnBytes(int stmt, int columnIndex) => _js._GetColumnBytes(stmt, columnIndex);
+
+  @override
+  String getColumnName(int stmt, int colIndex) => _js._GetColumnName(stmt, colIndex);
 
   @override
   int getColumnType(int stmt, int colIndex) => _js._GetColumnType(stmt, colIndex);

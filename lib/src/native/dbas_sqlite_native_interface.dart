@@ -139,6 +139,7 @@ abstract class DbasSqliteNativeInterface {
   double getColumnDouble(int stmt, int colIndex);
   List<int> getColumnBlob(int stmt, int columnIndex);
   int getColumnBytes(int stmt, int columnIndex);
+  String getColumnName(int stmt, int columnIndex);
   int getColumnType(int stmt, int colIndex);
   int getColumnCount(int stmt);
 

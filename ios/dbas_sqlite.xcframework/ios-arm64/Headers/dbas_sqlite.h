@@ -47,6 +47,7 @@ extern "C" {
     DLL_EXPORT int GetColumnType(SQLiteDb* inst, int col_index);
     DLL_EXPORT const void* GetColumnBlob(SQLiteDb* inst, int index);
     DLL_EXPORT int GetColumnBytes(SQLiteDb* inst, int index);
+    DLL_EXPORT char* GetColumnName(SQLiteDb* inst, int index);
     DLL_EXPORT int GetColumnCount(SQLiteDb* inst);
 
     DLL_EXPORT const char* GetLastDbError(SQLiteDb* inst);

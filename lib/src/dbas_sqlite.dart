@@ -113,27 +113,72 @@ class DbasSqlite {
       return null;
     }
 
-    return _platform.getColumnText(_db!, idx);
+    return getColumnText(idx);
+  }
+
+  bool getColumnBool(int idx) {
+    return _platform.getColumnInt(_db!, idx) == 1;
+  }
+
+  bool? getColumnNullableBool(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnBool(idx);
   }
 
   int getColumnInt(int idx) {
     return _platform.getColumnInt(_db!, idx);
   }
 
+  int? getColumnNullableInt(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnInt(idx);
+  }
+
   Decimal getColumnDecimal(int idx) {
     if (isColumnNull(idx)) {
       return Decimal.zero;
     }
+
     final doubleValue = _platform.getColumnDouble(_db!, idx);
     return Decimal.parse(doubleValue.toString());
+  }
+
+  Decimal? getColumnNullableDecimal(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnDecimal(idx);
   }
 
   double getColumnDouble(int idx) {
     return _platform.getColumnDouble(_db!, idx);
   }
 
+  double? getColumnNullableDouble(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnDouble(idx);
+  }
+
   Uint8List getColumnBlob(int idx) {
     return _platform.getColumnBlob(_db!, idx);
+  }
+
+  Uint8List? getColumnNullableBlob(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnBlob(idx);
   }
 
   SqliteColumnType getColumnType(int idx) {

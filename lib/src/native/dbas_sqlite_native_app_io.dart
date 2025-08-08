@@ -78,6 +78,9 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnBytes')
   external int _getColumnBytes(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
 
+  @Native<Pointer<Utf8> Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnName')
+  external Pointer<Utf8> _getColumnName(Pointer<DbasSqliteDbStruct> dbPtr, int columnIndex);
+
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>, Int32)>(symbol: 'GetColumnType')
   external int _getColumnType(Pointer<DbasSqliteDbStruct> dbPtr, int colIndex);
 
@@ -216,6 +219,10 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @override
   int getColumnBytes(int stmt, int columnIndex) =>
       _getColumnBytes(_dbPtr(stmt), columnIndex);
+
+  @override
+  String getColumnName(int stmt, int colIndex) =>
+      _getColumnName(_dbPtr(stmt), colIndex).toDartString();
 
   @override
   int getColumnType(int stmt, int colIndex) =>

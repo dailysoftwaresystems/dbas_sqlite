@@ -31,6 +31,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   late double Function(Pointer<DbasSqliteDbStruct>, int) _getColumnDouble;
   late Pointer<Uint8> Function(Pointer<DbasSqliteDbStruct>, int) _getColumnBlob;
   late int Function(Pointer<DbasSqliteDbStruct>, int) _getColumnBytes;
+  late Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>, int) _getColumnName;
   late int Function(Pointer<DbasSqliteDbStruct>, int) _getColumnType;
   late int Function(Pointer<DbasSqliteDbStruct>) _getColumnCount;
   late Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>) _getLastDbError;
@@ -147,6 +148,10 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
         Int32 Function(Pointer<DbasSqliteDbStruct>, Int32),
         int Function(Pointer<DbasSqliteDbStruct>, int)
     >('GetColumnBytes');
+    _getColumnName = _lib.lookupFunction<
+        Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>, Int32),
+        Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>, int)
+    >('GetColumnName');
     _getColumnType = _lib.lookupFunction<
         Int32 Function(Pointer<DbasSqliteDbStruct>, Int32),
         int Function(Pointer<DbasSqliteDbStruct>, int)
@@ -390,6 +395,10 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @override
   int getColumnBytes(int stmt, int columnIndex) =>
     _getColumnBytes(_dbPtr(stmt, checkOpened: false), columnIndex);
+
+  @override
+  String getColumnName(int stmt, int colIndex) =>
+      _getColumnName(_dbPtr(stmt, checkOpened: false), colIndex).toDartString();
 
   @override
   int getColumnType(int stmt, int colIndex) =>
