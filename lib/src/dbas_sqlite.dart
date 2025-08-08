@@ -169,6 +169,35 @@ class DbasSqlite {
     return getColumnDouble(idx);
   }
 
+  DateTime getColumnDateTime(int idx) {
+    final value = _platform.getColumnText(_db!, idx);
+    return DateTime.parse(value);
+  }
+
+  DateTime? getColumnNullableDateTime(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnDateTime(idx);
+  }
+
+  T getColumnEnum<T extends Enum>(int idx, List<T> values) {
+    final intValue = _platform.getColumnInt(_db!, idx);
+    if (intValue < 0 || intValue >= values.length) {
+      throw ArgumentError('No enum value found for index $intValue in ${T.toString()}');
+    }
+    return values[intValue];
+  }
+
+  T? getColumnNullableEnum<T extends Enum>(int idx, List<T> values) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnEnum<T>(idx, values);
+  }
+
   Uint8List getColumnBlob(int idx) {
     return _platform.getColumnBlob(_db!, idx);
   }
@@ -202,11 +231,13 @@ class DbasSqlite {
         } else if (value is double) {
           _platform.bindDouble(_db!, index, value);
         } else if (value is Decimal) {
-          _platform.bindDouble(_db!, index, value as double);
+          _platform.bindDouble(_db!, index, value.toDouble());
         } else if (value is String) {
           _platform.bindText(_db!, index, value);
         } else if (value is Uint8List) {
           _platform.bindBlob(_db!, index, value);
+        } else if (value is Enum) {
+          _platform.bindInt(_db!, index, value.index);
         } else {
           throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
         }
@@ -226,13 +257,15 @@ class DbasSqlite {
         } else if (value is int) {
           _platform.bindNameInt(_db!, paramName, value);
         } else if (value is double) {
-          _platform.bindNameDouble(_db!, paramName, value);
+          _platform.bindNameDouble(_db!, paramName, value.toDouble());
         } else if (value is Decimal) {
           _platform.bindNameDecimal(_db!, paramName, value);
         } else if (value is String) {
           _platform.bindNameText(_db!, paramName, value);
         } else if (value is Uint8List) {
           _platform.bindNameBlob(_db!, paramName, value);
+        } else if (value is Enum) {
+          _platform.bindNameInt(_db!, paramName, value.index);
         } else {
           throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
         }
