@@ -11,15 +11,75 @@ import 'package:path/path.dart' as path;
 import 'package:flutter/foundation.dart';
 
 class DbasSqlite {
-  static DbasSqlite? _instance;
+  static final Map<String, DbasSqlite> _instance = {};
   final DbasSqlitePlatform _platform;
   DbasSqliteDb? _db;
 
   DbasSqlite._dbasSqlite(this._platform);
 
   static Future<DbasSqlite> getInstance({String dbName = 'dbas.db'}) async {
-    _instance ??= DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName));
-    return _instance!;
+    if (_instance.containsKey(dbName)) {
+      return _instance[dbName]!;
+    }
+
+    _instance[dbName] = DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName));
+    return _instance[dbName]!;
+  }
+
+  static Future<String> _getDbPath() async {
+    if (kIsWeb) {
+      return '/data';
+    }
+
+    final directory = await getApplicationSupportDirectory();
+    final dirPath = '${directory.path}/data'.replaceAll('\\', '/');
+    final dir = Directory(dirPath);
+
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dirPath;
+  }
+
+  /// Attaches a database from bytes and optionally opens it.
+  /// If a database with the same name already exists and is opened, it will be closed
+  /// and removed before attaching the new database.
+  static Future<DbasSqlite> attachDb(String dbName, Uint8List bytes, bool openDb) async {
+    if (_instance.containsKey(dbName)) {
+      if (_instance[dbName]!.isOpened()) {
+        await _instance[dbName]!.closeDb();
+      }
+
+      _instance.remove(dbName);
+    }
+
+    final dbDir = await _getDbPath();
+    final dbPath = path.join(dbDir, dbName).replaceAll('\\', '/');
+
+    // Remove existing database and WAL files if they exist
+    final dbFile = File(dbPath);
+    if (await dbFile.exists()) {
+      await dbFile.delete();
+    }
+    final walFile = File('$dbPath-wal');
+    if (await walFile.exists()) {
+      await walFile.delete();
+    }
+    final shmFile = File('$dbPath-shm');
+    if (await shmFile.exists()) {
+      await shmFile.delete();
+    }
+
+    // Write the new database file
+    await dbFile.writeAsBytes(bytes);
+
+    final instance = await getInstance(dbName: dbName);
+
+    if (openDb) {
+      await instance.openDb(dbPath);
+    }
+
+    return instance;
   }
 
   Future<String> getAppDatabasePath({String? dbName}) async {
@@ -35,15 +95,11 @@ class DbasSqlite {
       return path.join(dbPath, dbName);
     }
 
-    if (kIsWeb) {
-      return '/data/$dbName';
-    }
-
-    final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/data/$dbName'.replaceAll('\\', '/');
-    await Directory(path.dirname(dirPath)).create(recursive: true);
-    return dirPath;
+    String dbPath = await _getDbPath();
+    return '$dbPath/$dbName';
   }
+
+  String get dbName => _platform.dbName;
 
   Future<void> openDb(String fileName) async {
     _db = await _platform.openDb(fileName);
@@ -274,6 +330,9 @@ class DbasSqlite {
   }
 
   Future<void> closeDb() async {
+    if (_instance.containsKey(dbName)) {
+      _instance.remove(dbName);
+    }
     await _platform.closeDb(_db!);
     _db = null;
   }
