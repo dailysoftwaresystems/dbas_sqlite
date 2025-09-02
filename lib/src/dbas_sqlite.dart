@@ -11,10 +11,10 @@ import 'package:path/path.dart' as path;
 import 'package:flutter/foundation.dart';
 
 class DbasSqlite {
-  static final _SQLITE_OK = 0;
-  static final _SQLITE_ROW = 100;
-  static final _SQLITE_DONE = 101;
-  static final _SQLITE_SUCCESS_RESULTS = [_SQLITE_OK, _SQLITE_ROW, _SQLITE_DONE];
+  static final _sqliteOk = 0;
+  static final _sqliteRow = 100;
+  static final _sqliteDone = 101;
+  static final _sqliteSuccessResults = [_sqliteOk, _sqliteRow, _sqliteDone];
 
   static final String _webDbDir = 'data';
   static final Map<String, DbasSqlite> _instance = {};
@@ -142,11 +142,11 @@ class DbasSqlite {
 
   Future<bool> readRow() async {
     int result = await _platform.readRow(_db!);
-    if (!_SQLITE_SUCCESS_RESULTS.contains(result)) {
+    if (!_sqliteSuccessResults.contains(result)) {
       throw Exception(["It was not possible to run the query ($result): ${_platform.getLastDbError(_db!)}"]);
     }
 
-    return result == _SQLITE_ROW;
+    return result == _sqliteRow;
   }
 
   bool isColumnNull(int idx) {
