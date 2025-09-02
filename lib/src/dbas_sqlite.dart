@@ -11,24 +11,31 @@ import 'package:path/path.dart' as path;
 import 'package:flutter/foundation.dart';
 
 class DbasSqlite {
+  static final _SQLITE_OK = 0;
+  static final _SQLITE_ROW = 100;
+  static final _SQLITE_DONE = 101;
+  static final _SQLITE_SUCCESS_RESULTS = [_SQLITE_OK, _SQLITE_ROW, _SQLITE_DONE];
+
+  static final String _webDbDir = 'data';
   static final Map<String, DbasSqlite> _instance = {};
   final DbasSqlitePlatform _platform;
+  final String dbName;
   DbasSqliteDb? _db;
 
-  DbasSqlite._dbasSqlite(this._platform);
+  DbasSqlite._dbasSqlite(this._platform, this.dbName);
 
   static Future<DbasSqlite> getInstance({String dbName = 'dbas.db'}) async {
     if (_instance.containsKey(dbName)) {
       return _instance[dbName]!;
     }
 
-    _instance[dbName] = DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName));
+    _instance[dbName] = DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName), dbName);
     return _instance[dbName]!;
   }
 
   static Future<String> _getDbPath() async {
     if (kIsWeb) {
-      return '/data';
+      return '/$_webDbDir';
     }
 
     final directory = await getApplicationSupportDirectory();
@@ -41,10 +48,15 @@ class DbasSqlite {
     return dirPath;
   }
 
+  Future<bool> databaseExists() async {
+    String fileName = kIsWeb ? dbName : await getAppDatabasePath(dbName: dbName);
+    return await _platform.databaseExists(fileName);
+  }
+
   /// Attaches a database from bytes and optionally opens it.
   /// If a database with the same name already exists and is opened, it will be closed
   /// and removed before attaching the new database.
-  static Future<DbasSqlite> attachDb(String dbName, Uint8List bytes, bool openDb) async {
+  Future<DbasSqlite> attachDb(List<int> bytes, {bool openDb = true}) async {
     if (_instance.containsKey(dbName)) {
       if (_instance[dbName]!.isOpened()) {
         await _instance[dbName]!.closeDb();
@@ -53,39 +65,21 @@ class DbasSqlite {
       _instance.remove(dbName);
     }
 
-    final dbDir = await _getDbPath();
-    final dbPath = path.join(dbDir, dbName).replaceAll('\\', '/');
-
-    // Remove existing database and WAL files if they exist
-    final dbFile = File(dbPath);
-    if (await dbFile.exists()) {
-      await dbFile.delete();
-    }
-    final walFile = File('$dbPath-wal');
-    if (await walFile.exists()) {
-      await walFile.delete();
-    }
-    final shmFile = File('$dbPath-shm');
-    if (await shmFile.exists()) {
-      await shmFile.delete();
-    }
-
-    // Write the new database file
-    await dbFile.writeAsBytes(bytes);
-
+    String fileName = await getAppDatabasePath(dbName: dbName);
+    await _platform.attachDb(fileName, bytes);
     final instance = await getInstance(dbName: dbName);
 
     if (openDb) {
-      await instance.openDb(dbPath);
+      await instance.openDb();
     }
 
     return instance;
   }
 
   Future<String> getAppDatabasePath({String? dbName}) async {
-    dbName ??= _platform.dbName;
+    dbName ??= this.dbName;
 
-    if (_platform.isTest) {
+    if (_platform.isTest(dbName)) {
       String dbPath = path.join(Directory.current.path, 'test', 'db');
       Directory dbDir = Directory(dbPath);
       if (!await dbDir.exists()) {
@@ -99,9 +93,8 @@ class DbasSqlite {
     return '$dbPath/$dbName';
   }
 
-  String get dbName => _platform.dbName;
-
-  Future<void> openDb(String fileName) async {
+  Future<void> openDb() async {
+    String fileName = await getAppDatabasePath(dbName: dbName);
     _db = await _platform.openDb(fileName);
   }
 
@@ -115,7 +108,7 @@ class DbasSqlite {
     }
 
     int prepared = await _platform.prepareQuery(_db!, sql);
-    if (prepared == 1) {
+    if (prepared == -1 || prepared == 1) {
       throw Exception(["It was not possible to prepare the query: ${_platform.getLastDbError(_db!)}"]);
     }
 
@@ -123,7 +116,7 @@ class DbasSqlite {
     _bindNameParameters(nameParams);
 
     int result = 0;
-    if (readRow()) {
+    if (!await readRow()) {
       result = _platform.getAffectedRows(_db!);
     }
 
@@ -137,7 +130,7 @@ class DbasSqlite {
     }
 
     int prepared = await _platform.prepareQuery(_db!, sql);
-    if (prepared == 1) {
+    if (prepared == -1 || prepared == 1) {
       throw Exception(["It was not possible to prepare the query: ${_platform.getLastDbError(_db!)}"]);
     }
 
@@ -147,13 +140,13 @@ class DbasSqlite {
     return 1;
   }
 
-  bool readRow() {
-    int result = _platform.readRow(_db!);
-    if (result == -1) {
-      throw Exception(["It was not possible to run the query: ${_platform.getLastDbError(_db!)}"]);
+  Future<bool> readRow() async {
+    int result = await _platform.readRow(_db!);
+    if (!_SQLITE_SUCCESS_RESULTS.contains(result)) {
+      throw Exception(["It was not possible to run the query ($result): ${_platform.getLastDbError(_db!)}"]);
     }
 
-    return result == 1;
+    return result == _SQLITE_ROW;
   }
 
   bool isColumnNull(int idx) {

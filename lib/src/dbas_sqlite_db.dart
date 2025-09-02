@@ -2,8 +2,9 @@ import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 
 class DbasSqliteDb {
+  final String name;
   final int ptr;
-  DbasSqliteDb(this.ptr);
+  DbasSqliteDb(this.name, this.ptr);
 }
 
 final class DbasSqliteDbStruct extends Struct {

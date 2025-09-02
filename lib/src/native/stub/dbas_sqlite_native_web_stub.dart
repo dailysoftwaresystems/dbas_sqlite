@@ -16,7 +16,15 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
-  int openDb(String path) =>
+  Future<int> openDb(String path) =>
+      throw UnsupportedError('Not supported in web.');
+
+  @override
+  Future<bool> databaseExists(String fileName) =>
+      throw UnsupportedError('Not supported in web.');
+
+  @override
+  Future attachDb(String fileName, List<int> content) =>
       throw UnsupportedError('Not supported in web.');
 
   @override
@@ -24,11 +32,11 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
-  int executeSql(int dbPtr, String sql) =>
+  Future<int> executeSql(int dbPtr, String sql) =>
       throw UnsupportedError('Not supported in web.');
 
   @override
-  int prepareQuery(int dbPtr, String sql) =>
+  Future<int> prepareQuery(int dbPtr, String sql) =>
       throw UnsupportedError('Not supported in web.');
 
   @override
@@ -80,7 +88,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
-  int readRow(int stmt) =>
+  Future<int> readRow(int stmt) =>
       throw UnsupportedError('Not supported in web.');
 
   @override
@@ -136,7 +144,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
-  void closeReader(int stmt) =>
+  Future<void> closeReader(int stmt) =>
       throw UnsupportedError('Not supported in web.');
 
   @override

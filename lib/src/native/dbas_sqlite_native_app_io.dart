@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
 import '../dbas_sqlite_db.dart';
@@ -109,20 +110,44 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   Future<void> initialize() async {}
 
   @override
-  int openDb(String path) {
+  Future<int> openDb(String path) async {
     final ptr = _openDb(path.toNativeUtf8());
     return ptr.address;
+  }
+
+  @override
+  Future<bool> databaseExists(String fileName) async {
+    final dbFile = File(fileName);
+    return await dbFile.exists();
+  }
+
+  @override
+  Future attachDb(String fileName, List<int> content) async {
+    final dbFile = File(fileName);
+    if (await dbFile.exists()) {
+      await dbFile.delete();
+    }
+    final walFile = File('$fileName-wal');
+    if (await walFile.exists()) {
+      await walFile.delete();
+    }
+    final shmFile = File('$fileName-shm');
+    if (await shmFile.exists()) {
+      await shmFile.delete();
+    }
+
+    await dbFile.writeAsBytes(content);
   }
 
   @override
   bool isOpened(int dbPtr) => _isOpened(_dbPtr(dbPtr)) == 1;
 
   @override
-  int executeSql(int dbPtr, String sql) =>
+  Future<int> executeSql(int dbPtr, String sql) async =>
       _executeSql(_dbPtr(dbPtr), sql.toNativeUtf8());
 
   @override
-  int prepareQuery(int dbPtr, String sql) =>
+  Future<int> prepareQuery(int dbPtr, String sql) async =>
       _prepareQuery(_dbPtr(dbPtr), sql.toNativeUtf8());
 
   @override
@@ -188,7 +213,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   }
 
   @override
-  int readRow(int stmt) => _readRow(_dbPtr(stmt));
+  Future<int> readRow(int stmt) async => _readRow(_dbPtr(stmt));
 
   @override
   bool isNull(int stmt, int colIndex) => _isNull(_dbPtr(stmt), colIndex) == 1;
@@ -242,8 +267,8 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   int getLastInsertedId(int dbPtr) => _getLastInsertedId(_dbPtr(dbPtr));
 
   @override
-  void closeReader(int stmt) => _closeReader(_dbPtr(stmt));
+  Future closeReader(int stmt) async => _closeReader(_dbPtr(stmt));
 
   @override
-  void closeDb(int dbPtr) => _closeDb(_dbPtr(dbPtr));
+  Future closeDb(int dbPtr) async => _closeDb(_dbPtr(dbPtr));
 }

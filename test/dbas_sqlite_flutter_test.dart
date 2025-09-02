@@ -1,18 +1,21 @@
+import 'dart:io';
+
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'dart:io';
 
 void main() async {
   test('Test Open, create table, insert, select and close', () async {
-    final dbasSqlite = await DbasSqlite.getInstance(dbName: 'test.db');
+    String dbName = 'test.db';
+    final dbasSqlite = await DbasSqlite.getInstance(dbName: dbName);
 
-    File dbFile = File(await dbasSqlite.getAppDatabasePath());
-    if (await dbFile.exists()) {
+    File dbFile = File(await dbasSqlite.getAppDatabasePath(dbName: dbName));
+    if (await dbasSqlite.databaseExists()) {
       dbFile.delete();
     }
 
-    await dbasSqlite.openDb(await dbasSqlite.getAppDatabasePath());
+    await dbasSqlite.openDb();
 
+    expect(await dbasSqlite.databaseExists(), isTrue, reason: 'DB file should exist after opening the database (native).');
     expect(await dbFile.exists(), isTrue, reason: 'DB file should exist after opening the database.');
     expect(dbasSqlite.isOpened(), isTrue, reason: 'Database should be opened after calling openDb.');
 
@@ -42,7 +45,7 @@ void main() async {
     int colCount = dbasSqlite.getColumnCount();
 
     List<List<Object?>> users = [];
-    while (dbasSqlite.readRow()) {
+    while (await dbasSqlite.readRow()) {
       List<Object?> user = [];
       for (int colIdx = 0; colIdx < colCount; colIdx++) {
         SqliteColumnType type = dbasSqlite.getColumnType(colIdx);
@@ -69,5 +72,37 @@ void main() async {
 
     await dbasSqlite.closeDb();
     expect(dbasSqlite.isOpened(), isFalse);
+  });
+
+  test('Test exists and attach', () async {
+    String testDbName = 'test_attach1.db';
+    DbasSqlite testDbasSqlite = await DbasSqlite.getInstance(dbName: testDbName);
+    String testDbPath = await testDbasSqlite.getAppDatabasePath();
+
+    File testDbFile = File(testDbPath);
+    if (await testDbasSqlite.databaseExists()) {
+      testDbFile.delete();
+    }
+
+    await testDbasSqlite.openDb();
+    await testDbasSqlite.executeSql('''
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    ''');
+
+    String dbName = 'test_attach2.db';
+    DbasSqlite dbasSqlite = await DbasSqlite.getInstance(dbName: dbName);
+
+    File dbFile = File(await dbasSqlite.getAppDatabasePath());
+    List<int> bytes = await File(testDbPath).readAsBytes();
+    dbasSqlite = await dbasSqlite.attachDb(bytes);
+
+    expect(await dbasSqlite.databaseExists(), isTrue, reason: 'DB file should exist after opening the database (native).');
+    expect(await dbFile.exists(), isTrue, reason: 'DB file should exist after opening the database.');
+    expect(dbasSqlite.isOpened(), isTrue, reason: 'Database should be opened after calling openDb.');
   });
 }

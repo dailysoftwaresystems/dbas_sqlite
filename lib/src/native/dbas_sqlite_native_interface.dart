@@ -110,11 +110,13 @@ abstract class DbasSqliteNativeInterface {
     return libPath.replaceAll('\\', '/');
   }
 
-  int openDb(String path);
+  Future<int> openDb(String path);
   bool isOpened(int dbPtr);
+  Future<bool> databaseExists(String fileName);
+  Future attachDb(String fileName, List<int> content);
 
-  int executeSql(int dbPtr, String sql);
-  int prepareQuery(int dbPtr, String sql);
+  Future<int> executeSql(int dbPtr, String sql);
+  Future<int> prepareQuery(int dbPtr, String sql);
 
   void bindNull(int stmt, int index);
   void bindInt(int stmt, int index, int value);
@@ -130,7 +132,7 @@ abstract class DbasSqliteNativeInterface {
   void bindNameText(int stmt, String name, String value);
   void bindNameBlob(int stmt, String name, List<int> value);
 
-  int readRow(int stmt);
+  Future<int> readRow(int stmt);
   bool isNull(int stmt, int colIndex);
 
   String getColumnText(int stmt, int colIndex);
@@ -147,6 +149,6 @@ abstract class DbasSqliteNativeInterface {
   int getAffectedRows(int dbPtr);
   int getLastInsertedId(int dbPtr);
 
-  void closeReader(int stmt);
-  void closeDb(int dbPtr);
+  Future closeReader(int stmt);
+  Future closeDb(int dbPtr);
 }

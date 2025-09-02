@@ -1,7 +1,7 @@
+import 'dart:async';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
-
 import 'dbas_sqlite_native_interface.dart';
 
 @JS('globalThis')
@@ -9,79 +9,96 @@ external JSObject get _globalThis;
 
 @JS()
 @staticInterop
+class IndexedDB {}
+
+@JS()
+@staticInterop
+class IDBInfo {}
+
+@JS()
+@staticInterop
+class IDBDatabase {}
+
+@JS()
+@staticInterop
+class IDBTransaction {}
+
+@JS()
+@staticInterop
+class IDBObjectStore {}
+
+@JS()
+@staticInterop
 class DbasSqliteNativeWebJS {}
 
 extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
-  // ignore: non_constant_identifier_names
-  external int _OpenDb(String path);
-  // ignore: non_constant_identifier_names
-  external int _IsOpened(int dbPtr);
-  // ignore: non_constant_identifier_names
-  external int _ExecuteSql(int dbPtr, String sql);
-  // ignore: non_constant_identifier_names
-  external int _PrepareQuery(int dbPtr, String sql);
+  external JSPromise databaseExists();
+  external JSPromise attachDb(JSArray<JSNumber> content);
+  external JSPromise openDb();
+  external int isOpened(int dbPtr);
+  external int executeSql(int dbPtr, JSString sql);
+  external int prepareQuery(int dbPtr, JSString sql);
 
-  // ignore: non_constant_identifier_names
-  external void _BindNull(int stmt, int index);
-  // ignore: non_constant_identifier_names
-  external void _BindInt(int stmt, int index, int value);
-  // ignore: non_constant_identifier_names
-  external void _BindFloat(int stmt, int index, double value);
-  // ignore: non_constant_identifier_names
-  external void _BindDouble(int stmt, int index, double value);
-  // ignore: non_constant_identifier_names
-  external void _BindText(int stmt, int index, String value);
-  // ignore: non_constant_identifier_names
-  external void _BindBlob(int stmt, int index, JSArray<JSNumber> value);
+  external void bindNull(int stmt, int index);
+  external void bindInt(int stmt, int index, int value);
+  external void bindFloat(int stmt, int index, double value);
+  external void bindDouble(int stmt, int index, double value);
+  external void bindText(int stmt, int index, String value);
+  external void bindBlob(int stmt, int index, JSArray<JSNumber> value);
 
-  // ignore: non_constant_identifier_names
-  external void _BindNameNull(int stmt, String name);
-  // ignore: non_constant_identifier_names
-  external void _BindNameInt(int stmt, String name, int value);
-  // ignore: non_constant_identifier_names
-  external void _BindNameFloat(int stmt, String name, double value);
-  // ignore: non_constant_identifier_names
-  external void _BindNameDouble(int stmt, String name, double value);
-  // ignore: non_constant_identifier_names
-  external void _BindNameText(int stmt, String name, String value);
-  // ignore: non_constant_identifier_names
-  external void _BindNameBlob(int stmt, String name, JSArray<JSNumber> value);
+  external void bindNameNull(int stmt, JSString name);
+  external void bindNameInt(int stmt, JSString name, int value);
+  external void bindNameFloat(int stmt, JSString name, double value);
+  external void bindNameDouble(int stmt, JSString name, double value);
+  external void bindNameText(int stmt, JSString name, JSString value);
+  external void bindNameBlob(int stmt, JSString name, JSArray<JSNumber> value);
 
-  // ignore: non_constant_identifier_names
-  external int _ReadRow(int stmt);
-  // ignore: non_constant_identifier_names
-  external int _IsNull(int stmt, int colIndex);
+  external int readRow(int stmt);
+  external int isNull(int stmt, int colIndex);
 
-  // ignore: non_constant_identifier_names
-  external String _GetColumnText(int stmt, int colIndex);
-  // ignore: non_constant_identifier_names
-  external int _GetColumnInt(int stmt, int colIndex);
-  // ignore: non_constant_identifier_names
-  external double _GetColumnFloat(int stmt, int colIndex);
-  // ignore: non_constant_identifier_names
-  external double _GetColumnDouble(int stmt, int colIndex);
-  // ignore: non_constant_identifier_names
-  external JSArray<JSNumber> _GetColumnBlob(int stmt, int columnIndex);
-  // ignore: non_constant_identifier_names
-  external int _GetColumnBytes(int stmt, int columnIndex);
-  // ignore: non_constant_identifier_names
-  external String _GetColumnName(int stmt, int colIndex);
-  // ignore: non_constant_identifier_names
-  external int _GetColumnType(int stmt, int colIndex);
-  // ignore: non_constant_identifier_names
-  external int _GetColumnCount(int stmt);
+  external JSString getColumnText(int stmt, int colIndex);
+  external int getColumnInt(int stmt, int colIndex);
+  external double getColumnFloat(int stmt, int colIndex);
+  external double getColumnDouble(int stmt, int colIndex);
+  external JSArray<JSNumber> getColumnBlob(int stmt, int columnIndex);
+  external int getColumnBytes(int stmt, int columnIndex);
+  external JSString getColumnName(int stmt, int colIndex);
+  external int getColumnType(int stmt, int colIndex);
+  external int getColumnCount(int stmt);
 
-  // ignore: non_constant_identifier_names
-  external String _GetLastDbError(int dbPtr);
-  // ignore: non_constant_identifier_names
-  external int _GetAffectedRows(int dbPtr);
-  // ignore: non_constant_identifier_names
-  external int _GetLastInsertedId(int dbPtr);
+  external JSString getLastDbError(int dbPtr);
+  external int getAffectedRows(int dbPtr);
+  external int getLastInsertedId(int dbPtr);
 
-  // ignore: non_constant_identifier_names
-  external void _CloseReader(int stmt);
-  // ignore: non_constant_identifier_names
-  external void _CloseDb(int dbPtr);
+  external void closeReader(int stmt);
+  external JSPromise closeDb(int dbPtr);
+}
+
+extension GlobalThisExt on JSObject {
+  external IndexedDB get indexedDB;
+}
+
+extension IndexedDBExt on IndexedDB {
+  external JSPromise databases();
+  external JSPromise open(String name, int version, JSAny? options);
+}
+
+extension IDBInfoExt on IDBInfo {
+  external String? get name;
+}
+
+extension IDBDatabaseExt on IDBDatabase {
+  external IDBTransaction transaction(String storeName, String mode);
+}
+
+extension IDBTransactionExt on IDBTransaction {
+  external IDBObjectStore objectStore(String storeName);
+  external void commit();
+}
+
+extension IDBObjectStoreExt on IDBObjectStore {
+  external void put(JSAny value, JSAny key);
+  external void delete(JSAny key);
 }
 
 class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
@@ -127,31 +144,49 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
-  int openDb(String path) => _js._OpenDb(path);
+  Future<int> openDb(String path) async {
+    final result = await _js.openDb().toDart;
+    return result.dartify() as int;
+  }
 
   @override
-  bool isOpened(int dbPtr) => _js._IsOpened(dbPtr) == 1;
+  Future<bool> databaseExists(String fileName) async {
+    final result = await _js.databaseExists().toDart;
+    return result.dartify() as bool;
+  }
 
   @override
-  int executeSql(int dbPtr, String sql) => _js._ExecuteSql(dbPtr, sql);
+  Future attachDb(String fileName, List<int> content) async {
+    await _js.attachDb(_jsArrayFromIntList(content)).toDart;
+  }
 
   @override
-  int prepareQuery(int dbPtr, String sql) => _js._PrepareQuery(dbPtr, sql);
+  bool isOpened(int dbPtr) => _js.isOpened(dbPtr) == 1;
 
   @override
-  void bindNull(int stmt, int index) => _js._BindNull(stmt, index);
+  Future<int> executeSql(int dbPtr, String sql) async {
+    return _js.executeSql(dbPtr, sql.toJS);
+  }
 
   @override
-  void bindInt(int stmt, int index, int value) => _js._BindInt(stmt, index, value);
+  Future<int> prepareQuery(int dbPtr, String sql) async {
+    return _js.prepareQuery(dbPtr, sql.toJS);
+  }
 
   @override
-  void bindFloat(int stmt, int index, double value) => _js._BindFloat(stmt, index, value);
+  void bindNull(int stmt, int index) => _js.bindNull(stmt, index);
 
   @override
-  void bindDouble(int stmt, int index, double value) => _js._BindDouble(stmt, index, value);
+  void bindInt(int stmt, int index, int value) => _js.bindInt(stmt, index, value);
 
   @override
-  void bindText(int stmt, int index, String value) => _js._BindText(stmt, index, value);
+  void bindFloat(int stmt, int index, double value) => _js.bindFloat(stmt, index, value);
+
+  @override
+  void bindDouble(int stmt, int index, double value) => _js.bindDouble(stmt, index, value);
+
+  @override
+  void bindText(int stmt, int index, String value) => _js.bindText(stmt, index, value);
 
   JSArray<JSNumber> _jsArrayFromIntList(List<int> value) =>
       (value.map((e) => e.toJS).toList()).toJS;
@@ -161,83 +196,84 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   void bindBlob(int stmt, int index, List<int> value) {
-    _js._BindBlob(stmt, index, _jsArrayFromIntList(value));
+    _js.bindBlob(stmt, index, _jsArrayFromIntList(value));
   }
 
   @override
-  void bindNameNull(int stmt, String name) => _js._BindNameNull(stmt, name);
+  void bindNameNull(int stmt, String name) => _js.bindNameNull(stmt, name.toJS);
 
   @override
-  void bindNameInt(int stmt, String name, int value) => _js._BindNameInt(stmt, name, value);
+  void bindNameInt(int stmt, String name, int value) => _js.bindNameInt(stmt, name.toJS, value);
 
   @override
-  void bindNameFloat(int stmt, String name, double value) => _js._BindNameFloat(stmt, name, value);
+  void bindNameFloat(int stmt, String name, double value) => _js.bindNameFloat(stmt, name.toJS, value);
 
   @override
-  void bindNameDouble(int stmt, String name, double value) => _js._BindNameDouble(stmt, name, value);
+  void bindNameDouble(int stmt, String name, double value) => _js.bindNameDouble(stmt, name.toJS, value);
 
   @override
-  void bindNameText(int stmt, String name, String value) => _js._BindNameText(stmt, name, value);
+  void bindNameText(int stmt, String name, String value) => _js.bindNameText(stmt, name.toJS, value.toJS);
 
   @override
   void bindNameBlob(int stmt, String name, List<int> value) {
-    _js._BindNameBlob(stmt, name, _jsArrayFromIntList(value));
+    _js.bindNameBlob(stmt, name.toJS, _jsArrayFromIntList(value));
   }
 
   @override
-  int readRow(int stmt) => _js._ReadRow(stmt);
+  Future<int> readRow(int stmt) async {
+    return _js.readRow(stmt);
+  }
 
   @override
-  bool isNull(int stmt, int colIndex) => _js._IsNull(stmt, colIndex) == 1;
+  bool isNull(int stmt, int colIndex) => _js.isNull(stmt, colIndex) == 1;
 
   @override
-  String getColumnText(int stmt, int colIndex) => _js._GetColumnText(stmt, colIndex);
+  String getColumnText(int stmt, int colIndex) => _js.getColumnText(stmt, colIndex).toDart;
 
   @override
-  int getColumnInt(int stmt, int colIndex) => _js._GetColumnInt(stmt, colIndex);
+  int getColumnInt(int stmt, int colIndex) => _js.getColumnInt(stmt, colIndex);
 
   @override
-  double getColumnFloat(int stmt, int colIndex) => _js._GetColumnFloat(stmt, colIndex);
+  double getColumnFloat(int stmt, int colIndex) => _js.getColumnFloat(stmt, colIndex);
 
   @override
-  double getColumnDouble(int stmt, int colIndex) => _js._GetColumnDouble(stmt, colIndex);
+  double getColumnDouble(int stmt, int colIndex) => _js.getColumnDouble(stmt, colIndex);
 
   @override
   List<int> getColumnBlob(int stmt, int columnIndex) {
-    return _intListFromJSArray(_js._GetColumnBlob(stmt, columnIndex));
+    return _intListFromJSArray(_js.getColumnBlob(stmt, columnIndex));
   }
 
   @override
-  int getColumnBytes(int stmt, int columnIndex) => _js._GetColumnBytes(stmt, columnIndex);
+  int getColumnBytes(int stmt, int columnIndex) => _js.getColumnBytes(stmt, columnIndex);
 
   @override
-  String getColumnName(int stmt, int colIndex) => _js._GetColumnName(stmt, colIndex);
+  String getColumnName(int stmt, int colIndex) => _js.getColumnName(stmt, colIndex).toDart;
 
   @override
-  int getColumnType(int stmt, int colIndex) => _js._GetColumnType(stmt, colIndex);
+  int getColumnType(int stmt, int colIndex) => _js.getColumnType(stmt, colIndex);
 
   @override
-  int getColumnCount(int stmt) => _js._GetColumnCount(stmt);
+  int getColumnCount(int stmt) => _js.getColumnCount(stmt);
 
   @override
-  String getLastDbError(int dbPtr) => _js._GetLastDbError(dbPtr);
+  String getLastDbError(int dbPtr) {
+    return _js.getLastDbError(dbPtr).toDart;
+  }
 
   @override
-  int getAffectedRows(int dbPtr) => _js._GetAffectedRows(dbPtr);
+  int getAffectedRows(int dbPtr) => _js.getAffectedRows(dbPtr);
 
   @override
-  int getLastInsertedId(int dbPtr) => _js._GetLastInsertedId(dbPtr);
+  int getLastInsertedId(int dbPtr) => _js.getLastInsertedId(dbPtr);
 
   @override
-  void closeReader(int stmt) => _js._CloseReader(stmt);
+  Future closeReader(int stmt) async {
+    _js.closeReader(stmt);
+  }
 
   @override
   Future<void> closeDb(int dbPtr) async {
-    _js._CloseDb(dbPtr);
-
-    final persistDB = _globalThis.getProperty('persistDB'.toJS) as JSFunction?;
-    if (persistDB != null && _module != null) {
-      persistDB.callAsFunction(_globalThis, _module!);
-    }
+    await _js.closeDb(dbPtr).toDart;
   }
 }

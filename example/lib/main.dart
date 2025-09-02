@@ -16,6 +16,7 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   bool _isOpened = false;
+  bool _exists = false;
 
   @override
   void initState() {
@@ -30,12 +31,21 @@ class _MyAppState extends State<MyApp> {
     // We also handle the message potentially returning null.
     try {
       final DbasSqlite plugin = await DbasSqlite.getInstance(dbName: 'dbas.db');
-      final dbPath = await plugin.getAppDatabasePath();
-      print('Opening database at: $dbPath');
-      await plugin.openDb(dbPath);
+      print('Opening database');
+      await plugin.openDb();
       isOpened = plugin.isOpened();
+      _exists = await plugin.databaseExists();
+      print('Running create table');
+      await plugin.executeSql('''
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT UNIQUE NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      ''');
     } on Exception catch (e) {
-      print('Failed to open db: ${e.toString()}');
+      print('Failed: ${e.toString()}');
     }
 
     // If the widget was removed from the tree while the asynchronous platform
@@ -56,7 +66,7 @@ class _MyAppState extends State<MyApp> {
           title: const Text('Plugin example app'),
         ),
         body: Center(
-          child: Text('Is opened: $_isOpened\n'),
+          child: Text('Is opened: $_isOpened, exists: $_exists\n'),
         ),
       ),
     );

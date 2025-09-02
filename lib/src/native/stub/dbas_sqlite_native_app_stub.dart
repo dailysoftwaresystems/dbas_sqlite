@@ -16,7 +16,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int openDb(String path) =>
+  Future<int> openDb(String path) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
@@ -24,11 +24,19 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int executeSql(int dbPtr, String sql) =>
+  Future<bool> databaseExists(String fileName) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int prepareQuery(int dbPtr, String sql) =>
+  Future attachDb(String fileName, List<int> content) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<int> executeSql(int dbPtr, String sql) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<int> prepareQuery(int dbPtr, String sql) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
@@ -80,7 +88,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int readRow(int stmt) =>
+  Future<int> readRow(int stmt) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
@@ -136,7 +144,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void closeReader(int stmt) =>
+  Future<void> closeReader(int stmt) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override

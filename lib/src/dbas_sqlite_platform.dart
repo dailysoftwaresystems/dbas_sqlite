@@ -6,96 +6,114 @@ import 'package:decimal/decimal.dart';
 
 final class DbasSqlitePlatform {
   static DbasSqlitePlatform? _instance;
-  static DbasSqliteNativeInterface? _delegate;
+  static final Map<String, DbasSqliteNativeInterface> _delegate = {};
 
   DbasSqlitePlatform._dbasSqlitePlatform();
 
   static Future<DbasSqlitePlatform> getInstance({String dbName = 'dbas.db'}) async {
     _getInterface(dbName: dbName);
 
-    if (_instance != null) {
-      return _instance!;
-    }
-
-    _instance = DbasSqlitePlatform._dbasSqlitePlatform();
-    await _instance!.initialize();
+    _instance ??= DbasSqlitePlatform._dbasSqlitePlatform();
+    await _instance!.initialize(dbName);
     return _instance!;
   }
 
   static DbasSqliteNativeInterface _getInterface({String dbName = 'dbas.db'}) {
-    _delegate ??= DbasSqliteNativeInterface.getInstance(dbName: dbName);
-    return _delegate!;
+    if (!_delegate.containsKey(dbName)) {
+      _delegate[dbName] = DbasSqliteNativeInterface.getInstance(dbName: dbName);
+    }
+
+    return _delegate[dbName]!;
   }
 
-  String get dbName => _delegate!.dbName;
+  bool isTest(String name) => _delegate[name]!.isTest;
 
-  bool get isTest => _delegate!.isTest;
+  Future<void> initialize(String name) async => await _delegate[name]!.initialize();
 
-  Future<void> initialize() => _delegate!.initialize();
+  Future<DbasSqliteDb> openDb(String fileName) async {
+    String dbName = _getDbName(fileName);
+    final dbPtr = await _delegate[dbName]!.openDb(fileName);
 
-  Future<DbasSqliteDb> openDb(String path) async {
-    final dbPtr = _delegate!.openDb(path);
-
-    final isOpened = _delegate!.isOpened(dbPtr);
-    final lastError = isOpened ? null : _delegate!.getLastDbError(dbPtr);
+    final isOpened = _delegate[dbName]!.isOpened(dbPtr);
+    final lastError = isOpened ? null : _delegate[dbName]!.getLastDbError(dbPtr);
 
     if (dbPtr == 0 || !isOpened) {
       String lastErrorMessage = (lastError != null && lastError.isNotEmpty)
           ? lastError
           : 'Unknown error';
-      throw Exception('Failed to open db in: $path. Reason: $lastErrorMessage');
+      throw Exception('Failed to open db in: $fileName. Reason: $lastErrorMessage');
     }
 
-    return DbasSqliteDb(dbPtr);
+    return DbasSqliteDb(dbName, dbPtr);
   }
 
-  bool isOpened(DbasSqliteDb db) => _delegate!.isOpened(db.ptr);
+  bool isOpened(DbasSqliteDb db) => _delegate[db.name]!.isOpened(db.ptr);
+
+  String _getDbName(String fileName) {
+    String dbName = fileName;
+    if (fileName.contains('/')) {
+      dbName = fileName.split('/').last;
+    } else if (fileName.contains('\\')) {
+      dbName = fileName.split('\\').last;
+    }
+    return dbName;
+  }
+
+  Future<bool> databaseExists(String fileName) async {
+    String dbName = _getDbName(fileName);
+    return await _delegate[dbName]!.databaseExists(fileName);
+  }
+
+  Future attachDb(String fileName, List<int> content) async {
+    String dbName = _getDbName(fileName);
+    await _delegate[dbName]!.attachDb(fileName, content);
+  }
 
   Future<int> executeSql(DbasSqliteDb db, String sql) async =>
-      _delegate!.executeSql(db.ptr, sql);
+      await _delegate[db.name]!.executeSql(db.ptr, sql);
 
   Future<int> prepareQuery(DbasSqliteDb db, String sql) async =>
-      _delegate!.prepareQuery(db.ptr, sql);
+      await _delegate[db.name]!.prepareQuery(db.ptr, sql);
 
-  void bindNull(DbasSqliteDb db, int index) => _delegate!.bindNull(db.ptr, index);
-  void bindInt(DbasSqliteDb db, int index, int value) => _delegate!.bindInt(db.ptr, index, value);
-  void bindFloat(DbasSqliteDb db, int index, double value) => _delegate!.bindFloat(db.ptr, index, value);
-  void bindDouble(DbasSqliteDb db, int index, double value) => _delegate!.bindDouble(db.ptr, index, value);
-  void bindDecimal(DbasSqliteDb db, int index, Decimal value) => _delegate!.bindDouble(db.ptr, index, double.parse(value.toString()));
-  void bindText(DbasSqliteDb db, int index, String value) => _delegate!.bindText(db.ptr, index, value);
+  void bindNull(DbasSqliteDb db, int index) => _delegate[db.name]!.bindNull(db.ptr, index);
+  void bindInt(DbasSqliteDb db, int index, int value) => _delegate[db.name]!.bindInt(db.ptr, index, value);
+  void bindFloat(DbasSqliteDb db, int index, double value) => _delegate[db.name]!.bindFloat(db.ptr, index, value);
+  void bindDouble(DbasSqliteDb db, int index, double value) => _delegate[db.name]!.bindDouble(db.ptr, index, value);
+  void bindDecimal(DbasSqliteDb db, int index, Decimal value) => _delegate[db.name]!.bindDouble(db.ptr, index, double.parse(value.toString()));
+  void bindText(DbasSqliteDb db, int index, String value) => _delegate[db.name]!.bindText(db.ptr, index, value);
   void bindBlob(DbasSqliteDb db, int index, Uint8List value) =>
-      _delegate!.bindBlob(db.ptr, index, Uint8List.fromList(value));
+      _delegate[db.name]!.bindBlob(db.ptr, index, Uint8List.fromList(value));
 
-  void bindNameNull(DbasSqliteDb db, String name) => _delegate!.bindNameNull(db.ptr, name);
-  void bindNameInt(DbasSqliteDb db, String name, int value) => _delegate!.bindNameInt(db.ptr, name, value);
-  void bindNameFloat(DbasSqliteDb db, String name, double value) => _delegate!.bindNameFloat(db.ptr, name, value);
-  void bindNameDouble(DbasSqliteDb db, String name, double value) => _delegate!.bindNameDouble(db.ptr, name, value);
-  void bindNameDecimal(DbasSqliteDb db, String name, Decimal value) => _delegate!.bindNameDouble(db.ptr, name, double.parse(value.toString()));
-  void bindNameText(DbasSqliteDb db, String name, String value) => _delegate!.bindNameText(db.ptr, name, value);
+  void bindNameNull(DbasSqliteDb db, String name) => _delegate[db.name]!.bindNameNull(db.ptr, name);
+  void bindNameInt(DbasSqliteDb db, String name, int value) => _delegate[db.name]!.bindNameInt(db.ptr, name, value);
+  void bindNameFloat(DbasSqliteDb db, String name, double value) => _delegate[db.name]!.bindNameFloat(db.ptr, name, value);
+  void bindNameDouble(DbasSqliteDb db, String name, double value) => _delegate[db.name]!.bindNameDouble(db.ptr, name, value);
+  void bindNameDecimal(DbasSqliteDb db, String name, Decimal value) => _delegate[db.name]!.bindNameDouble(db.ptr, name, double.parse(value.toString()));
+  void bindNameText(DbasSqliteDb db, String name, String value) => _delegate[db.name]!.bindNameText(db.ptr, name, value);
   void bindNameBlob(DbasSqliteDb db, String name, Uint8List value) =>
-      _delegate!.bindNameBlob(db.ptr, name, Uint8List.fromList(value));
+      _delegate[db.name]!.bindNameBlob(db.ptr, name, Uint8List.fromList(value));
 
-  int readRow(DbasSqliteDb db) => _delegate!.readRow(db.ptr);
-  bool isNull(DbasSqliteDb db, int colIndex) => _delegate!.isNull(db.ptr, colIndex);
+  Future<int> readRow(DbasSqliteDb db) async => await _delegate[db.name]!.readRow(db.ptr);
+  bool isNull(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.isNull(db.ptr, colIndex);
 
-  String getColumnText(DbasSqliteDb db, int colIndex) => _delegate!.getColumnText(db.ptr, colIndex);
-  int getColumnInt(DbasSqliteDb db, int colIndex) => _delegate!.getColumnInt(db.ptr, colIndex);
-  double getColumnFloat(DbasSqliteDb db, int colIndex) => _delegate!.getColumnFloat(db.ptr, colIndex);
-  double getColumnDouble(DbasSqliteDb db, int colIndex) => _delegate!.getColumnDouble(db.ptr, colIndex);
+  String getColumnText(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnText(db.ptr, colIndex);
+  int getColumnInt(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnInt(db.ptr, colIndex);
+  double getColumnFloat(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnFloat(db.ptr, colIndex);
+  double getColumnDouble(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnDouble(db.ptr, colIndex);
   Uint8List getColumnBlob(DbasSqliteDb db, int columnIndex) =>
-      Uint8List.fromList(_delegate!.getColumnBlob(db.ptr, columnIndex));
+      Uint8List.fromList(_delegate[db.name]!.getColumnBlob(db.ptr, columnIndex));
 
-  int getColumnBytes(DbasSqliteDb db, int columnIndex) => _delegate!.getColumnBytes(db.ptr, columnIndex);
-  int getColumnType(DbasSqliteDb db, int colIndex) => _delegate!.getColumnType(db.ptr, colIndex);
-  int getColumnCount(DbasSqliteDb db) => _delegate!.getColumnCount(db.ptr);
+  int getColumnBytes(DbasSqliteDb db, int columnIndex) => _delegate[db.name]!.getColumnBytes(db.ptr, columnIndex);
+  int getColumnType(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnType(db.ptr, colIndex);
+  int getColumnCount(DbasSqliteDb db) => _delegate[db.name]!.getColumnCount(db.ptr);
 
   String getLastDbError(DbasSqliteDb db) {
-    final err = _delegate!.getLastDbError(db.ptr);
+    final err = _delegate[db.name]!.getLastDbError(db.ptr);
     return (err.isNotEmpty) ? err : 'OK';
   }
-  int getAffectedRows(DbasSqliteDb db) => _delegate!.getAffectedRows(db.ptr);
-  int getLastInsertedId(DbasSqliteDb db) => _delegate!.getLastInsertedId(db.ptr);
+  int getAffectedRows(DbasSqliteDb db) => _delegate[db.name]!.getAffectedRows(db.ptr);
+  int getLastInsertedId(DbasSqliteDb db) => _delegate[db.name]!.getLastInsertedId(db.ptr);
 
-  void closeReader(DbasSqliteDb db) => _delegate!.closeReader(db.ptr);
-  Future<void> closeDb(DbasSqliteDb db) async => _delegate!.closeDb(db.ptr);
+  Future closeReader(DbasSqliteDb db) async => await _delegate[db.name]!.closeReader(db.ptr);
+  Future closeDb(DbasSqliteDb db) async => await _delegate[db.name]!.closeDb(db.ptr);
 }
