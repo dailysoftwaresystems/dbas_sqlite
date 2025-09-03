@@ -267,6 +267,10 @@ class DbasSqlite {
     return _platform.getColumnCount(_db!);
   }
 
+  int getLastInsertedId() {
+    return _platform.getLastInsertedId(_db!);
+  }
+
   void _bindParameters(List<Object?>? parameters) {
     if (parameters != null && parameters.isNotEmpty) {
       for (int i = 0; i < parameters.length; i++) {
