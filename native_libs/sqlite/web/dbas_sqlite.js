@@ -454,6 +454,48 @@ class DbasSqliteWrapper {
         await this.persistDB();
     }
 
+    async dropDb() {
+        try {
+            if (this.DbasSqliteWrapper.fileExists(this.dbPath)) this.module.FS.unlink(this.dbPath);
+            ['-wal','-shm','-journal'].forEach(ext => {
+                const p = this.rawDbPath + ext;
+                try { if (this.DbasSqliteWrapper.fileExists(p)) this.module.FS.unlink(p); } catch (_) {}
+            });
+        } catch (e) {
+            console.error("❌ Error unlinking database files: " + e.message);
+        }
+
+        if (this.isFsAvailable() && this.module.FS.syncfs) {
+            await new Promise((resolve, reject) => {
+                this.module.FS.syncfs(false, (err) => err ? reject(err) : resolve());
+            });
+        }
+
+        if (this.DbasSqliteWrapper.checkIndexedDb()) {
+            const req = indexedDB.open(this.fsDBName, this.version);
+            req.onsuccess = (ev) => {
+                const db = ev.target.result;
+                if (db.objectStoreNames.contains(this.storeName)) {
+                    const tx = db.transaction([this.storeName], 'readwrite');
+                    const store = tx.objectStore(this.storeName);
+                    store.delete(this.dbPath);
+                    ['-wal','-shm','-journal'].forEach(ext => store.delete(this.rawDbPath + ext));
+                }
+                try { db.close(); } catch (e) {
+                    console.error("❌ Error closing database: " + e.message);
+                }
+            };
+        }
+
+        try {
+            if (this.module && this.module.FS && this.module.FS.unmount) {
+                this.module.FS.unmount('/data');
+            }
+        } catch (e) {
+            console.error("❌ Error unmounting filesystem: " + e.message);
+        }
+    }
+
     allocString(str) {
         const len = this.module.lengthBytesUTF8(str) + 1;
         const ptr = this.module._malloc(len);
@@ -717,6 +759,8 @@ globalThis.stopAutoPersist = function() {
     autoInterval = null;
   }
 };
+
+globalThis.dropDb = globalThis.DbasSqliteWrapper.dropDb;
 
 // Auto-persist on page unload (if in browser environment)
 if (typeof globalThis.window !== 'undefined') {
