@@ -114,6 +114,7 @@ abstract class DbasSqliteNativeInterface {
   bool isOpened(int dbPtr);
   Future<bool> databaseExists(String fileName);
   Future attachDb(String fileName, List<int> content);
+  Future<void> dropDb(String fileName);
 
   Future<int> executeSql(int dbPtr, String sql);
   Future<int> prepareQuery(int dbPtr, String sql);

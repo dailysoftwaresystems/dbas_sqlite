@@ -104,5 +104,12 @@ void main() async {
     expect(await dbasSqlite.databaseExists(), isTrue, reason: 'DB file should exist after opening the database (native).');
     expect(await dbFile.exists(), isTrue, reason: 'DB file should exist after opening the database.');
     expect(dbasSqlite.isOpened(), isTrue, reason: 'Database should be opened after calling openDb.');
+
+    await dbasSqlite.closeDb();
+    await dbasSqlite.dropDb();
+
+    expect(await dbasSqlite.databaseExists(), isFalse, reason: 'DB file should not exist after opening the database (native).');
+    expect(await dbFile.exists(), isFalse, reason: 'DB file should not exist after opening the database.');
+    expect(dbasSqlite.isOpened(), isFalse, reason: 'Database should not be opened after calling openDb.');
   });
 }

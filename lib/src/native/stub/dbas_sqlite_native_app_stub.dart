@@ -32,6 +32,9 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
+  Future<void> dropDb(String fileName) => throw UnsupportedError('Not supported in web.');
+
+  @override
   Future<int> executeSql(int dbPtr, String sql) =>
       throw UnsupportedError('Not supported in native app.');
 

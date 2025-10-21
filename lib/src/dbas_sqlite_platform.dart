@@ -47,6 +47,11 @@ final class DbasSqlitePlatform {
     return DbasSqliteDb(dbName, dbPtr);
   }
 
+  Future dropDb(String fileName) async {
+    final dbName = _getDbName(fileName);
+    await _delegate[dbName]!.dropDb(fileName);
+  }
+
   bool isOpened(DbasSqliteDb db) => _delegate[db.name]!.isOpened(db.ptr);
 
   String _getDbName(String fileName) {

@@ -123,6 +123,13 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
 
   @override
   Future attachDb(String fileName, List<int> content) async {
+    await dropDb(fileName);
+    final dbFile = File(fileName);
+    await dbFile.writeAsBytes(content);
+  }
+
+  @override
+  Future<void> dropDb(String fileName) async {
     final dbFile = File(fileName);
     if (await dbFile.exists()) {
       await dbFile.delete();
@@ -135,8 +142,6 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
     if (await shmFile.exists()) {
       await shmFile.delete();
     }
-
-    await dbFile.writeAsBytes(content);
   }
 
   @override

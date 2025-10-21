@@ -161,6 +161,22 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
+  Future dropDb(String fileName) async {
+    try {
+      final dropDb = _globalThis.getProperty('dropDb'.toJS) as JSFunction?;
+
+      if (dropDb == null) {
+        throw Exception('Failed to load DbasSqlite persistence functionality.');
+      }
+
+      final modulePromise = dropDb.callAsFunction(_globalThis) as JSPromise;
+      await modulePromise.toDart;
+    } catch (e) {
+      throw Exception('Failed to load DbasSqlite module: $e');
+    }
+  }
+
+  @override
   bool isOpened(int dbPtr) => _js.isOpened(dbPtr) == 1;
 
   @override
