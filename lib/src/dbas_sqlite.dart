@@ -264,7 +264,7 @@ class DbasSqlite {
     return getColumnBlob(idx);
   }
 
-  String getColumnName(int stmt, int columnIndex) {
+  String getColumnName(int columnIndex) {
     return _platform.getColumnName(_db!, columnIndex);
   }
 
