@@ -109,6 +109,7 @@ final class DbasSqlitePlatform {
       Uint8List.fromList(_delegate[db.name]!.getColumnBlob(db.ptr, columnIndex));
 
   int getColumnBytes(DbasSqliteDb db, int columnIndex) => _delegate[db.name]!.getColumnBytes(db.ptr, columnIndex);
+  String getColumnName(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnName(db.ptr, colIndex);
   int getColumnType(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnType(db.ptr, colIndex);
   int getColumnCount(DbasSqliteDb db) => _delegate[db.name]!.getColumnCount(db.ptr);
 
