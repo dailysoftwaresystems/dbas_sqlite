@@ -161,6 +161,16 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
+  Future<List<int>> getContent(String fileName) async {
+    final fs = _module!.getProperty('FS'.toJS);
+    final args = JSArray();
+    args.add(fileName.toJS);
+    final jsBytes = (fs as JSObject).callMethod('readFile'.toJS, args);
+    final buffer = (jsBytes as JSUint8Array).toDart;
+    return buffer;
+  }
+
+  @override
   Future dropDb(String fileName) async {
     try {
       final dropDb = _globalThis.getProperty('dropDb'.toJS) as JSFunction?;

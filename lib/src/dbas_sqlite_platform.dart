@@ -74,6 +74,11 @@ final class DbasSqlitePlatform {
     await _delegate[dbName]!.attachDb(fileName, content);
   }
 
+  Future<List<int>> getContent(String fileName) async {
+    String dbName = _getDbName(fileName);
+    return await _delegate[dbName]!.getContent(fileName);
+  }
+
   Future<int> executeSql(DbasSqliteDb db, String sql) async =>
       await _delegate[db.name]!.executeSql(db.ptr, sql);
 

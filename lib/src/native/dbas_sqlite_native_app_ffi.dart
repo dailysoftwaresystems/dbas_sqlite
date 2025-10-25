@@ -210,6 +210,12 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   }
 
   @override
+  Future<List<int>> getContent(String fileName) async {
+    final dbFile = File(fileName);
+    return await dbFile.readAsBytes();
+  }
+
+  @override
   Future<void> dropDb(String fileName) async {
     final dbFile = File(fileName);
     if (await dbFile.exists()) {

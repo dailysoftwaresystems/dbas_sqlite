@@ -76,6 +76,11 @@ class DbasSqlite {
     return instance;
   }
 
+  Future<List<int>> getContent() async {
+    String fileName = await getAppDatabasePath(dbName: dbName);
+    return _platform.getContent(fileName);
+  }
+
   Future dropDb() async {
     String fileName = await getAppDatabasePath(dbName: dbName);
     await _platform.dropDb(fileName);

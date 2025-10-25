@@ -28,7 +28,12 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
-  Future<void> dropDb(String fileName) => throw UnsupportedError('Not supported in web.');
+  Future<List<int>> getContent(String fileName) =>
+      throw UnsupportedError('Not supported in web.');
+
+  @override
+  Future<void> dropDb(String fileName) =>
+      throw UnsupportedError('Not supported in web.');
 
   @override
   bool isOpened(int dbPtr) =>
