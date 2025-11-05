@@ -155,6 +155,7 @@ class DbasSqlite {
   Future<bool> readRow() async {
     int result = await _platform.readRow(_db!);
     if (!_sqliteSuccessResults.contains(result)) {
+      _platform.closeReader(_db!);
       String? error = _platform.getLastDbError(_db!);
       if (error == null && result == 20) {
         error = 'Misuse: possibly missing or invalid bind.';
