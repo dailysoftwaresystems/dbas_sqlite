@@ -82,6 +82,10 @@ class DbasSqlite {
   }
 
   Future dropDb() async {
+    if (!await databaseExists()) {
+      return;
+    }
+
     if (isOpened()) {
       await closeDb();
     }
