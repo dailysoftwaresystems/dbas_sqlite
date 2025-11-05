@@ -164,12 +164,7 @@ class DbasSqlite {
       throw Exception(["It was not possible to run the query ($readResult): error"]);
     }
 
-    final result = readResult == _sqliteRow;
-    if (!result) {
-      await _platform.closeReader(_db!);
-    }
-
-    return result;
+    return readResult == _sqliteRow;
   }
 
   bool isColumnNull(int idx) {
@@ -369,5 +364,9 @@ class DbasSqlite {
     }
     await _platform.closeDb(_db!);
     _db = null;
+  }
+
+  Future<void> closeReader() async {
+    await _platform.closeReader(_db!);
   }
 }
