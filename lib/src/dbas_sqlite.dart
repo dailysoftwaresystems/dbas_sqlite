@@ -153,18 +153,23 @@ class DbasSqlite {
   }
 
   Future<bool> readRow() async {
-    int result = await _platform.readRow(_db!);
-    if (!_sqliteSuccessResults.contains(result)) {
+    int readResult = await _platform.readRow(_db!);
+    if (!_sqliteSuccessResults.contains(readResult)) {
       String? error = _platform.getLastDbError(_db!);
       await _platform.closeReader(_db!);
-      if (error == null && result == 20) {
+      if (error == null && readResult == 20) {
         error = 'Misuse: possibly missing or invalid bind.';
       }
-      error ??= 'Unknown error ($result).';
-      throw Exception(["It was not possible to run the query ($result): error"]);
+      error ??= 'Unknown error ($readResult).';
+      throw Exception(["It was not possible to run the query ($readResult): error"]);
     }
 
-    return result == _sqliteRow;
+    final result = readResult == _sqliteRow;
+    if (!result) {
+      await _platform.closeReader(_db!);
+    }
+
+    return result;
   }
 
   bool isColumnNull(int idx) {
