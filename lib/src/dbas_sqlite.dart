@@ -82,6 +82,10 @@ class DbasSqlite {
   }
 
   Future dropDb() async {
+    if (isOpened()) {
+      await closeDb();
+    }
+
     String fileName = await getAppDatabasePath(dbName: dbName);
     await _platform.dropDb(fileName);
   }
