@@ -444,7 +444,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
 
   @override
   String getLastDbError(int dbPtr) {
-    final errorPtr = _getLastDbError(_dbPtr(dbPtr));
+    final errorPtr = _getLastDbError(_dbPtr(dbPtr, checkOpened: false));
 
     if (errorPtr == nullptr || errorPtr.address == 0) {
       return 'No SQLite error found.';
