@@ -48,95 +48,95 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNull(int stmt, int index) =>
+  int bindNull(int dbPtr, int index) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindInt(int stmt, int index, int value) =>
+  int bindInt(int dbPtr, int index, int value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindFloat(int stmt, int index, double value) =>
+  int bindFloat(int dbPtr, int index, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindDouble(int stmt, int index, double value) =>
+  int bindDouble(int dbPtr, int index, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindText(int stmt, int index, String value) =>
+  int bindText(int dbPtr, int index, String value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindBlob(int stmt, int index, List<int> value) =>
+  int bindBlob(int dbPtr, int index, List<int> value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameNull(int stmt, String name) =>
+  int bindNameNull(int dbPtr, String name) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameInt(int stmt, String name, int value) =>
+  int bindNameInt(int dbPtr, String name, int value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameFloat(int stmt, String name, double value) =>
+  int bindNameFloat(int dbPtr, String name, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameDouble(int stmt, String name, double value) =>
+  int bindNameDouble(int dbPtr, String name, double value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameText(int stmt, String name, String value) =>
+  int bindNameText(int dbPtr, String name, String value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  void bindNameBlob(int stmt, String name, List<int> value) =>
+  int bindNameBlob(int dbPtr, String name, List<int> value) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Future<int> readRow(int stmt) =>
+  Future<int> readRow(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  bool isNull(int stmt, int colIndex) =>
+  bool isNull(int dbPtr, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  String getColumnText(int stmt, int colIndex) =>
+  String getColumnText(int dbPtr, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnInt(int stmt, int colIndex) =>
+  int getColumnInt(int dbPtr, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  double getColumnFloat(int stmt, int colIndex) =>
+  double getColumnFloat(int dbPtr, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  double getColumnDouble(int stmt, int colIndex) =>
+  double getColumnDouble(int dbPtr, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  List<int> getColumnBlob(int stmt, int columnIndex) =>
+  List<int> getColumnBlob(int dbPtr, int columnIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnBytes(int stmt, int columnIndex) =>
+  int getColumnBytes(int dbPtr, int columnIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  String getColumnName(int stmt, int columnIndex) =>
+  String getColumnName(int dbPtr, int columnIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnType(int stmt, int colIndex) =>
+  int getColumnType(int dbPtr, int colIndex) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  int getColumnCount(int stmt) =>
+  int getColumnCount(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
@@ -152,7 +152,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Future<void> closeReader(int stmt) =>
+  Future<void> closeReader(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override

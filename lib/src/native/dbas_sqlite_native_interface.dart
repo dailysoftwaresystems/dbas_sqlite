@@ -120,37 +120,37 @@ abstract class DbasSqliteNativeInterface {
   Future<int> executeSql(int dbPtr, String sql);
   Future<int> prepareQuery(int dbPtr, String sql);
 
-  void bindNull(int stmt, int index);
-  void bindInt(int stmt, int index, int value);
-  void bindFloat(int stmt, int index, double value);
-  void bindDouble(int stmt, int index, double value);
-  void bindText(int stmt, int index, String value);
-  void bindBlob(int stmt, int index, List<int> value);
+  int bindNull(int dbPtr, int index);
+  int bindInt(int dbPtr, int index, int value);
+  int bindFloat(int dbPtr, int index, double value);
+  int bindDouble(int dbPtr, int index, double value);
+  int bindText(int dbPtr, int index, String value);
+  int bindBlob(int dbPtr, int index, List<int> value);
 
-  void bindNameNull(int stmt, String name);
-  void bindNameInt(int stmt, String name, int value);
-  void bindNameFloat(int stmt, String name, double value);
-  void bindNameDouble(int stmt, String name, double value);
-  void bindNameText(int stmt, String name, String value);
-  void bindNameBlob(int stmt, String name, List<int> value);
+  int bindNameNull(int dbPtr, String name);
+  int bindNameInt(int dbPtr, String name, int value);
+  int bindNameFloat(int dbPtr, String name, double value);
+  int bindNameDouble(int dbPtr, String name, double value);
+  int bindNameText(int dbPtr, String name, String value);
+  int bindNameBlob(int dbPtr, String name, List<int> value);
 
-  Future<int> readRow(int stmt);
-  bool isNull(int stmt, int colIndex);
+  Future<int> readRow(int dbPtr);
+  bool isNull(int dbPtr, int colIndex);
 
-  String getColumnText(int stmt, int colIndex);
-  int getColumnInt(int stmt, int colIndex);
-  double getColumnFloat(int stmt, int colIndex);
-  double getColumnDouble(int stmt, int colIndex);
-  List<int> getColumnBlob(int stmt, int columnIndex);
-  int getColumnBytes(int stmt, int columnIndex);
-  String getColumnName(int stmt, int columnIndex);
-  int getColumnType(int stmt, int colIndex);
-  int getColumnCount(int stmt);
+  String getColumnText(int dbPtr, int colIndex);
+  int getColumnInt(int dbPtr, int colIndex);
+  double getColumnFloat(int dbPtr, int colIndex);
+  double getColumnDouble(int dbPtr, int colIndex);
+  List<int> getColumnBlob(int dbPtr, int columnIndex);
+  int getColumnBytes(int dbPtr, int columnIndex);
+  String getColumnName(int dbPtr, int columnIndex);
+  int getColumnType(int dbPtr, int colIndex);
+  int getColumnCount(int dbPtr);
 
   String getLastDbError(int dbPtr);
   int getAffectedRows(int dbPtr);
   int getLastInsertedId(int dbPtr);
 
-  Future closeReader(int stmt);
+  Future closeReader(int dbPtr);
   Future closeDb(int dbPtr);
 }

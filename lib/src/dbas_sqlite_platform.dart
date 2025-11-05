@@ -85,22 +85,22 @@ final class DbasSqlitePlatform {
   Future<int> prepareQuery(DbasSqliteDb db, String sql) async =>
       await _delegate[db.name]!.prepareQuery(db.ptr, sql);
 
-  void bindNull(DbasSqliteDb db, int index) => _delegate[db.name]!.bindNull(db.ptr, index);
-  void bindInt(DbasSqliteDb db, int index, int value) => _delegate[db.name]!.bindInt(db.ptr, index, value);
-  void bindFloat(DbasSqliteDb db, int index, double value) => _delegate[db.name]!.bindFloat(db.ptr, index, value);
-  void bindDouble(DbasSqliteDb db, int index, double value) => _delegate[db.name]!.bindDouble(db.ptr, index, value);
-  void bindDecimal(DbasSqliteDb db, int index, Decimal value) => _delegate[db.name]!.bindDouble(db.ptr, index, double.parse(value.toString()));
-  void bindText(DbasSqliteDb db, int index, String value) => _delegate[db.name]!.bindText(db.ptr, index, value);
-  void bindBlob(DbasSqliteDb db, int index, Uint8List value) =>
+  int bindNull(DbasSqliteDb db, int index) => _delegate[db.name]!.bindNull(db.ptr, index);
+  int bindInt(DbasSqliteDb db, int index, int value) => _delegate[db.name]!.bindInt(db.ptr, index, value);
+  int bindFloat(DbasSqliteDb db, int index, double value) => _delegate[db.name]!.bindFloat(db.ptr, index, value);
+  int bindDouble(DbasSqliteDb db, int index, double value) => _delegate[db.name]!.bindDouble(db.ptr, index, value);
+  int bindDecimal(DbasSqliteDb db, int index, Decimal value) => _delegate[db.name]!.bindDouble(db.ptr, index, double.parse(value.toString()));
+  int bindText(DbasSqliteDb db, int index, String value) => _delegate[db.name]!.bindText(db.ptr, index, value);
+  int bindBlob(DbasSqliteDb db, int index, Uint8List value) =>
       _delegate[db.name]!.bindBlob(db.ptr, index, Uint8List.fromList(value));
 
-  void bindNameNull(DbasSqliteDb db, String name) => _delegate[db.name]!.bindNameNull(db.ptr, name);
-  void bindNameInt(DbasSqliteDb db, String name, int value) => _delegate[db.name]!.bindNameInt(db.ptr, name, value);
-  void bindNameFloat(DbasSqliteDb db, String name, double value) => _delegate[db.name]!.bindNameFloat(db.ptr, name, value);
-  void bindNameDouble(DbasSqliteDb db, String name, double value) => _delegate[db.name]!.bindNameDouble(db.ptr, name, value);
-  void bindNameDecimal(DbasSqliteDb db, String name, Decimal value) => _delegate[db.name]!.bindNameDouble(db.ptr, name, double.parse(value.toString()));
-  void bindNameText(DbasSqliteDb db, String name, String value) => _delegate[db.name]!.bindNameText(db.ptr, name, value);
-  void bindNameBlob(DbasSqliteDb db, String name, Uint8List value) =>
+  int bindNameNull(DbasSqliteDb db, String name) => _delegate[db.name]!.bindNameNull(db.ptr, name);
+  int bindNameInt(DbasSqliteDb db, String name, int value) => _delegate[db.name]!.bindNameInt(db.ptr, name, value);
+  int bindNameFloat(DbasSqliteDb db, String name, double value) => _delegate[db.name]!.bindNameFloat(db.ptr, name, value);
+  int bindNameDouble(DbasSqliteDb db, String name, double value) => _delegate[db.name]!.bindNameDouble(db.ptr, name, value);
+  int bindNameDecimal(DbasSqliteDb db, String name, Decimal value) => _delegate[db.name]!.bindNameDouble(db.ptr, name, double.parse(value.toString()));
+  int bindNameText(DbasSqliteDb db, String name, String value) => _delegate[db.name]!.bindNameText(db.ptr, name, value);
+  int bindNameBlob(DbasSqliteDb db, String name, Uint8List value) =>
       _delegate[db.name]!.bindNameBlob(db.ptr, name, Uint8List.fromList(value));
 
   Future<int> readRow(DbasSqliteDb db) async => await _delegate[db.name]!.readRow(db.ptr);

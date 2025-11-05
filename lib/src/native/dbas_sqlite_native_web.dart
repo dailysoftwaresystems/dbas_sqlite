@@ -39,38 +39,38 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external int executeSql(int dbPtr, JSString sql);
   external int prepareQuery(int dbPtr, JSString sql);
 
-  external void bindNull(int stmt, int index);
-  external void bindInt(int stmt, int index, int value);
-  external void bindFloat(int stmt, int index, double value);
-  external void bindDouble(int stmt, int index, double value);
-  external void bindText(int stmt, int index, String value);
-  external void bindBlob(int stmt, int index, JSArray<JSNumber> value);
+  external int bindNull(int dbPtr, int index);
+  external int bindInt(int dbPtr, int index, int value);
+  external int bindFloat(int dbPtr, int index, double value);
+  external int bindDouble(int dbPtr, int index, double value);
+  external int bindText(int dbPtr, int index, String value);
+  external int bindBlob(int dbPtr, int index, JSArray<JSNumber> value);
 
-  external void bindNameNull(int stmt, JSString name);
-  external void bindNameInt(int stmt, JSString name, int value);
-  external void bindNameFloat(int stmt, JSString name, double value);
-  external void bindNameDouble(int stmt, JSString name, double value);
-  external void bindNameText(int stmt, JSString name, JSString value);
-  external void bindNameBlob(int stmt, JSString name, JSArray<JSNumber> value);
+  external int bindNameNull(int dbPtr, JSString name);
+  external int bindNameInt(int dbPtr, JSString name, int value);
+  external int bindNameFloat(int dbPtr, JSString name, double value);
+  external int bindNameDouble(int dbPtr, JSString name, double value);
+  external int bindNameText(int dbPtr, JSString name, JSString value);
+  external int bindNameBlob(int dbPtr, JSString name, JSArray<JSNumber> value);
 
-  external int readRow(int stmt);
-  external int isNull(int stmt, int colIndex);
+  external int readRow(int dbPtr);
+  external int isNull(int dbPtr, int colIndex);
 
-  external JSString getColumnText(int stmt, int colIndex);
-  external int getColumnInt(int stmt, int colIndex);
-  external double getColumnFloat(int stmt, int colIndex);
-  external double getColumnDouble(int stmt, int colIndex);
-  external JSArray<JSNumber> getColumnBlob(int stmt, int columnIndex);
-  external int getColumnBytes(int stmt, int columnIndex);
-  external JSString getColumnName(int stmt, int colIndex);
-  external int getColumnType(int stmt, int colIndex);
-  external int getColumnCount(int stmt);
+  external JSString getColumnText(int dbPtr, int colIndex);
+  external int getColumnInt(int dbPtr, int colIndex);
+  external double getColumnFloat(int dbPtr, int colIndex);
+  external double getColumnDouble(int dbPtr, int colIndex);
+  external JSArray<JSNumber> getColumnBlob(int dbPtr, int columnIndex);
+  external int getColumnBytes(int dbPtr, int columnIndex);
+  external JSString getColumnName(int dbPtr, int colIndex);
+  external int getColumnType(int dbPtr, int colIndex);
+  external int getColumnCount(int dbPtr);
 
   external JSString getLastDbError(int dbPtr);
   external int getAffectedRows(int dbPtr);
   external int getLastInsertedId(int dbPtr);
 
-  external void closeReader(int stmt);
+  external void closeReader(int dbPtr);
   external JSPromise closeDb(int dbPtr);
 }
 
@@ -200,19 +200,19 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
-  void bindNull(int stmt, int index) => _js.bindNull(stmt, index);
+  int bindNull(int dbPtr, int index) => _js.bindNull(dbPtr, index);
 
   @override
-  void bindInt(int stmt, int index, int value) => _js.bindInt(stmt, index, value);
+  int bindInt(int dbPtr, int index, int value) => _js.bindInt(dbPtr, index, value);
 
   @override
-  void bindFloat(int stmt, int index, double value) => _js.bindFloat(stmt, index, value);
+  int bindFloat(int dbPtr, int index, double value) => _js.bindFloat(dbPtr, index, value);
 
   @override
-  void bindDouble(int stmt, int index, double value) => _js.bindDouble(stmt, index, value);
+  int bindDouble(int dbPtr, int index, double value) => _js.bindDouble(dbPtr, index, value);
 
   @override
-  void bindText(int stmt, int index, String value) => _js.bindText(stmt, index, value);
+  int bindText(int dbPtr, int index, String value) => _js.bindText(dbPtr, index, value);
 
   JSArray<JSNumber> _jsArrayFromIntList(List<int> value) =>
       (value.map((e) => e.toJS).toList()).toJS;
@@ -221,66 +221,66 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       jsArray.toDart.cast<num>().map((e) => e.toInt()).toList();
 
   @override
-  void bindBlob(int stmt, int index, List<int> value) {
-    _js.bindBlob(stmt, index, _jsArrayFromIntList(value));
+  int bindBlob(int dbPtr, int index, List<int> value) {
+    return _js.bindBlob(dbPtr, index, _jsArrayFromIntList(value));
   }
 
   @override
-  void bindNameNull(int stmt, String name) => _js.bindNameNull(stmt, name.toJS);
+  int bindNameNull(int dbPtr, String name) => _js.bindNameNull(dbPtr, name.toJS);
 
   @override
-  void bindNameInt(int stmt, String name, int value) => _js.bindNameInt(stmt, name.toJS, value);
+  int bindNameInt(int dbPtr, String name, int value) => _js.bindNameInt(dbPtr, name.toJS, value);
 
   @override
-  void bindNameFloat(int stmt, String name, double value) => _js.bindNameFloat(stmt, name.toJS, value);
+  int bindNameFloat(int dbPtr, String name, double value) => _js.bindNameFloat(dbPtr, name.toJS, value);
 
   @override
-  void bindNameDouble(int stmt, String name, double value) => _js.bindNameDouble(stmt, name.toJS, value);
+  int bindNameDouble(int dbPtr, String name, double value) => _js.bindNameDouble(dbPtr, name.toJS, value);
 
   @override
-  void bindNameText(int stmt, String name, String value) => _js.bindNameText(stmt, name.toJS, value.toJS);
+  int bindNameText(int dbPtr, String name, String value) => _js.bindNameText(dbPtr, name.toJS, value.toJS);
 
   @override
-  void bindNameBlob(int stmt, String name, List<int> value) {
-    _js.bindNameBlob(stmt, name.toJS, _jsArrayFromIntList(value));
+  int bindNameBlob(int dbPtr, String name, List<int> value) {
+    return _js.bindNameBlob(dbPtr, name.toJS, _jsArrayFromIntList(value));
   }
 
   @override
-  Future<int> readRow(int stmt) async {
-    return _js.readRow(stmt);
+  Future<int> readRow(int dbPtr) async {
+    return _js.readRow(dbPtr);
   }
 
   @override
-  bool isNull(int stmt, int colIndex) => _js.isNull(stmt, colIndex) == 1;
+  bool isNull(int dbPtr, int colIndex) => _js.isNull(dbPtr, colIndex) == 1;
 
   @override
-  String getColumnText(int stmt, int colIndex) => _js.getColumnText(stmt, colIndex).toDart;
+  String getColumnText(int dbPtr, int colIndex) => _js.getColumnText(dbPtr, colIndex).toDart;
 
   @override
-  int getColumnInt(int stmt, int colIndex) => _js.getColumnInt(stmt, colIndex);
+  int getColumnInt(int dbPtr, int colIndex) => _js.getColumnInt(dbPtr, colIndex);
 
   @override
-  double getColumnFloat(int stmt, int colIndex) => _js.getColumnFloat(stmt, colIndex);
+  double getColumnFloat(int dbPtr, int colIndex) => _js.getColumnFloat(dbPtr, colIndex);
 
   @override
-  double getColumnDouble(int stmt, int colIndex) => _js.getColumnDouble(stmt, colIndex);
+  double getColumnDouble(int dbPtr, int colIndex) => _js.getColumnDouble(dbPtr, colIndex);
 
   @override
-  List<int> getColumnBlob(int stmt, int columnIndex) {
-    return _intListFromJSArray(_js.getColumnBlob(stmt, columnIndex));
+  List<int> getColumnBlob(int dbPtr, int columnIndex) {
+    return _intListFromJSArray(_js.getColumnBlob(dbPtr, columnIndex));
   }
 
   @override
-  int getColumnBytes(int stmt, int columnIndex) => _js.getColumnBytes(stmt, columnIndex);
+  int getColumnBytes(int dbPtr, int columnIndex) => _js.getColumnBytes(dbPtr, columnIndex);
 
   @override
-  String getColumnName(int stmt, int colIndex) => _js.getColumnName(stmt, colIndex).toDart;
+  String getColumnName(int dbPtr, int colIndex) => _js.getColumnName(dbPtr, colIndex).toDart;
 
   @override
-  int getColumnType(int stmt, int colIndex) => _js.getColumnType(stmt, colIndex);
+  int getColumnType(int dbPtr, int colIndex) => _js.getColumnType(dbPtr, colIndex);
 
   @override
-  int getColumnCount(int stmt) => _js.getColumnCount(stmt);
+  int getColumnCount(int dbPtr) => _js.getColumnCount(dbPtr);
 
   @override
   String getLastDbError(int dbPtr) {
@@ -294,8 +294,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int getLastInsertedId(int dbPtr) => _js.getLastInsertedId(dbPtr);
 
   @override
-  Future closeReader(int stmt) async {
-    _js.closeReader(stmt);
+  Future closeReader(int dbPtr) async {
+    _js.closeReader(dbPtr);
   }
 
   @override

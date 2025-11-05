@@ -291,22 +291,27 @@ class DbasSqlite {
         final index = i + 1; // SQLite index are based on starting 1
         final value = parameters[i];
 
+        int paramResult = -1;
         if (value == null) {
-          _platform.bindNull(_db!, index);
+          paramResult = _platform.bindNull(_db!, index);
         } else if (value is int) {
-          _platform.bindInt(_db!, index, value);
+          paramResult = _platform.bindInt(_db!, index, value);
         } else if (value is double) {
-          _platform.bindDouble(_db!, index, value);
+          paramResult = _platform.bindDouble(_db!, index, value);
         } else if (value is Decimal) {
-          _platform.bindDouble(_db!, index, value.toDouble());
+          paramResult = _platform.bindDouble(_db!, index, value.toDouble());
         } else if (value is String) {
-          _platform.bindText(_db!, index, value);
+          paramResult = _platform.bindText(_db!, index, value);
         } else if (value is Uint8List) {
-          _platform.bindBlob(_db!, index, value);
+          paramResult = _platform.bindBlob(_db!, index, value);
         } else if (value is Enum) {
-          _platform.bindInt(_db!, index, value.index);
+          paramResult = _platform.bindInt(_db!, index, value.index);
         } else {
           throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
+        }
+
+        if (paramResult == -1 || paramResult == 1) {
+          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!)}"]);
         }
       }
     }
@@ -319,22 +324,27 @@ class DbasSqlite {
             ? key
             : ':$key';
 
+        int paramResult = -1;
         if (value == null) {
-          _platform.bindNameNull(_db!, paramName);
+          paramResult = _platform.bindNameNull(_db!, paramName);
         } else if (value is int) {
-          _platform.bindNameInt(_db!, paramName, value);
+          paramResult = _platform.bindNameInt(_db!, paramName, value);
         } else if (value is double) {
-          _platform.bindNameDouble(_db!, paramName, value.toDouble());
+          paramResult = _platform.bindNameDouble(_db!, paramName, value.toDouble());
         } else if (value is Decimal) {
-          _platform.bindNameDecimal(_db!, paramName, value);
+          paramResult = _platform.bindNameDecimal(_db!, paramName, value);
         } else if (value is String) {
-          _platform.bindNameText(_db!, paramName, value);
+          paramResult = _platform.bindNameText(_db!, paramName, value);
         } else if (value is Uint8List) {
-          _platform.bindNameBlob(_db!, paramName, value);
+          paramResult = _platform.bindNameBlob(_db!, paramName, value);
         } else if (value is Enum) {
-          _platform.bindNameInt(_db!, paramName, value.index);
+          paramResult = _platform.bindNameInt(_db!, paramName, value.index);
         } else {
           throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
+        }
+
+        if (paramResult == -1 || paramResult == 1) {
+          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!)}"]);
         }
       });
     }

@@ -105,6 +105,35 @@ void main() async {
     expect(await dbFile.exists(), isTrue, reason: 'DB file should exist after opening the database.');
     expect(dbasSqlite.isOpened(), isTrue, reason: 'Database should be opened after calling openDb.');
 
+    final params = {
+      ':name': 'name-text',
+      ':email': 'email@email.com',
+      ':created_at': '2023-01-01 00:00:00',
+    };
+    await dbasSqlite.executeSql('''
+      INSERT INTO users (name, email, created_at) values (:name, :email, :created_at)
+    ''', nameParams: params);
+
+    final selectParams = {
+      ':id': 0,
+      ':name': 'random-bla',
+    };
+    await dbasSqlite.executeReader("SELECT * FROM users WHERE id > :id AND name != :name", nameParams: selectParams);
+    List<Map<String, String>> users = [];
+    while (await dbasSqlite.readRow()) {
+      users.add({
+        'id': dbasSqlite.getColumnText(0),
+        'name': dbasSqlite.getColumnText(1),
+        'email': dbasSqlite.getColumnText(2),
+        'created_at': dbasSqlite.getColumnText(3),
+      });
+    }
+
+    expect(users.length, 1);
+    expect(users[0]['name'], 'name-text');
+    expect(users[0]['email'], 'email@email.com');
+    expect(users[0]['created_at'], '2023-01-01 00:00:00');
+
     await dbasSqlite.closeDb();
     await dbasSqlite.dropDb();
 
