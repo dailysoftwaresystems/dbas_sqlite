@@ -78,7 +78,7 @@ class DbasSqlite {
 
   Future<List<int>> getContent() async {
     String fileName = await getAppDatabasePath(dbName: dbName);
-    return _platform.getContent(fileName);
+    return await _platform.getContent(fileName);
   }
 
   Future dropDb() async {
@@ -131,7 +131,7 @@ class DbasSqlite {
       result = _platform.getAffectedRows(_db!);
     }
 
-    _platform.closeReader(_db!);
+    await _platform.closeReader(_db!);
     return result;
   }
 
@@ -156,7 +156,7 @@ class DbasSqlite {
     int result = await _platform.readRow(_db!);
     if (!_sqliteSuccessResults.contains(result)) {
       String? error = _platform.getLastDbError(_db!);
-      _platform.closeReader(_db!);
+      await _platform.closeReader(_db!);
       if (error == null && result == 20) {
         error = 'Misuse: possibly missing or invalid bind.';
       }
