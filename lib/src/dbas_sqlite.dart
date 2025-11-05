@@ -119,7 +119,8 @@ class DbasSqlite {
 
     int prepared = await _platform.prepareQuery(_db!, sql);
     if (prepared == -1 || prepared == 1) {
-      throw Exception(["It was not possible to prepare the query: ${_platform.getLastDbError(_db!)}"]);
+      String error = _platform.getLastDbError(_db!) ?? 'Unknown error ($prepared).';
+      throw Exception(["It was not possible to prepare the query: $error"]);
     }
 
     _bindParameters(params);
@@ -141,7 +142,8 @@ class DbasSqlite {
 
     int prepared = await _platform.prepareQuery(_db!, sql);
     if (prepared == -1 || prepared == 1) {
-      throw Exception(["It was not possible to prepare the query: ${_platform.getLastDbError(_db!)}"]);
+      final error = _platform.getLastDbError(_db!) ?? 'Unknown error ($prepared).';
+      throw Exception(["It was not possible to prepare the query: $error"]);
     }
 
     _bindParameters(params);
@@ -153,7 +155,12 @@ class DbasSqlite {
   Future<bool> readRow() async {
     int result = await _platform.readRow(_db!);
     if (!_sqliteSuccessResults.contains(result)) {
-      throw Exception(["It was not possible to run the query ($result): ${_platform.getLastDbError(_db!)}"]);
+      String? error = _platform.getLastDbError(_db!);
+      if (error == null && result == 20) {
+        error = 'Misuse: possibly missing or invalid bind.';
+      }
+      error ??= 'Unknown error ($result).';
+      throw Exception(["It was not possible to run the query ($result): error"]);
     }
 
     return result == _sqliteRow;
@@ -311,7 +318,7 @@ class DbasSqlite {
         }
 
         if (paramResult == -1 || paramResult == 1) {
-          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!)}"]);
+          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}}"]);
         }
       }
     }
@@ -344,7 +351,7 @@ class DbasSqlite {
         }
 
         if (paramResult == -1 || paramResult == 1) {
-          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!)}"]);
+          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}"]);
         }
       });
     }

@@ -118,9 +118,8 @@ final class DbasSqlitePlatform {
   int getColumnType(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnType(db.ptr, colIndex);
   int getColumnCount(DbasSqliteDb db) => _delegate[db.name]!.getColumnCount(db.ptr);
 
-  String getLastDbError(DbasSqliteDb db) {
-    final err = _delegate[db.name]!.getLastDbError(db.ptr);
-    return (err.isNotEmpty) ? err : 'OK';
+  String? getLastDbError(DbasSqliteDb db) {
+    return _delegate[db.name]!.getLastDbError(db.ptr);
   }
   int getAffectedRows(DbasSqliteDb db) => _delegate[db.name]!.getAffectedRows(db.ptr);
   int getLastInsertedId(DbasSqliteDb db) => _delegate[db.name]!.getLastInsertedId(db.ptr);

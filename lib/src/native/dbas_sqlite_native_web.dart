@@ -283,8 +283,14 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int getColumnCount(int dbPtr) => _js.getColumnCount(dbPtr);
 
   @override
-  String getLastDbError(int dbPtr) {
-    return _js.getLastDbError(dbPtr).toDart;
+  String? getLastDbError(int dbPtr) {
+    final result = _js.getLastDbError(dbPtr).toDart;
+
+    if (result.startsWith('Unknown error:')) {
+      return null;
+    }
+
+    return result;
   }
 
   @override

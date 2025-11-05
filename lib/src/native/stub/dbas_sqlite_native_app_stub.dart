@@ -140,7 +140,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  String getLastDbError(int dbPtr) =>
+  String? getLastDbError(int dbPtr) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override

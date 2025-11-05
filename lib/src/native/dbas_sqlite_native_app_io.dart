@@ -270,8 +270,15 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   int getColumnCount(int dbPtr) => _getColumnCount(_dbPtr(dbPtr));
 
   @override
-  String getLastDbError(int dbPtr) =>
-      _getLastDbError(_dbPtr(dbPtr)).toDartString();
+  String? getLastDbError(int dbPtr) {
+    final errorPtr = _getLastDbError(_dbPtr(dbPtr));
+
+    if (errorPtr == nullptr || errorPtr.address == 0) {
+      return null;
+    }
+
+    return errorPtr.toDartString();
+  }
 
   @override
   int getAffectedRows(int dbPtr) => _getAffectedRows(_dbPtr(dbPtr));

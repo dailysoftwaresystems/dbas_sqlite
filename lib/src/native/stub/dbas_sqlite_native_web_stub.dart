@@ -140,7 +140,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in web.');
 
   @override
-  String getLastDbError(int dbPtr) =>
+  String? getLastDbError(int dbPtr) =>
       throw UnsupportedError('Not supported in web.');
 
   @override

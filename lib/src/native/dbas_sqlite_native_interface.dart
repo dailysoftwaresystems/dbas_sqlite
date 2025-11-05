@@ -147,7 +147,7 @@ abstract class DbasSqliteNativeInterface {
   int getColumnType(int dbPtr, int colIndex);
   int getColumnCount(int dbPtr);
 
-  String getLastDbError(int dbPtr);
+  String? getLastDbError(int dbPtr);
   int getAffectedRows(int dbPtr);
   int getLastInsertedId(int dbPtr);
 
