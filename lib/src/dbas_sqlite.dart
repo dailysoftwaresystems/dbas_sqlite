@@ -169,7 +169,7 @@ class DbasSqlite {
         error = 'Misuse: possibly missing or invalid bind.';
       }
       error ??= 'Unknown error ($readResult).';
-      throw Exception(["It was not possible to run the query ($readResult): error"]);
+      throw Exception(["It was not possible to run the query ($readResult): $error"]);
     }
 
     return readResult == _sqliteRow;
