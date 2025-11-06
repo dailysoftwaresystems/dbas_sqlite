@@ -302,67 +302,78 @@ class DbasSqlite {
   }
 
   void _bindParameters(List<Object?>? parameters) {
-    if (parameters != null && parameters.isNotEmpty) {
-      for (int i = 0; i < parameters.length; i++) {
-        final index = i + 1; // SQLite index are based on starting 1
-        final value = parameters[i];
+    if (parameters == null || parameters.isEmpty) {
+      return;
+    }
 
-        int paramResult = -1;
-        if (value == null) {
-          paramResult = _platform.bindNull(_db!, index);
-        } else if (value is int) {
-          paramResult = _platform.bindInt(_db!, index, value);
-        } else if (value is double) {
-          paramResult = _platform.bindDouble(_db!, index, value);
-        } else if (value is Decimal) {
-          paramResult = _platform.bindDouble(_db!, index, value.toDouble());
-        } else if (value is String) {
-          paramResult = _platform.bindText(_db!, index, value);
-        } else if (value is Uint8List) {
-          paramResult = _platform.bindBlob(_db!, index, value);
-        } else if (value is Enum) {
-          paramResult = _platform.bindInt(_db!, index, value.index);
-        } else {
-          throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
-        }
+    for (int i = 0; i < parameters.length; i++) {
+      final index = i + 1; // SQLite index are based on starting 1
+      final value = parameters[i];
 
-        if (paramResult == -1 || paramResult == 1) {
-          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}}"]);
-        }
+      int paramResult = -1;
+      if (value == null) {
+        paramResult = _platform.bindNull(_db!, index);
+      } else if (value is bool) {
+        paramResult = _platform.bindInt(_db!, index, value ? 1 : 0);
+      } else if (value is int) {
+        paramResult = _platform.bindInt(_db!, index, value);
+      } else if (value is double) {
+        paramResult = _platform.bindDouble(_db!, index, value);
+      } else if (value is Decimal) {
+        paramResult = _platform.bindDouble(_db!, index, value.toDouble());
+      } else if (value is String) {
+        paramResult = _platform.bindText(_db!, index, value);
+      } else if (value is Uint8List) {
+        paramResult = _platform.bindBlob(_db!, index, value);
+      } else if (value is Enum) {
+        paramResult = _platform.bindInt(_db!, index, value.index);
+      } else {
+        throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
+      }
+
+      if (paramResult == -1 || paramResult == 1) {
+        throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}}"]);
       }
     }
   }
 
   void _bindNameParameters(Map<String, Object?>? parameters) {
-    if (parameters != null && parameters.isNotEmpty) {
-      parameters.forEach((key, value) {
-        final paramName = key.startsWith(':') || key.startsWith('@') || key.startsWith(r'$')
-            ? key
-            : ':$key';
+    if (parameters == null || parameters.isEmpty) {
+      return;
+    }
 
-        int paramResult = -1;
-        if (value == null) {
-          paramResult = _platform.bindNameNull(_db!, paramName);
-        } else if (value is int) {
-          paramResult = _platform.bindNameInt(_db!, paramName, value);
-        } else if (value is double) {
-          paramResult = _platform.bindNameDouble(_db!, paramName, value.toDouble());
-        } else if (value is Decimal) {
-          paramResult = _platform.bindNameDecimal(_db!, paramName, value);
-        } else if (value is String) {
-          paramResult = _platform.bindNameText(_db!, paramName, value);
-        } else if (value is Uint8List) {
-          paramResult = _platform.bindNameBlob(_db!, paramName, value);
-        } else if (value is Enum) {
-          paramResult = _platform.bindNameInt(_db!, paramName, value.index);
-        } else {
-          throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
-        }
+    for (MapEntry<String, Object?> entry in parameters.entries) {
+      String paramName = entry.key;
+      Object? value = entry.value;
 
-        if (paramResult == -1 || paramResult == 1) {
-          throw Exception(["It was not possible to bind the parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}"]);
-        }
-      });
+      if (!paramName.startsWith(':') && !paramName.startsWith('@') && !paramName.startsWith(r'$')) {
+        paramName = ':$paramName';
+      }
+
+      int paramResult = -1;
+      if (value == null) {
+        paramResult = _platform.bindNameNull(_db!, paramName);
+      } else if (value is bool) {
+        paramResult = _platform.bindNameInt(_db!, paramName, value ? 1 : 0);
+      } else if (value is int) {
+        paramResult = _platform.bindNameInt(_db!, paramName, value);
+      } else if (value is double) {
+        paramResult = _platform.bindNameDouble(_db!, paramName, value.toDouble());
+      } else if (value is Decimal) {
+        paramResult = _platform.bindNameDecimal(_db!, paramName, value);
+      } else if (value is String) {
+        paramResult = _platform.bindNameText(_db!, paramName, value);
+      } else if (value is Uint8List) {
+        paramResult = _platform.bindNameBlob(_db!, paramName, value);
+      } else if (value is Enum) {
+        paramResult = _platform.bindNameInt(_db!, paramName, value.index);
+      } else {
+        throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
+      }
+
+      if (paramResult == -1 || paramResult == 1) {
+        throw Exception(["It was not possible to bind the named parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}"]);
+      }
     }
   }
 
