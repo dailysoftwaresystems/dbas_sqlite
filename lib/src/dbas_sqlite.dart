@@ -257,6 +257,27 @@ class DbasSqlite {
     return getColumnDateTime(idx);
   }
 
+  Duration getColumnTime(int idx) {
+    final parts = _platform.getColumnText(_db!, idx).split(':');
+    final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+    final secondsMs = parts.length > 2 ? parts[2].split('.').where((i) => i.trim() != '').toList() : ['0'];
+
+    return Duration(
+      hours: int.tryParse(parts[0]) ?? 0,
+      minutes: minute,
+      seconds: int.tryParse(secondsMs.first) ?? 0,
+      milliseconds: secondsMs.length > 1 ? int.tryParse(secondsMs.last.padRight(3, '0').substring(0, 3)) ?? 0 : 0,
+    );
+  }
+
+  Duration? getColumnNullableTime(int idx) {
+    if (isColumnNull(idx)) {
+      return null;
+    }
+
+    return getColumnTime(idx);
+  }
+
   T getColumnEnum<T extends Enum>(int idx, List<T> values) {
     final intValue = _platform.getColumnInt(_db!, idx);
     if (intValue < 0 || intValue >= values.length) {
