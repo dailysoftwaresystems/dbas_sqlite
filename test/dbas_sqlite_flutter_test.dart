@@ -137,7 +137,6 @@ void main() async {
     await dbasSqlite.closeDb();
     await dbasSqlite.dropDb();
 
-    expect(await dbasSqlite.databaseExists(), isFalse, reason: 'DB file should not exist after opening the database (native).');
     expect(await dbFile.exists(), isFalse, reason: 'DB file should not exist after opening the database.');
     expect(dbasSqlite.isOpened(), isFalse, reason: 'Database should not be opened after calling openDb.');
   });

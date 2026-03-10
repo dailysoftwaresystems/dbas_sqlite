@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
   if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:decimal/decimal.dart';
+import 'package:flutter/foundation.dart';
 
 final class DbasSqlitePlatform {
   static DbasSqlitePlatform? _instance;
@@ -26,7 +28,9 @@ final class DbasSqlitePlatform {
     return _delegate[dbName]!;
   }
 
-  bool isTest(String name) => _delegate[name]!.isTest;
+  bool isTest(String name) {
+    return !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+  }
 
   Future<void> initialize(String name) async => await _delegate[name]!.initialize();
 
@@ -50,6 +54,7 @@ final class DbasSqlitePlatform {
   Future dropDb(String fileName) async {
     final dbName = _getDbName(fileName);
     await _delegate[dbName]!.dropDb(fileName);
+    _delegate.remove(dbName);
   }
 
   bool isOpened(DbasSqliteDb db) => _delegate[db.name]!.isOpened(db.ptr);
@@ -125,5 +130,8 @@ final class DbasSqlitePlatform {
   int getLastInsertedId(DbasSqliteDb db) => _delegate[db.name]!.getLastInsertedId(db.ptr);
 
   Future closeReader(DbasSqliteDb db) async => await _delegate[db.name]!.closeReader(db.ptr);
-  Future closeDb(DbasSqliteDb db) async => await _delegate[db.name]!.closeDb(db.ptr);
+  Future closeDb(DbasSqliteDb db) async {
+    await _delegate[db.name]!.executeSql(db.ptr, 'PRAGMA wal_checkpoint(TRUNCATE);');
+    await _delegate[db.name]!.closeDb(db.ptr);
+  }
 }
