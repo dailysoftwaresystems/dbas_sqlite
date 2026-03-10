@@ -4,8 +4,8 @@ version: 1.4.1
 homepage: https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter
 
 environment:
-  sdk: ^3.4.0
-  flutter: '>=3.22.0'
+  sdk: ^3.7.0
+  flutter: '>=3.29.0'
 
 dependencies:
   flutter:
