@@ -40,7 +40,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Future<int> executeSql(int dbPtr, String sql) =>
+  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
@@ -96,7 +96,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
-  Future<int> readRow(int dbPtr) =>
+  Future<int> readRow(int dbPtr, {bool syncWebDb = false}) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override

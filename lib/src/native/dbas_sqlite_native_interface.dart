@@ -117,7 +117,7 @@ abstract class DbasSqliteNativeInterface {
   Future<List<int>> getContent(String fileName);
   Future<void> dropDb(String fileName);
 
-  Future<int> executeSql(int dbPtr, String sql);
+  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false});
   Future<int> prepareQuery(int dbPtr, String sql);
 
   int bindNull(int dbPtr, int index);
@@ -134,7 +134,7 @@ abstract class DbasSqliteNativeInterface {
   int bindNameText(int dbPtr, String name, String value);
   int bindNameBlob(int dbPtr, String name, List<int> value);
 
-  Future<int> readRow(int dbPtr);
+  Future<int> readRow(int dbPtr, {bool syncWebDb = false});
   bool isNull(int dbPtr, int colIndex);
 
   String getColumnText(int dbPtr, int colIndex);

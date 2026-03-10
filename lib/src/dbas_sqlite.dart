@@ -120,7 +120,7 @@ class DbasSqlite {
     return _db != null && _platform.isOpened(_db!);
   }
 
-  Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
+  Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams, bool syncWebDb = false}) async {
     if (!isOpened()) {
       throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
@@ -135,7 +135,7 @@ class DbasSqlite {
     _bindNameParameters(nameParams);
 
     int result = 0;
-    if (!await readRow()) {
+    if (!await readRow(syncWebDb: syncWebDb)) {
       result = _platform.getAffectedRows(_db!);
     }
 
@@ -160,8 +160,8 @@ class DbasSqlite {
     return 1;
   }
 
-  Future<bool> readRow() async {
-    int readResult = await _platform.readRow(_db!);
+  Future<bool> readRow({bool syncWebDb = false}) async {
+    int readResult = await _platform.readRow(_db!, syncWebDb: syncWebDb);
     if (!_sqliteSuccessResults.contains(readResult)) {
       String? error = _platform.getLastDbError(_db!);
       await _platform.closeReader(_db!);

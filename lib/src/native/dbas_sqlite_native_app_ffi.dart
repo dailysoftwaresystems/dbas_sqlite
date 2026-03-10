@@ -253,7 +253,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   bool isOpened(int dbPtr) => _isOpened(_dbPtr(dbPtr, checkOpened: false)) == 1;
 
   @override
-  Future<int> executeSql(int dbPtr, String sql) async {
+  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) async {
     Pointer<Utf8> sqlPtr = nullptr;
     try {
       sqlPtr = sql.toNativeUtf8();
@@ -399,7 +399,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   }
 
   @override
-  Future<int> readRow(int dbPtr) async => _readRow(_dbPtr(dbPtr, checkOpened: false));
+  Future<int> readRow(int dbPtr, {bool syncWebDb = false}) async => _readRow(_dbPtr(dbPtr, checkOpened: false));
 
   @override
   bool isNull(int dbPtr, int colIndex) => _isNull(_dbPtr(dbPtr, checkOpened: false), colIndex) == 1;

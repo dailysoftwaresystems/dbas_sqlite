@@ -36,7 +36,7 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external JSPromise attachDb(JSArray<JSNumber> content);
   external JSPromise openDb();
   external int isOpened(int dbPtr);
-  external int executeSql(int dbPtr, JSString sql);
+  external int executeSql(int dbPtr, JSString sql, [bool syncDb = false]);
   external int prepareQuery(int dbPtr, JSString sql);
 
   external int bindNull(int dbPtr, int index);
@@ -53,7 +53,7 @@ extension DbasSqliteNativeWebJSExtension on DbasSqliteNativeWebJS {
   external int bindNameText(int dbPtr, JSString name, JSString value);
   external int bindNameBlob(int dbPtr, JSString name, JSArray<JSNumber> value);
 
-  external int readRow(int dbPtr);
+  external int readRow(int dbPtr, [bool syncDb = false]);
   external int isNull(int dbPtr, int colIndex);
 
   external JSString getColumnText(int dbPtr, int colIndex);
@@ -190,8 +190,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   bool isOpened(int dbPtr) => _js.isOpened(dbPtr) == 1;
 
   @override
-  Future<int> executeSql(int dbPtr, String sql) async {
-    return _js.executeSql(dbPtr, sql.toJS);
+  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) async {
+    return _js.executeSql(dbPtr, sql.toJS, syncWebDb);
   }
 
   @override
@@ -246,8 +246,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
-  Future<int> readRow(int dbPtr) async {
-    return _js.readRow(dbPtr);
+  Future<int> readRow(int dbPtr, {bool syncWebDb = false}) async {
+    return _js.readRow(dbPtr, syncWebDb);
   }
 
   @override

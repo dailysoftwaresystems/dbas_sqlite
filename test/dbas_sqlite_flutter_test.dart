@@ -26,26 +26,26 @@ void main() async {
         email TEXT UNIQUE NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    ''');
+    ''', syncWebDb: true);
 
     await dbasSqlite.executeSql(
       'INSERT INTO users (name, email) VALUES (:name, :email)',
       nameParams: <String, Object?>{
         'name': 'test1',
         'email': 'test1@test.com',
-      },
+      }, syncWebDb: true
     );
 
     await dbasSqlite.executeSql(
       'INSERT INTO users (name, email) VALUES (?, ?)',
-      params: ['test2', 'test2@test.com'],
+      params: ['test2', 'test2@test.com'], syncWebDb: true
     );
 
     await dbasSqlite.executeReader("SELECT name, email FROM users where id > :id", params: [0]);
     int colCount = dbasSqlite.getColumnCount();
 
     List<List<Object?>> users = [];
-    while (await dbasSqlite.readRow()) {
+    while (await dbasSqlite.readRow(syncWebDb: true)) {
       List<Object?> user = [];
       for (int colIdx = 0; colIdx < colCount; colIdx++) {
         SqliteColumnType type = dbasSqlite.getColumnType(colIdx);
@@ -92,7 +92,7 @@ void main() async {
         email TEXT UNIQUE NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    ''');
+    ''', syncWebDb: true);
 
     String dbName = 'test_attach2.db';
     DbasSqlite dbasSqlite = await DbasSqlite.getInstance(dbName: dbName);
@@ -112,7 +112,7 @@ void main() async {
     };
     await dbasSqlite.executeSql('''
       INSERT INTO users (name, email, created_at) values (:name, :email, :created_at)
-    ''', nameParams: params);
+    ''', nameParams: params, syncWebDb: true);
 
     final selectParams = {
       ':id': 0,
@@ -120,7 +120,7 @@ void main() async {
     };
     await dbasSqlite.executeReader("SELECT * FROM users WHERE id > :id AND name != :name", nameParams: selectParams);
     List<Map<String, String>> users = [];
-    while (await dbasSqlite.readRow()) {
+    while (await dbasSqlite.readRow(syncWebDb: true)) {
       users.add({
         'id': dbasSqlite.getColumnText(0),
         'name': dbasSqlite.getColumnText(1),
