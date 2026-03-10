@@ -68,7 +68,7 @@ class _TestPageState extends State<TestPage> {
           value INTEGER,
           created_at TEXT
         );
-      ''');
+      ''', syncWebDb: true);
 
       setState(() {
         _status = 'Inserting test data...';
@@ -77,7 +77,7 @@ class _TestPageState extends State<TestPage> {
       await _db!.executeSql('''
         INSERT OR REPLACE INTO test_data (id, name, value, created_at) 
         VALUES (1, ?, ?, ?);
-      ''', params: ['Test Entry', DateTime.now().millisecondsSinceEpoch, DateTime.now().toIso8601String()]);
+      ''', params: ['Test Entry', DateTime.now().millisecondsSinceEpoch, DateTime.now().toIso8601String()], syncWebDb: true);
 
       setState(() {
         _status = 'Reading data...';
@@ -108,7 +108,7 @@ class _TestPageState extends State<TestPage> {
       await _db!.executeSql('''
         INSERT INTO test_data (name, value, created_at) 
         VALUES (?, ?, ?);
-      ''', params: ['New Entry', timestamp, DateTime.now().toIso8601String()]);
+      ''', params: ['New Entry', timestamp, DateTime.now().toIso8601String()], syncWebDb: true);
 
       await _db!.executeReader('SELECT COUNT(*) as count FROM test_data;');
       int count = 0;
