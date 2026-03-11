@@ -625,7 +625,7 @@ class DbasSqlite {
     if (_isInTransaction) {
       return;
     }
-    await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
+    await _platform.executeSql(_db!, 'BEGIN TRANSACTION', syncWebDb: true);
     _isInTransaction = true;
   }
 
@@ -640,9 +640,11 @@ class DbasSqlite {
       return;
     }
     try {
-      await _platform.executeSql(_db!, 'COMMIT');
-    } finally {
+      await _platform.executeSql(_db!, 'COMMIT', syncWebDb: true);
       _isInTransaction = false;
+    } catch(e) {
+      await rollback();
+      rethrow;
     }
   }
 
@@ -657,7 +659,7 @@ class DbasSqlite {
       return;
     }
     try {
-      await _platform.executeSql(_db!, 'ROLLBACK');
+      await _platform.executeSql(_db!, 'ROLLBACK', syncWebDb: true);
     } finally {
       _isInTransaction = false;
     }

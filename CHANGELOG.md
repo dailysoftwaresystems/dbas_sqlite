@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.6.1 - 2026-03-11
+
+* `commit()` now performs automatic rollback if the COMMIT fails
+* Added `syncWebDb: true` to `beginTransaction()`, `commit()` and `rollback()` for web persistence
+
 ## 1.6.0 - 2026-03-11
 
 * Added Transaction API: `beginTransaction()`, `commit()`, `rollback()`
