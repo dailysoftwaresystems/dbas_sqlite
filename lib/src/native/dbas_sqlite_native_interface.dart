@@ -11,18 +11,18 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 abstract class DbasSqliteNativeInterface {
-  static DbasSqliteNativeInterface? _instance;
+  static final Map<String, DbasSqliteNativeInterface> _instance = {};
   final String _dbName;
 
   DbasSqliteNativeInterface(this._dbName);
 
   static DbasSqliteNativeInterface getInstance({String dbName = 'dbas.db'}) {
-    if (_instance != null) {
-      return _instance!;
+    if (_instance.containsKey(dbName)) {
+      return _instance[dbName]!;
     }
 
-    _instance = _getPlatform(dbName: dbName);
-    return _instance!;
+    _instance[dbName] = _getPlatform(dbName: dbName);
+    return _instance[dbName]!;
   }
 
   static DbasSqliteNativeInterface _getPlatform({String dbName = 'dbas.db'}) {
@@ -71,12 +71,31 @@ abstract class DbasSqliteNativeInterface {
     await dllFile.writeAsBytes(buffer.buffer.asUint8List());
   }
 
+  /// Returns the base directory for resolving native library paths in test mode.
+  ///
+  /// If the current directory contains the platform libs (e.g. `windows/libs/`),
+  /// it is used directly. Otherwise, the parent directory is checked, which
+  /// handles the case where tests run from the `example/` subdirectory.
+  String _resolveTestBaseDir(String platformSubPath) {
+    final current = Directory.current.path;
+    final candidate = path.join(current, platformSubPath);
+    if (File(candidate).existsSync()) {
+      return current;
+    }
+
+    // Fallback: try parent directory (e.g. running from example/)
+    final parent = path.dirname(current);
+    return parent;
+  }
+
   Future<String> getLibraryPath() async {
     if (Platform.isIOS || (Platform.isMacOS && !isTest)) {
       return '';
     } else if (Platform.isMacOS) {
       String arch = Platform.version.contains('arm64') || Platform.version.toLowerCase().contains('arm64') ? 'a64' : 'x86';
-      return path.join(Directory.current.path, 'macos', 'libs', arch, 'dbas_sqlite.dylib');
+      final relativePath = path.join('macos', 'libs', arch, 'dbas_sqlite.dylib');
+      final baseDir = isTest ? _resolveTestBaseDir(relativePath) : Directory.current.path;
+      return path.join(baseDir, relativePath);
     }
 
     late String libPath;
@@ -85,14 +104,18 @@ abstract class DbasSqliteNativeInterface {
     } else if (Platform.isWindows) {
       if (isTest) {
         String arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
-        libPath = path.join(Directory.current.path, 'windows', 'libs', arch, 'dbas_sqlite.dll');
+        final relativePath = path.join('windows', 'libs', arch, 'dbas_sqlite.dll');
+        final baseDir = _resolveTestBaseDir(relativePath);
+        libPath = path.join(baseDir, relativePath);
       } else {
         // For production Windows builds, the DLL should be bundled with the app
         libPath = 'dbas_sqlite.dll';
       }
     } else if (Platform.isLinux) {
       if (isTest) {
-        libPath = path.join(Directory.current.path, 'linux', 'libs', 'dbas_sqlite.so');
+        final relativePath = path.join('linux', 'libs', 'dbas_sqlite.so');
+        final baseDir = _resolveTestBaseDir(relativePath);
+        libPath = path.join(baseDir, relativePath);
       } else {
         // For production Linux builds, the SO should be bundled with the app
         libPath = 'dbas_sqlite.so';

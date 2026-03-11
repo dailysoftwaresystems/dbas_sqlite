@@ -11,15 +11,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:dbas_sqlite_flutter_example/main.dart';
 
 void main() {
-  testWidgets('Verify Platform version', (WidgetTester tester) async {
+  testWidgets('Verify database opens successfully', (WidgetTester tester) async {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const MyApp());
 
-    // Verify that platform version is retrieved.
+    // Wait for async initialization to complete.
+    await tester.pumpAndSettle();
+
+    // Verify that the database status is displayed.
     expect(
       find.byWidgetPredicate(
         (Widget widget) => widget is Text &&
-                           widget.data!.startsWith('Running on:'),
+                           widget.data!.startsWith('Is opened:'),
       ),
       findsOneWidget,
     );

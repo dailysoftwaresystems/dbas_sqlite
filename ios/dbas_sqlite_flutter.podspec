@@ -2,9 +2,12 @@
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
 # Run `pod lib lint dbas_sqlite_flutter.podspec` to validate before publishing.
 #
+require 'yaml'
+pubspec = YAML.load_file(File.join('..', 'pubspec.yaml'))
+
 Pod::Spec.new do |s|
   s.name             = 'dbas_sqlite_flutter'
-  s.version          = '0.0.1'
+  s.version          = pubspec['version']
   s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
   s.description      = <<-DESC
  Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.

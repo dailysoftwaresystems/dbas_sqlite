@@ -55,7 +55,7 @@ class _TestPageState extends State<TestPage> {
         _status = 'Opening database at: $dbPath';
       });
 
-      await _db!.openDb(dbPath);
+      await _db!.openDb();
       
       setState(() {
         _status = 'Creating table...';

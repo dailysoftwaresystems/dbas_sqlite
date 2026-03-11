@@ -2,9 +2,12 @@
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
 # Run `pod lib lint dbas_sqlite_flutter.podspec` to validate before publishing.
 #
+require 'yaml'
+pubspec = YAML.load_file(File.join('..', 'pubspec.yaml'))
+
 Pod::Spec.new do |s|
   s.name             = 'dbas_sqlite_flutter'
-  s.version          = '0.0.1'
+  s.version          = pubspec['version']
   s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
   s.description      = <<-DESC
 Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
@@ -15,17 +18,17 @@ Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and We
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'FlutterMacOS'
-  s.platform = :osx, '15.0'
+  s.platform = :osx, '10.15'
 
   s.pod_target_xcconfig = { 
     'DEFINES_MODULE' => 'YES',
     'OTHER_LDFLAGS' => '-all_load',
     'CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES' => 'YES',
-    'MACOSX_DEPLOYMENT_TARGET' => '15.0'
+    'MACOSX_DEPLOYMENT_TARGET' => '10.15'
   }
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS' => '-all_load',
-    'MACOSX_DEPLOYMENT_TARGET' => '15.0'
+    'MACOSX_DEPLOYMENT_TARGET' => '10.15'
   }
   s.swift_version = '5.0'
   s.vendored_frameworks = 'macos/dbas_sqlite.xcframework'

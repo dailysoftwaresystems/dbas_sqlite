@@ -16,7 +16,7 @@ void main() {
 
   testWidgets('getPlatformVersion test', (WidgetTester tester) async {
     final DbasSqlite plugin = await DbasSqlite.getInstance(dbName: 'test.db');
-    await plugin.openDb(await plugin.getAppDatabasePath());
+    await plugin.openDb();
     // The version string depends on the host platform running the test, so
     // just assert that some non-empty string is returned.
     expect(plugin.isOpened(), true);

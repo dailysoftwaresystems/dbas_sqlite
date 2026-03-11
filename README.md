@@ -14,45 +14,43 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 
 ### 🛠️ **Database Operations**
 - **Database Management**
-  - `openDb(path)` - Open database connection
+  - `getInstance(dbName:)` - Get singleton instance for a database
+  - `openDb()` - Open database connection (path resolved internally)
   - `closeDb()` - Close database connection  
   - `isOpened()` - Check connection status
   - `getAppDatabasePath()` - Get platform-specific database path
+  - `databaseExists()` - Check if the database file exists
+  - `dropDb()` - Delete the database file
+  - `attachDb(bytes)` - Attach a database from raw bytes
+  - `getContent()` - Get the raw bytes of the database file
 
 - **SQL Execution**
-  - `executeSql(sql)` - Execute DDL/DML statements
-  - `prepareQuery(sql)` - Prepare parameterized queries
+  - `executeSql(sql, {params, nameParams})` - Execute DDL/DML statements with optional positional or named parameters
+  - `executeReader(sql, {params, nameParams})` - Prepare a SELECT query with optional positional or named parameters
   - `readRow()` - Read query results row by row
+  - `closeReader()` - Manually close the current prepared statement
 
-### 🔗 **Parameter Binding**
-- **By Index** (1-based indexing)
-  - `bindNull(index)` - Bind NULL value
-  - `bindInt(index, value)` - Bind integer
-  - `bindFloat(index, value)` - Bind float
-  - `bindDouble(index, value)` - Bind double
-  - `bindDecimal(index, value)` - Bind decimal numbers
-  - `bindText(index, value)` - Bind string
-  - `bindBlob(index, value)` - Bind binary data
-
-- **By Name** (named parameters)
-  - `bindNameNull(name)` - Bind NULL by name
-  - `bindNameInt(name, value)` - Bind integer by name
-  - `bindNameFloat(name, value)` - Bind float by name
-  - `bindNameDouble(name, value)` - Bind double by name
-  - `bindNameDecimal(name, value)` - Bind decimal by name
-  - `bindNameText(name, value)` - Bind string by name
-  - `bindNameBlob(name, value)` - Bind binary data by name
+- **Transactions**
+  - `beginTransaction()` - Begin a new transaction (idempotent)
+  - `commit()` - Commit the current transaction (idempotent)
+  - `rollback()` - Rollback the current transaction (idempotent)
+  - `transaction(action)` - Execute an action within a transaction with automatic commit/rollback
+  - `isInTransaction` - Check if a transaction is currently active
 
 ### 📊 **Data Retrieval**
-- **Column Access**
-  - `getColumnText(index)` - Get string value
-  - `getColumnInt(index)` - Get integer value
-  - `getColumnFloat(index)` - Get float value
-  - `getColumnDouble(index)` - Get double value
-  - `getColumnDecimal(index)` - Get decimal value
-  - `getColumnBlob(index)` - Get binary data
+- **Column Access** (with nullable variants)
+  - `getColumnText(index)` / `getColumnNullableText(index)` - Get string value
+  - `getColumnInt(index)` / `getColumnNullableInt(index)` - Get integer value
+  - `getColumnBool(index)` / `getColumnNullableBool(index)` - Get boolean value
+  - `getColumnDouble(index)` / `getColumnNullableDouble(index)` - Get double value
+  - `getColumnDecimal(index)` / `getColumnNullableDecimal(index)` - Get decimal value
+  - `getColumnDateTime(index)` / `getColumnNullableDateTime(index)` - Get DateTime value
+  - `getColumnTime(index)` / `getColumnNullableTime(index)` - Get Duration value
+  - `getColumnEnum<T>(index, values)` / `getColumnNullableEnum<T>(index, values)` - Get enum value
+  - `getColumnBlob(index)` / `getColumnNullableBlob(index)` - Get binary data
   - `isColumnNull(index)` - Check if column is NULL
   - `getColumnType(index)` - Get column data type
+  - `getColumnName(index)` - Get column name
   - `getColumnCount()` - Get number of columns
 
 ### 🔍 **Query Information**
@@ -66,7 +64,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite_flutter: ^0.0.1
+  dbas_sqlite_flutter: ^1.6.0
 ```
 
 ## ⚙️ Setup
@@ -101,9 +99,8 @@ import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
 // Get database instance
 final DbasSqlite db = await DbasSqlite.getInstance(dbName: 'myapp.db');
 
-// Get database path and open
-final String dbPath = await db.getAppDatabasePath();
-await db.openDb(dbPath);
+// Open database
+await db.openDb();
 
 // Create table
 await db.executeSql('''
@@ -116,43 +113,20 @@ await db.executeSql('''
   )
 ''');
 
-// Insert data with parameters
-await db.prepareQuery('INSERT INTO users (name, email, age) VALUES (?, ?, ?)');
-await db.bindText(1, 'John Doe');
-await db.bindText(2, 'john@example.com');
-await db.bindInt(3, 30);
-await db.executeSql('');
+// Insert data with positional parameters
+await db.executeSql(
+  'INSERT INTO users (name, email, age) VALUES (?, ?, ?)',
+  params: ['John Doe', 'john@example.com', 30],
+);
 
-// Query data
-await db.prepareQuery('SELECT * FROM users WHERE age > ?');
-await db.bindInt(1, 25);
+// Query data with parameters
+await db.executeReader('SELECT * FROM users WHERE age > ?', params: [25]);
 
-List<Map<String, dynamic>> users = [];
 while (await db.readRow()) {
-  Map<String, dynamic> user = {};
-  for (int i = 0; i < await db.getColumnCount(); i++) {
-    String columnName = // Get column name from your schema
-    
-    if (await db.isColumnNull(i)) {
-      user[columnName] = null;
-    } else {
-      switch (await db.getColumnType(i)) {
-        case SqliteColumnType.integer:
-          user[columnName] = await db.getColumnInt(i);
-          break;
-        case SqliteColumnType.real:
-          user[columnName] = await db.getColumnDouble(i);
-          break;
-        case SqliteColumnType.text:
-          user[columnName] = await db.getColumnText(i);
-          break;
-        case SqliteColumnType.blob:
-          user[columnName] = await db.getColumnBlob(i);
-          break;
-      }
-    }
-  }
-  users.add(user);
+  final name = db.getColumnText(0);
+  final email = db.getColumnNullableText(1);
+  final age = db.getColumnInt(2);
+  print('$name ($email) - age: $age');
 }
 
 // Close database
@@ -162,11 +136,70 @@ await db.closeDb();
 ### Named Parameters Example
 
 ```dart
-await db.prepareQuery('INSERT INTO users (name, email, age) VALUES (:name, :email, :age)');
-await db.bindNameText(':name', 'Jane Smith');
-await db.bindNameText(':email', 'jane@example.com');
-await db.bindNameInt(':age', 28);
-await db.executeSql('');
+// Insert with named parameters (auto-prefixed with ':' if needed)
+await db.executeSql(
+  'INSERT INTO users (name, email, age) VALUES (:name, :email, :age)',
+  nameParams: {'name': 'Jane Smith', 'email': 'jane@example.com', 'age': 28},
+);
+
+// Query with named parameters
+await db.executeReader(
+  'SELECT * FROM users WHERE age > :minAge AND name != :exclude',
+  nameParams: {':minAge': 25, ':exclude': 'admin'},
+);
+
+while (await db.readRow()) {
+  print(db.getColumnText(0));
+}
+```
+
+### Rich Types Example
+
+```dart
+import 'package:decimal/decimal.dart';
+
+// Supports Decimal, bool, DateTime, Duration, Enum and Blob
+await db.executeSql(
+  'INSERT INTO products (name, price, active) VALUES (?, ?, ?)',
+  params: ['Widget', Decimal.parse('19.99'), true],
+);
+
+await db.executeReader('SELECT name, price, active FROM products');
+while (await db.readRow()) {
+  final name = db.getColumnText(0);
+  final price = db.getColumnDecimal(1);
+  final active = db.getColumnBool(2);
+  print('$name - \$$price (active: $active)');
+}
+```
+
+### Transactions Example
+
+```dart
+// Recommended: use the transaction() helper for automatic commit/rollback
+await db.transaction((db) async {
+  await db.executeSql(
+    'INSERT INTO users (name, email) VALUES (?, ?)',
+    params: ['Alice', 'alice@example.com'],
+  );
+  await db.executeSql(
+    'INSERT INTO users (name, email) VALUES (?, ?)',
+    params: ['Bob', 'bob@example.com'],
+  );
+  // Automatically committed if no exception is thrown
+  // Automatically rolled back if an exception is thrown
+});
+
+// Manual transaction control
+await db.beginTransaction();
+try {
+  await db.executeSql('INSERT INTO users (name) VALUES (?)', params: ['Alice']);
+  await db.executeSql('INSERT INTO users (name) VALUES (?)', params: ['Bob']);
+  await db.commit();
+} catch (_) {
+  await db.rollback();
+  rethrow;
+}
 ```
 
 ## 📱 Platform Notes
@@ -175,6 +208,16 @@ await db.executeSql('');
 - **Android**: Native library automatically included
 - **Windows/Linux**: Dynamic libraries bundled with app
 - **Web**: Requires manual setup of JavaScript SQLite library
+
+## ⚠️ Thread Safety
+
+This plugin is designed to be used from the **main isolate only**. The singleton instances and native database pointers are not shared across Dart isolates.
+
+If you need to perform database operations from a background isolate (e.g. via `Isolate.run` or `compute`), you should:
+- Perform all database operations on the main isolate, or
+- Open a separate database connection within the background isolate
+
+Concurrent writes from multiple isolates to the same database file may cause corruption.
 
 ## 🔧 Development
 
