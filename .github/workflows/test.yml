@@ -11,7 +11,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         path: ${{github.workspace}}
     - name: Setup Flutter
@@ -31,7 +31,7 @@ jobs:
     - name: Run Flutter tests
       run: flutter test
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         name: Release ${{ env.VERSION }}
         tag_name: ${{ env.VERSION }}
