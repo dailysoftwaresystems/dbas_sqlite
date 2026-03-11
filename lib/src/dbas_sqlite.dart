@@ -5,6 +5,7 @@ import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
   if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
+import 'package:dbas_sqlite_flutter/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:decimal/decimal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
@@ -97,7 +98,7 @@ class DbasSqlite {
   Future<String> getAppDatabasePath({String? dbName}) async {
     dbName ??= this.dbName;
 
-    if (_platform.isTest(dbName)) {
+    if (DbasSqlitePlatformUtil.isTest()) {
       String dbPath = path.join(Directory.current.path, 'test', 'db');
       Directory dbDir = Directory(dbPath);
       if (!await dbDir.exists()) {

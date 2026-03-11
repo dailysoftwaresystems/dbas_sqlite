@@ -52,7 +52,7 @@ extern "C" {
 
     DLL_EXPORT const char* GetLastDbError(SQLiteDb* inst);
     DLL_EXPORT int GetAffectedRows(SQLiteDb* inst);
-    DLL_EXPORT long GetLastInsertedId(SQLiteDb* inst);
+    DLL_EXPORT long long GetLastInsertedId(SQLiteDb* inst);
 
     DLL_EXPORT void CloseReader(SQLiteDb* inst);
     DLL_EXPORT void CloseDb(SQLiteDb* inst);

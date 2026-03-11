@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:dbas_sqlite_flutter/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 
@@ -38,9 +39,7 @@ abstract class DbasSqliteNativeInterface {
 
   String get dbName => _dbName;
 
-  bool get isTest {
-    return !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
-  }
+  bool get isTest => DbasSqlitePlatformUtil.isTest();
 
   Future<void> prepareLibIfNeeded() async {
     // Only web needs to load libraries from assets

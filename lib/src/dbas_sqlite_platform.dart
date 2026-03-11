@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:dbas_sqlite_flutter/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
   if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
@@ -25,10 +25,6 @@ final class DbasSqlitePlatform {
     }
 
     return _delegate[dbName]!;
-  }
-
-  bool isTest(String name) {
-    return !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
   }
 
   Future<void> initialize(String name) async => await _delegate[name]!.initialize();
@@ -131,6 +127,9 @@ final class DbasSqlitePlatform {
   Future closeReader(DbasSqliteDb db) async => await _delegate[db.name]!.closeReader(db.ptr);
   Future closeDb(DbasSqliteDb db) async {
     await _delegate[db.name]!.executeSql(db.ptr, 'PRAGMA wal_checkpoint(TRUNCATE);');
+    if (DbasSqlitePlatformUtil.isTest()) {
+      await _delegate[db.name]!.executeSql(db.ptr, 'PRAGMA journal_mode = DELETE;');
+    }
     await _delegate[db.name]!.closeDb(db.ptr);
   }
 }
