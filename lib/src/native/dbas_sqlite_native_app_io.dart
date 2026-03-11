@@ -111,8 +111,16 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
 
   @override
   Future<int> openDb(String path) async {
-    final ptr = _openDb(path.toNativeUtf8());
-    return ptr.address;
+    Pointer<Utf8> pathPtr = nullptr;
+    try {
+      pathPtr = path.toNativeUtf8();
+      final ptr = _openDb(pathPtr);
+      return ptr.address;
+    } finally {
+      if (pathPtr != nullptr) {
+        calloc.free(pathPtr);
+      }
+    }
   }
 
   @override
@@ -154,12 +162,30 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   bool isOpened(int dbPtr) => _isOpened(_dbPtr(dbPtr)) == 1;
 
   @override
-  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) async =>
-      _executeSql(_dbPtr(dbPtr), sql.toNativeUtf8());
+  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) async {
+    Pointer<Utf8> sqlPtr = nullptr;
+    try {
+      sqlPtr = sql.toNativeUtf8();
+      return _executeSql(_dbPtr(dbPtr), sqlPtr);
+    } finally {
+      if (sqlPtr != nullptr) {
+        calloc.free(sqlPtr);
+      }
+    }
+  }
 
   @override
-  Future<int> prepareQuery(int dbPtr, String sql) async =>
-      _prepareQuery(_dbPtr(dbPtr), sql.toNativeUtf8());
+  Future<int> prepareQuery(int dbPtr, String sql) async {
+    Pointer<Utf8> sqlPtr = nullptr;
+    try {
+      sqlPtr = sql.toNativeUtf8();
+      return _prepareQuery(_dbPtr(dbPtr), sqlPtr);
+    } finally {
+      if (sqlPtr != nullptr) {
+        calloc.free(sqlPtr);
+      }
+    }
+  }
 
   @override
   int bindNull(int dbPtr, int index) =>
@@ -178,51 +204,105 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       _bindDouble(_dbPtr(dbPtr), index, value);
 
   @override
-  int bindText(int dbPtr, int index, String value) =>
-      _bindText(_dbPtr(dbPtr), index, value.toNativeUtf8());
-
-  @override
-  int bindBlob(int dbPtr, int index, List<int> value) {
-    final ptr = calloc<Uint8>(value.length);
-    for (var i = 0; i < value.length; i++) {
-      ptr[i] = value[i];
+  int bindText(int dbPtr, int index, String value) {
+    Pointer<Utf8> valuePtr = nullptr;
+    try {
+      valuePtr = value.toNativeUtf8();
+      return _bindText(_dbPtr(dbPtr), index, valuePtr);
+    } finally {
+      if (valuePtr != nullptr) {
+        calloc.free(valuePtr);
+      }
     }
-    final result = _bindBlob(_dbPtr(dbPtr), index, ptr);
-    calloc.free(ptr);
-    return result;
   }
 
   @override
-  int bindNameNull(int dbPtr, String name) =>
-      _bindNameNull(_dbPtr(dbPtr), name.toNativeUtf8());
+  int bindBlob(int dbPtr, int index, List<int> value) {
+    Pointer<Uint8> ptr = nullptr;
+    try {
+      ptr = calloc<Uint8>(value.length);
+      for (var i = 0; i < value.length; i++) {
+        ptr[i] = value[i];
+      }
+      return _bindBlob(_dbPtr(dbPtr), index, ptr);
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
 
   @override
-  int bindNameInt(int dbPtr, String name, int value) =>
-      _bindNameInt(_dbPtr(dbPtr), name.toNativeUtf8(), value);
+  int bindNameNull(int dbPtr, String name) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      return _bindNameNull(_dbPtr(dbPtr), namePtr);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  int bindNameFloat(int dbPtr, String name, double value) =>
-      _bindNameFloat(_dbPtr(dbPtr), name.toNativeUtf8(), value);
+  int bindNameInt(int dbPtr, String name, int value) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      return _bindNameInt(_dbPtr(dbPtr), namePtr, value);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  int bindNameDouble(int dbPtr, String name, double value) =>
-      _bindNameDouble(_dbPtr(dbPtr), name.toNativeUtf8(), value);
+  int bindNameFloat(int dbPtr, String name, double value) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      return _bindNameFloat(_dbPtr(dbPtr), namePtr, value);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
 
   @override
-  int bindNameText(int dbPtr, String name, String value) =>
-      _bindNameText(_dbPtr(dbPtr), name.toNativeUtf8(), value.toNativeUtf8());
+  int bindNameDouble(int dbPtr, String name, double value) {
+    Pointer<Utf8> namePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      return _bindNameDouble(_dbPtr(dbPtr), namePtr, value);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+    }
+  }
+
+  @override
+  int bindNameText(int dbPtr, String name, String value) {
+    Pointer<Utf8> namePtr = nullptr;
+    Pointer<Utf8> valuePtr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      valuePtr = value.toNativeUtf8();
+      return _bindNameText(_dbPtr(dbPtr), namePtr, valuePtr);
+    } finally {
+      if (namePtr != nullptr) calloc.free(namePtr);
+      if (valuePtr != nullptr) calloc.free(valuePtr);
+    }
+  }
 
   @override
   int bindNameBlob(int dbPtr, String name, List<int> value) {
-    final namePtr = name.toNativeUtf8();
-    final ptr = calloc<Uint8>(value.length);
-    for (var i = 0; i < value.length; i++) {
-      ptr[i] = value[i];
+    Pointer<Utf8> namePtr = nullptr;
+    Pointer<Uint8> ptr = nullptr;
+    try {
+      namePtr = name.toNativeUtf8();
+      ptr = calloc<Uint8>(value.length);
+      for (var i = 0; i < value.length; i++) {
+        ptr[i] = value[i];
+      }
+      return _bindNameBlob(_dbPtr(dbPtr), namePtr, ptr);
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+      if (namePtr != nullptr) calloc.free(namePtr);
     }
-    final result = _bindNameBlob(_dbPtr(dbPtr), namePtr, ptr);
-    calloc.free(ptr);
-    calloc.free(namePtr);
-    return result;
   }
 
   @override
