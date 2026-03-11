@@ -85,8 +85,12 @@ class _TestPageState extends State<TestPage> {
 
       await _db!.executeReader('SELECT COUNT(*) FROM test_data;');
       int count = 0;
-      if (_db!.readRow()) {
-        count = _db!.getColumnInt(0);
+      try {
+        if (await _db!.readRow()) {
+          count = _db!.getColumnInt(0);
+        }
+      } finally {
+        await _db!.closeReader();
       }
 
       setState(() {
@@ -112,8 +116,12 @@ class _TestPageState extends State<TestPage> {
 
       await _db!.executeReader('SELECT COUNT(*) as count FROM test_data;');
       int count = 0;
-      if (_db!.readRow()) {
-        count = _db!.getColumnInt(0);
+      try {
+        if (await _db!.readRow()) {
+          count = _db!.getColumnInt(0);
+        }
+      } finally {
+        await _db!.closeReader();
       }
 
       setState(() {

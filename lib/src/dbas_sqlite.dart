@@ -128,12 +128,18 @@ class DbasSqlite {
 
     int prepared = await _platform.prepareQuery(_db!, sql);
     if (prepared == -1 || prepared == 1) {
+      await closeReader();
       String error = _platform.getLastDbError(_db!) ?? 'Unknown error ($prepared).';
       throw Exception(["It was not possible to prepare the query: $error"]);
     }
 
-    _bindParameters(params);
-    _bindNameParameters(nameParams);
+    try {
+      _bindParameters(params);
+      _bindNameParameters(nameParams);
+    } catch (_) {
+      await closeReader();
+      rethrow;
+    }
 
     int result = 0;
     if (!await readRow(syncWebDb: syncWebDb)) {
@@ -151,12 +157,18 @@ class DbasSqlite {
 
     int prepared = await _platform.prepareQuery(_db!, sql);
     if (prepared == -1 || prepared == 1) {
+      await closeReader();
       final error = _platform.getLastDbError(_db!) ?? 'Unknown error ($prepared).';
       throw Exception(["It was not possible to prepare the query: $error"]);
     }
 
-    _bindParameters(params);
-    _bindNameParameters(nameParams);
+    try {
+      _bindParameters(params);
+      _bindNameParameters(nameParams);
+    } catch (_) {
+      await closeReader();
+      rethrow;
+    }
 
     return 1;
   }
@@ -165,7 +177,7 @@ class DbasSqlite {
     int readResult = await _platform.readRow(_db!, syncWebDb: syncWebDb);
     if (!_sqliteSuccessResults.contains(readResult)) {
       String? error = _platform.getLastDbError(_db!);
-      await _platform.closeReader(_db!);
+      await closeReader();
       if (error == null && readResult == 20) {
         error = 'Misuse: possibly missing or invalid bind.';
       }
@@ -173,7 +185,11 @@ class DbasSqlite {
       throw Exception(["It was not possible to run the query ($readResult): $error"]);
     }
 
-    return readResult == _sqliteRow;
+    bool hasRow = readResult == _sqliteRow;
+    if (!hasRow) {
+      await closeReader();
+    }
+    return hasRow;
   }
 
   bool isColumnNull(int idx) {
