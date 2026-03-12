@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.6.2 - 2026-03-12
+
+* `C SQLite lib ReadRow` capture error messages inside last error
+
 ## 1.6.1 - 2026-03-11
 
 * `commit()` now performs automatic rollback if the COMMIT fails
