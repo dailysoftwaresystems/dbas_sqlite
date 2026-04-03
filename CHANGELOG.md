@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.1 - 2026-04-03
+
+* **Connection Pool (WAL mode)**: `openDb()` now creates a pool with 1 writer + N readers (default 4), configurable via `readerPoolSize` parameter
+* Pool is fully automatic and transparent -- reads use pool readers, writes use the writer, no API changes needed
+* Falls back to single connection if pool creation fails or `readerPoolSize = 0`
+* **Thread safety**: Writer mutex serializes all write operations (executeSql, transactions). Reader mutex serializes read sessions. Writer and reader locks are independent, allowing concurrent reads and writes via WAL mode
+* Transactions hold the writer lock for their full duration; reads within a transaction use the writer connection to see uncommitted data
+* **Web Worker architecture**: WASM module now runs inside a dedicated Web Worker (required for OPFS `createSyncAccessHandle`). Bind calls are buffered and flushed to the worker on `readRow`. Column data is pre-fetched and cached for sync access
+* **New**: `streamCopyDb(destDbName)` - Stream-copy the current database to a new name with automatic cleanup of destination WAL/SHM files
+* **New**: `attachStreamDb(stream)` - Attach a database from a byte stream
+* **New**: Connection pool support wired through the full native stack (C FFI, IO/AOT, Web, stubs)
+* **New**: `DbasSqlitePoolStruct` FFI struct mapping the C `SQLitePool` struct
+* Updated native C library with pool functions: `CreatePool`, `PoolGetWriter`, `PoolAcquireReader`, `PoolReleaseReader`, `ClosePool`
+* Updated JS wrapper with pool support and OPFS persistence
+* `closeDb()` properly cleans up pool, releases all locks, and unblocks any waiters
+* `closeReader()` releases the correct lock (reader lock for pool readers, writer lock for fallback)
+* Added `isOpened()` guards after lock acquisition to handle `closeDb` during pending operations
+* 55 unit tests covering pool, thread safety, concurrent operations, transactions, and all data types
+
 ## 1.6.2 - 2026-03-12
 
 * `C SQLite lib ReadRow` capture error messages inside last error

@@ -10,12 +10,7 @@ enum TestStatus { active, inactive, suspended }
 /// Helper to create a fresh database with a comprehensive test table.
 Future<DbasSqlite> _createTestDb(String dbName) async {
   final db = await DbasSqlite.getInstance(dbName: dbName);
-
-  final dbFile = File(await db.getAppDatabasePath(dbName: dbName));
-  if (await db.databaseExists()) {
-    await dbFile.delete();
-  }
-
+  await db.dropDb();
   await db.openDb();
   return db;
 }
@@ -28,13 +23,11 @@ void main() async {
   test('Test Open, create table, insert, select and close', () async {
     String dbName = 'test.db';
     final dbasSqlite = await DbasSqlite.getInstance(dbName: dbName);
-
-    File dbFile = File(await dbasSqlite.getAppDatabasePath(dbName: dbName));
-    if (await dbasSqlite.databaseExists()) {
-      dbFile.delete();
-    }
+    await dbasSqlite.dropDb();
 
     await dbasSqlite.openDb();
+
+    File dbFile = File(await dbasSqlite.getAppDatabasePath(dbName: dbName));
 
     expect(await dbasSqlite.databaseExists(), isTrue, reason: 'DB file should exist after opening the database (native).');
     expect(await dbFile.exists(), isTrue, reason: 'DB file should exist after opening the database.');
@@ -99,11 +92,7 @@ void main() async {
     String testDbName = 'test_attach1.db';
     DbasSqlite testDbasSqlite = await DbasSqlite.getInstance(dbName: testDbName);
     String testDbPath = await testDbasSqlite.getAppDatabasePath();
-
-    File testDbFile = File(testDbPath);
-    if (await testDbasSqlite.databaseExists()) {
-      testDbFile.delete();
-    }
+    await testDbasSqlite.dropDb();
 
     await testDbasSqlite.openDb();
     await testDbasSqlite.executeSql('''
@@ -1311,10 +1300,7 @@ void main() async {
 
   test('openDb with readerPoolSize=0 uses single connection', () async {
     final db = await DbasSqlite.getInstance(dbName: 'pool_zero.db');
-    final dbFile = File(await db.getAppDatabasePath(dbName: 'pool_zero.db'));
-    if (await db.databaseExists()) {
-      await dbFile.delete();
-    }
+    await db.dropDb();
 
     await db.openDb(readerPoolSize: 0);
     expect(db.isOpened(), isTrue);

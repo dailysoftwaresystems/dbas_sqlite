@@ -3,7 +3,9 @@
     "allow": [
       "Bash(dart analyze:*)",
       "Bash(flutter test:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(find lib/src/native -name \"*.dart\" -exec grep -l \"class DbasSqliteNativeApp\" {} \\\\;)",
+      "Bash(flutter analyze:*)"
     ]
   }
 }
