@@ -32,7 +32,15 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
       throw UnsupportedError('Not supported in native app.');
 
   @override
+  Future attachStreamDb(String fileName, Stream<List<int>> stream) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
   Future<List<int>> getContent(String fileName) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<void> streamCopyDb(String sourceFileName, String destFileName) =>
       throw UnsupportedError('Not supported in native app.');
 
   @override
@@ -157,5 +165,26 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
 
   @override
   Future<void> closeDb(int dbPtr) async =>
+      throw UnsupportedError('Not supported in native app.');
+
+  // ── Connection Pool ──
+  @override
+  Future<int> createPool(String path, int readerCount) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  int poolGetWriter(int poolPtr) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  int poolAcquireReader(int poolPtr) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  void poolReleaseReader(int poolPtr, int readerPtr) =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<void> closePool(int poolPtr) =>
       throw UnsupportedError('Not supported in native app.');
 }

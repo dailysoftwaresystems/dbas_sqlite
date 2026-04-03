@@ -136,7 +136,9 @@ abstract class DbasSqliteNativeInterface {
   bool isOpened(int dbPtr);
   Future<bool> databaseExists(String fileName);
   Future attachDb(String fileName, List<int> content);
+  Future attachStreamDb(String fileName, Stream<List<int>> stream);
   Future<List<int>> getContent(String fileName);
+  Future<void> streamCopyDb(String sourceFileName, String destFileName);
   Future<void> dropDb(String fileName);
 
   Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false});
@@ -175,4 +177,11 @@ abstract class DbasSqliteNativeInterface {
 
   Future closeReader(int dbPtr);
   Future closeDb(int dbPtr);
+
+  // ── Connection Pool ───
+  Future<int> createPool(String path, int readerCount);
+  int poolGetWriter(int poolPtr);
+  int poolAcquireReader(int poolPtr);
+  void poolReleaseReader(int poolPtr, int readerPtr);
+  Future<void> closePool(int poolPtr);
 }

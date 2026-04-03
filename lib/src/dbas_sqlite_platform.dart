@@ -45,6 +45,11 @@ final class DbasSqlitePlatform {
     return DbasSqliteDb(dbName, dbPtr);
   }
 
+  Future<void> streamCopyDb(String sourceFileName, String destFileName) async {
+    String dbName = _getDbName(sourceFileName);
+    await _delegate[dbName]!.streamCopyDb(sourceFileName, destFileName);
+  }
+
   Future dropDb(String fileName) async {
     final dbName = _getDbName(fileName);
     await _delegate[dbName]!.dropDb(fileName);
@@ -71,6 +76,11 @@ final class DbasSqlitePlatform {
   Future attachDb(String fileName, List<int> content) async {
     String dbName = _getDbName(fileName);
     await _delegate[dbName]!.attachDb(fileName, content);
+  }
+
+  Future attachStreamDb(String fileName, Stream<List<int>> stream) async {
+    String dbName = _getDbName(fileName);
+    await _delegate[dbName]!.attachStreamDb(fileName, stream);
   }
 
   Future<List<int>> getContent(String fileName) async {
@@ -125,4 +135,20 @@ final class DbasSqlitePlatform {
 
   Future closeReader(DbasSqliteDb db) async => await _delegate[db.name]!.closeReader(db.ptr);
   Future closeDb(DbasSqliteDb db) async => await _delegate[db.name]!.closeDb(db.ptr);
+
+  // ── Connection Pool ───────────────────────────────────────────────────
+  Future<int> createPool(String dbName, String fileName, int readerCount) async =>
+      await _delegate[dbName]!.createPool(fileName, readerCount);
+
+  int poolGetWriter(String dbName, int poolPtr) =>
+      _delegate[dbName]!.poolGetWriter(poolPtr);
+
+  int poolAcquireReader(String dbName, int poolPtr) =>
+      _delegate[dbName]!.poolAcquireReader(poolPtr);
+
+  void poolReleaseReader(String dbName, int poolPtr, int readerPtr) =>
+      _delegate[dbName]!.poolReleaseReader(poolPtr, readerPtr);
+
+  Future<void> closePool(String dbName, int poolPtr) async =>
+      await _delegate[dbName]!.closePool(poolPtr);
 }

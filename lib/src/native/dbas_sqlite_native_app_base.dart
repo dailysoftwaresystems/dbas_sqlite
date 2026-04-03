@@ -52,9 +52,19 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   void nativeCloseReader(Pointer<DbasSqliteDbStruct> dbPtr);
   void nativeCloseDb(Pointer<DbasSqliteDbStruct> dbPtr);
 
+  // ── Connection Pool ──
+  Pointer<DbasSqlitePoolStruct> nativeCreatePool(Pointer<Utf8> path, int readerCount);
+  Pointer<DbasSqliteDbStruct> nativePoolGetWriter(Pointer<DbasSqlitePoolStruct> poolPtr);
+  Pointer<DbasSqliteDbStruct> nativePoolAcquireReader(Pointer<DbasSqlitePoolStruct> poolPtr);
+  void nativePoolReleaseReader(Pointer<DbasSqlitePoolStruct> poolPtr, Pointer<DbasSqliteDbStruct> readerPtr);
+  void nativeClosePool(Pointer<DbasSqlitePoolStruct> poolPtr);
+
   // ── Pointer resolution (overridable for extra validation) ──────────────
   Pointer<DbasSqliteDbStruct> resolveDbPtr(int address) =>
       Pointer<DbasSqliteDbStruct>.fromAddress(address);
+
+  Pointer<DbasSqlitePoolStruct> resolvePoolPtr(int address) =>
+      Pointer<DbasSqlitePoolStruct>.fromAddress(address);
 
   // ── Shared implementation ──────────────────────────────────────────────
   @override
@@ -85,9 +95,40 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   }
 
   @override
+  Future attachStreamDb(String fileName, Stream<List<int>> stream) async {
+    await dropDb(fileName);
+    final sink = File(fileName).openWrite();
+    try {
+      await for (final chunk in stream) {
+        sink.add(chunk);
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+  }
+
+  @override
   Future<List<int>> getContent(String fileName) async {
     final dbFile = File(fileName);
     return await dbFile.readAsBytes();
+  }
+
+  @override
+  Future<void> streamCopyDb(String sourceFileName, String destFileName) async {
+    for (final ext in ['', '-wal', '-shm']) {
+      final f = File('$destFileName$ext');
+      if (await f.exists()) await f.delete();
+    }
+
+    final sourceFile = File(sourceFileName);
+    final destFile = File(destFileName);
+    final sink = destFile.openWrite();
+    try {
+      await sourceFile.openRead().pipe(sink);
+    } finally {
+      await sink.close();
+    }
   }
 
   @override
@@ -326,5 +367,36 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   @override
   Future closeDb(int dbPtr) async =>
       nativeCloseDb(resolveDbPtr(dbPtr));
+
+  // ── Connection Pool ──────────────────────────────────────────────────
+  @override
+  Future<int> createPool(String path, int readerCount) async {
+    Pointer<Utf8> pathPtr = nullptr;
+    try {
+      pathPtr = path.toNativeUtf8();
+      final ptr = nativeCreatePool(pathPtr, readerCount);
+      return ptr.address;
+    } finally {
+      if (pathPtr != nullptr) {
+        calloc.free(pathPtr);
+      }
+    }
+  }
+
+  @override
+  int poolGetWriter(int poolPtr) =>
+      nativePoolGetWriter(resolvePoolPtr(poolPtr)).address;
+
+  @override
+  int poolAcquireReader(int poolPtr) =>
+      nativePoolAcquireReader(resolvePoolPtr(poolPtr)).address;
+
+  @override
+  void poolReleaseReader(int poolPtr, int readerPtr) =>
+      nativePoolReleaseReader(resolvePoolPtr(poolPtr), resolveDbPtr(readerPtr));
+
+  @override
+  Future<void> closePool(int poolPtr) async =>
+      nativeClosePool(resolvePoolPtr(poolPtr));
 }
 

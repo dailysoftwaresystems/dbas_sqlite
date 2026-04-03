@@ -40,6 +40,13 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   late void Function(Pointer<DbasSqliteDbStruct>) _closeReader;
   late void Function(Pointer<DbasSqliteDbStruct>) _closeDb;
 
+  // ── Connection Pool ──
+  late Pointer<DbasSqlitePoolStruct> Function(Pointer<Utf8>, int) _createPool;
+  late Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>) _poolGetWriter;
+  late Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>) _poolAcquireReader;
+  late void Function(Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>) _poolReleaseReader;
+  late void Function(Pointer<DbasSqlitePoolStruct>) _closePool;
+
   DbasSqliteNativeApp(super.dbName);
 
   @override
@@ -148,6 +155,23 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
     _closeDb = _lib.lookupFunction<
         Void Function(Pointer<DbasSqliteDbStruct>),
         void Function(Pointer<DbasSqliteDbStruct>)>('CloseDb');
+
+    // ── Connection Pool ──
+    _createPool = _lib.lookupFunction<
+        Pointer<DbasSqlitePoolStruct> Function(Pointer<Utf8>, Int32),
+        Pointer<DbasSqlitePoolStruct> Function(Pointer<Utf8>, int)>('CreatePool');
+    _poolGetWriter = _lib.lookupFunction<
+        Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>),
+        Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>)>('PoolGetWriter');
+    _poolAcquireReader = _lib.lookupFunction<
+        Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>),
+        Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>)>('PoolAcquireReader');
+    _poolReleaseReader = _lib.lookupFunction<
+        Void Function(Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>),
+        void Function(Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>)>('PoolReleaseReader');
+    _closePool = _lib.lookupFunction<
+        Void Function(Pointer<DbasSqlitePoolStruct>),
+        void Function(Pointer<DbasSqlitePoolStruct>)>('ClosePool');
   }
 
   // ── Pointer validation ─────────────────────────────────────────────────
@@ -237,4 +261,16 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   void nativeCloseReader(Pointer<DbasSqliteDbStruct> dbPtr) => _closeReader(dbPtr);
   @override
   void nativeCloseDb(Pointer<DbasSqliteDbStruct> dbPtr) => _closeDb(dbPtr);
+
+  // ── Connection Pool ───────────────────────────────────────────────────
+  @override
+  Pointer<DbasSqlitePoolStruct> nativeCreatePool(Pointer<Utf8> path, int readerCount) => _createPool(path, readerCount);
+  @override
+  Pointer<DbasSqliteDbStruct> nativePoolGetWriter(Pointer<DbasSqlitePoolStruct> poolPtr) => _poolGetWriter(poolPtr);
+  @override
+  Pointer<DbasSqliteDbStruct> nativePoolAcquireReader(Pointer<DbasSqlitePoolStruct> poolPtr) => _poolAcquireReader(poolPtr);
+  @override
+  void nativePoolReleaseReader(Pointer<DbasSqlitePoolStruct> poolPtr, Pointer<DbasSqliteDbStruct> readerPtr) => _poolReleaseReader(poolPtr, readerPtr);
+  @override
+  void nativeClosePool(Pointer<DbasSqlitePoolStruct> poolPtr) => _closePool(poolPtr);
 }

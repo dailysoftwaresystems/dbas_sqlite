@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dart analyze:*)",
+      "Bash(flutter test:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

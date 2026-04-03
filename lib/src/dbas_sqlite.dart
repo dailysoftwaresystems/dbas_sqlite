@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
@@ -47,6 +48,11 @@ class DbasSqlite {
   final String dbName;
   DbasSqliteDb? _db;
   bool _isInTransaction = false;
+  int? _poolPtr;
+  DbasSqliteDb? _reader;
+  bool _readerHoldsWriterLock = false;
+  Completer<void>? _writerLock;
+  Completer<void>? _readerLock;
 
   DbasSqlite._dbasSqlite(this._platform, this.dbName);
 
@@ -115,6 +121,59 @@ class DbasSqlite {
     return instance;
   }
 
+  /// Attaches a database from a byte stream and optionally opens it.
+  ///
+  /// Similar to [attachDb], but accepts a [Stream<List<int>>] instead of
+  /// a complete byte list, allowing the database to be written incrementally
+  /// (e.g. from an HTTP download or file read stream) without buffering
+  /// the entire content in memory.
+  ///
+  /// On native platforms the bytes are streamed directly to disk.
+  /// On web the Dart stream is bridged to a JS readable stream and written
+  /// chunk-by-chunk to the Emscripten virtual filesystem. Because the
+  /// Emscripten FS is memory-backed, the complete file still resides in
+  /// memory on web; however no extra Dart-side copy is made.
+  ///
+  /// If a database with the same name already exists and is opened, it will be
+  /// closed and removed before attaching the new database.
+  ///
+  /// When [openDb] is `true` (the default), the database is automatically
+  /// opened after being written.
+  ///
+  /// Returns the [DbasSqlite] instance for the attached database.
+  Future<DbasSqlite> attachStreamDb(Stream<List<int>> stream, {bool openDb = true}) async {
+    if (_instance.containsKey(dbName)) {
+      if (_instance[dbName]!.isOpened()) {
+        await _instance[dbName]!.closeDb();
+      }
+
+      _instance.remove(dbName);
+    }
+
+    String fileName = await getAppDatabasePath(dbName: dbName);
+    await _platform.attachStreamDb(fileName, stream);
+    final instance = await getInstance(dbName: dbName);
+
+    if (openDb) {
+      await instance.openDb();
+    }
+
+    return instance;
+  }
+
+  /// Copies the current database to a new database with the given [destDbName].
+  ///
+  /// The copy is performed as a streaming chunk-by-chunk operation so the
+  /// entire file does not need to reside in memory at once.
+  ///
+  /// On native platforms the file is streamed from disk.
+  /// On web the copy is performed between OPFS file handles.
+  Future<void> streamCopyDb(String destDbName) async {
+    String sourceFileName = await getAppDatabasePath(dbName: dbName);
+    String destFileName = await getAppDatabasePath(dbName: destDbName);
+    await _platform.streamCopyDb(sourceFileName, destFileName);
+  }
+
   /// Returns the raw bytes of the database file.
   ///
   /// Useful for backup, export or transferring the database to another device.
@@ -164,14 +223,29 @@ class DbasSqlite {
     return '$dbPath/$dbName';
   }
 
-  /// Opens the database connection.
+  /// Opens the database using a connection pool with WAL mode.
+  ///
+  /// Creates one writer connection and [readerPoolSize] read-only reader
+  /// connections. The writer is used for all DML/DDL operations while
+  /// readers are automatically acquired and released for SELECT queries.
   ///
   /// The database file path is resolved automatically via [getAppDatabasePath].
   /// After calling this method, [isOpened] returns `true`.
   ///
   /// Throws an [Exception] if the database cannot be opened.
-  Future<void> openDb() async {
+  Future<void> openDb({int readerPoolSize = 4}) async {
     String fileName = await getAppDatabasePath(dbName: dbName);
+
+    if (readerPoolSize > 0) {
+      final poolPtr = await _platform.createPool(dbName, fileName, readerPoolSize);
+      if (poolPtr != 0) {
+        _poolPtr = poolPtr;
+        final writerPtr = _platform.poolGetWriter(dbName, poolPtr);
+        _db = DbasSqliteDb(dbName, writerPtr);
+        return;
+      }
+    }
+
     _db = await _platform.openDb(fileName);
   }
 
@@ -207,28 +281,49 @@ class DbasSqlite {
       throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
 
-    int prepared = await _platform.prepareQuery(_db!, sql);
-    if (prepared == -1 || prepared == 1) {
-      await closeReader();
-      String error = _platform.getLastDbError(_db!) ?? 'Unknown error ($prepared).';
-      throw Exception("It was not possible to prepare the query: $error");
-    }
-
+    final lockHeld = _isInTransaction;
+    if (!lockHeld) await _acquireWriterLock();
     try {
-      _bindParameters(params);
-      _bindNameParameters(nameParams);
-    } catch (_) {
-      await closeReader();
-      rethrow;
-    }
+      if (!isOpened()) {
+        throw StateError('Database was closed while waiting for writer lock.');
+      }
+      final conn = _db!;
+      int prepared = await _platform.prepareQuery(conn, sql);
+      if (prepared == -1 || prepared == 1) {
+        await _platform.closeReader(conn);
+        String error = _platform.getLastDbError(conn) ?? 'Unknown error ($prepared).';
+        throw Exception("It was not possible to prepare the query: $error");
+      }
 
-    int result = 0;
-    if (!await readRow(syncWebDb: syncWebDb)) {
-      result = _platform.getAffectedRows(_db!);
-    }
+      try {
+        _bindParameters(conn, params);
+        _bindNameParameters(conn, nameParams);
+      } catch (_) {
+        await _platform.closeReader(conn);
+        rethrow;
+      }
 
-    await _platform.closeReader(_db!);
-    return result;
+      int readResult = await _platform.readRow(conn, syncWebDb: syncWebDb);
+      if (!_sqliteSuccessResults.contains(readResult)) {
+        String? error = _platform.getLastDbError(conn);
+        await _platform.closeReader(conn);
+        if (error == null && readResult == 20) {
+          error = 'Misuse: possibly missing or invalid bind.';
+        }
+        error ??= 'Unknown error ($readResult).';
+        throw Exception("It was not possible to run the query ($readResult): $error");
+      }
+
+      int result = 0;
+      if (readResult != _sqliteRow) {
+        result = _platform.getAffectedRows(conn);
+      }
+
+      await _platform.closeReader(conn);
+      return result;
+    } finally {
+      if (!lockHeld) _releaseWriterLock();
+    }
   }
 
   /// Prepares and binds a SELECT query for row-by-row reading via [readRow].
@@ -252,16 +347,44 @@ class DbasSqlite {
       throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
 
-    int prepared = await _platform.prepareQuery(_db!, sql);
+    _readerHoldsWriterLock = false;
+
+    if (_poolPtr != null && !_isInTransaction) {
+      await _acquireReaderLock();
+      if (!isOpened()) {
+        _releaseReaderLock();
+        throw StateError('Database was closed while waiting for reader lock.');
+      }
+      _reader = await _acquirePoolReader();
+      if (_reader == null) {
+        // All pool readers busy — fall back to writer connection
+        _releaseReaderLock();
+      }
+    }
+
+    // No pool or pool exhausted — use writer connection with writer lock
+    if (_reader == null) {
+      if (!_isInTransaction) {
+        await _acquireWriterLock();
+        if (!isOpened()) {
+          _releaseWriterLock();
+          throw StateError('Database was closed while waiting for writer lock.');
+        }
+        _readerHoldsWriterLock = true;
+      }
+    }
+
+    final conn = _reader ?? _db!;
+    int prepared = await _platform.prepareQuery(conn, sql);
     if (prepared == -1 || prepared == 1) {
       await closeReader();
-      final error = _platform.getLastDbError(_db!) ?? 'Unknown error ($prepared).';
+      final error = _platform.getLastDbError(conn) ?? 'Unknown error ($prepared).';
       throw Exception("It was not possible to prepare the query: $error");
     }
 
     try {
-      _bindParameters(params);
-      _bindNameParameters(nameParams);
+      _bindParameters(conn, params);
+      _bindNameParameters(conn, nameParams);
     } catch (_) {
       await closeReader();
       rethrow;
@@ -279,9 +402,10 @@ class DbasSqlite {
   ///
   /// Throws an [Exception] if the query execution fails.
   Future<bool> readRow({bool syncWebDb = false}) async {
-    int readResult = await _platform.readRow(_db!, syncWebDb: syncWebDb);
+    final conn = _reader ?? _db!;
+    int readResult = await _platform.readRow(conn, syncWebDb: syncWebDb);
     if (!_sqliteSuccessResults.contains(readResult)) {
-      String? error = _platform.getLastDbError(_db!);
+      String? error = _platform.getLastDbError(conn);
       await closeReader();
       if (error == null && readResult == 20) {
         error = 'Misuse: possibly missing or invalid bind.';
@@ -299,12 +423,12 @@ class DbasSqlite {
 
   /// Returns `true` if the column at [idx] is NULL.
   bool isColumnNull(int idx) {
-    return _platform.isNull(_db!, idx);
+    return _platform.isNull(_reader ?? _db!, idx);
   }
 
   /// Returns the value of the column at [idx] as a [String].
   String getColumnText(int idx) {
-    return _platform.getColumnText(_db!, idx);
+    return _platform.getColumnText(_reader ?? _db!, idx);
   }
 
   /// Returns the value of the column at [idx] as a [String],
@@ -321,7 +445,7 @@ class DbasSqlite {
   ///
   /// Interprets `1` as `true` and any other integer as `false`.
   bool getColumnBool(int idx) {
-    return _platform.getColumnInt(_db!, idx) == 1;
+    return _platform.getColumnInt(_reader ?? _db!, idx) == 1;
   }
 
   /// Returns the value of the column at [idx] as a [bool],
@@ -336,7 +460,7 @@ class DbasSqlite {
 
   /// Returns the value of the column at [idx] as an [int].
   int getColumnInt(int idx) {
-    return _platform.getColumnInt(_db!, idx);
+    return _platform.getColumnInt(_reader ?? _db!, idx);
   }
 
   /// Returns the value of the column at [idx] as an [int],
@@ -357,7 +481,7 @@ class DbasSqlite {
       return Decimal.zero;
     }
 
-    final textValue = _platform.getColumnText(_db!, idx);
+    final textValue = _platform.getColumnText(_reader ?? _db!, idx);
     return Decimal.parse(textValue);
   }
 
@@ -373,7 +497,7 @@ class DbasSqlite {
 
   /// Returns the value of the column at [idx] as a [double].
   double getColumnDouble(int idx) {
-    return _platform.getColumnDouble(_db!, idx);
+    return _platform.getColumnDouble(_reader ?? _db!, idx);
   }
 
   /// Returns the value of the column at [idx] as a [double],
@@ -390,7 +514,7 @@ class DbasSqlite {
   ///
   /// The column value must be a string parseable by [DateTime.parse].
   DateTime getColumnDateTime(int idx) {
-    final value = _platform.getColumnText(_db!, idx);
+    final value = _platform.getColumnText(_reader ?? _db!, idx);
     return DateTime.parse(value);
   }
 
@@ -408,7 +532,7 @@ class DbasSqlite {
   ///
   /// Expects the column value in `HH:MM:SS` or `HH:MM:SS.mmm` format.
   Duration getColumnTime(int idx) {
-    final parts = _platform.getColumnText(_db!, idx).split(':');
+    final parts = _platform.getColumnText(_reader ?? _db!, idx).split(':');
     final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
     final secondsMs = parts.length > 2 ? parts[2].split('.').where((i) => i.trim() != '').toList() : ['0'];
 
@@ -436,7 +560,7 @@ class DbasSqlite {
   ///
   /// Throws an [ArgumentError] if the integer value is out of range.
   T getColumnEnum<T extends Enum>(int idx, List<T> values) {
-    final intValue = _platform.getColumnInt(_db!, idx);
+    final intValue = _platform.getColumnInt(_reader ?? _db!, idx);
     if (intValue < 0 || intValue >= values.length) {
       throw ArgumentError('No enum value found for index $intValue in ${T.toString()}');
     }
@@ -455,7 +579,7 @@ class DbasSqlite {
 
   /// Returns the value of the column at [idx] as a [Uint8List] (binary data).
   Uint8List getColumnBlob(int idx) {
-    return _platform.getColumnBlob(_db!, idx);
+    return _platform.getColumnBlob(_reader ?? _db!, idx);
   }
 
   /// Returns the value of the column at [idx] as a [Uint8List],
@@ -470,17 +594,17 @@ class DbasSqlite {
 
   /// Returns the name of the column at [columnIndex] in the current result set.
   String getColumnName(int columnIndex) {
-    return _platform.getColumnName(_db!, columnIndex);
+    return _platform.getColumnName(_reader ?? _db!, columnIndex);
   }
 
   /// Returns the [SqliteColumnType] of the column at [idx].
   SqliteColumnType getColumnType(int idx) {
-    return SqliteColumnType.fromInt( _platform.getColumnType(_db!, idx));
+    return SqliteColumnType.fromInt( _platform.getColumnType(_reader ?? _db!, idx));
   }
 
   /// Returns the number of columns in the current result set.
   int getColumnCount() {
-    return _platform.getColumnCount(_db!);
+    return _platform.getColumnCount(_reader ?? _db!);
   }
 
   /// Returns the row ID of the last successfully inserted row.
@@ -488,7 +612,45 @@ class DbasSqlite {
     return _platform.getLastInsertedId(_db!);
   }
 
-  void _bindParameters(List<Object?>? parameters) {
+  // ── Async locks (writer + reader independent) ──────────────────────
+  Future<void> _acquireWriterLock() async {
+    while (_writerLock != null) {
+      await _writerLock!.future;
+    }
+    _writerLock = Completer<void>();
+  }
+
+  void _releaseWriterLock() {
+    final lock = _writerLock;
+    _writerLock = null;
+    lock?.complete();
+  }
+
+  Future<void> _acquireReaderLock() async {
+    while (_readerLock != null) {
+      await _readerLock!.future;
+    }
+    _readerLock = Completer<void>();
+  }
+
+  void _releaseReaderLock() {
+    final lock = _readerLock;
+    _readerLock = null;
+    lock?.complete();
+  }
+
+  Future<DbasSqliteDb?> _acquirePoolReader({int maxRetries = 10}) async {
+    for (int i = 0; i < maxRetries; i++) {
+      final readerPtr = _platform.poolAcquireReader(dbName, _poolPtr!);
+      if (readerPtr != 0) {
+        return DbasSqliteDb(dbName, readerPtr);
+      }
+      await Future.delayed(const Duration(milliseconds: 2));
+    }
+    return null;
+  }
+
+  void _bindParameters(DbasSqliteDb conn, List<Object?>? parameters) {
     if (parameters == null || parameters.isEmpty) {
       return;
     }
@@ -499,32 +661,32 @@ class DbasSqlite {
 
       int paramResult = -1;
       if (value == null) {
-        paramResult = _platform.bindNull(_db!, index);
+        paramResult = _platform.bindNull(conn, index);
       } else if (value is bool) {
-        paramResult = _platform.bindInt(_db!, index, value ? 1 : 0);
+        paramResult = _platform.bindInt(conn, index, value ? 1 : 0);
       } else if (value is int) {
-        paramResult = _platform.bindInt(_db!, index, value);
+        paramResult = _platform.bindInt(conn, index, value);
       } else if (value is double) {
-        paramResult = _platform.bindDouble(_db!, index, value);
+        paramResult = _platform.bindDouble(conn, index, value);
       } else if (value is Decimal) {
-        paramResult = _platform.bindDecimal(_db!, index, value);
+        paramResult = _platform.bindDecimal(conn, index, value);
       } else if (value is String) {
-        paramResult = _platform.bindText(_db!, index, value);
+        paramResult = _platform.bindText(conn, index, value);
       } else if (value is Uint8List) {
-        paramResult = _platform.bindBlob(_db!, index, value);
+        paramResult = _platform.bindBlob(conn, index, value);
       } else if (value is Enum) {
-        paramResult = _platform.bindInt(_db!, index, value.index);
+        paramResult = _platform.bindInt(conn, index, value.index);
       } else {
         throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
       }
 
       if (paramResult == -1 || paramResult == 1) {
-        throw Exception("It was not possible to bind the parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}");
+        throw Exception("It was not possible to bind the parameter: ${_platform.getLastDbError(conn) ?? 'Unknown error ($paramResult)'}");
       }
     }
   }
 
-  void _bindNameParameters(Map<String, Object?>? parameters) {
+  void _bindNameParameters(DbasSqliteDb conn, Map<String, Object?>? parameters) {
     if (parameters == null || parameters.isEmpty) {
       return;
     }
@@ -539,27 +701,27 @@ class DbasSqlite {
 
       int paramResult = -1;
       if (value == null) {
-        paramResult = _platform.bindNameNull(_db!, paramName);
+        paramResult = _platform.bindNameNull(conn, paramName);
       } else if (value is bool) {
-        paramResult = _platform.bindNameInt(_db!, paramName, value ? 1 : 0);
+        paramResult = _platform.bindNameInt(conn, paramName, value ? 1 : 0);
       } else if (value is int) {
-        paramResult = _platform.bindNameInt(_db!, paramName, value);
+        paramResult = _platform.bindNameInt(conn, paramName, value);
       } else if (value is double) {
-        paramResult = _platform.bindNameDouble(_db!, paramName, value.toDouble());
+        paramResult = _platform.bindNameDouble(conn, paramName, value.toDouble());
       } else if (value is Decimal) {
-        paramResult = _platform.bindNameDecimal(_db!, paramName, value);
+        paramResult = _platform.bindNameDecimal(conn, paramName, value);
       } else if (value is String) {
-        paramResult = _platform.bindNameText(_db!, paramName, value);
+        paramResult = _platform.bindNameText(conn, paramName, value);
       } else if (value is Uint8List) {
-        paramResult = _platform.bindNameBlob(_db!, paramName, value);
+        paramResult = _platform.bindNameBlob(conn, paramName, value);
       } else if (value is Enum) {
-        paramResult = _platform.bindNameInt(_db!, paramName, value.index);
+        paramResult = _platform.bindNameInt(conn, paramName, value.index);
       } else {
         throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
       }
 
       if (paramResult == -1 || paramResult == 1) {
-        throw Exception("It was not possible to bind the named parameter: ${_platform.getLastDbError(_db!) ?? 'Unknown error ($paramResult)'}");
+        throw Exception("It was not possible to bind the named parameter: ${_platform.getLastDbError(conn) ?? 'Unknown error ($paramResult)'}");
       }
     }
   }
@@ -572,12 +734,27 @@ class DbasSqlite {
   /// to [getInstance] with the same name will create a fresh instance.
   Future<void> closeDb() async {
     await rollback();
+    _releaseWriterLock();
+
+    if (_reader != null && _poolPtr != null) {
+      _platform.poolReleaseReader(dbName, _poolPtr!, _reader!.ptr);
+      _reader = null;
+    }
+    _readerHoldsWriterLock = false;
+    _releaseReaderLock();
 
     if (_instance.containsKey(dbName)) {
       _instance.remove(dbName);
     }
-    await _platform.closeDb(_db!);
-    _db = null;
+
+    if (_poolPtr != null) {
+      await _platform.closePool(dbName, _poolPtr!);
+      _poolPtr = null;
+      _db = null;
+    } else if (_db != null) {
+      await _platform.closeDb(_db!);
+      _db = null;
+    }
   }
 
   /// Closes the current prepared statement / reader.
@@ -586,8 +763,18 @@ class DbasSqlite {
   /// be called manually to release resources early (e.g. when breaking out
   /// of a read loop).
   Future<void> closeReader() async {
-    if (_db == null) return;
-    await _platform.closeReader(_db!);
+    final conn = _reader ?? _db;
+    if (conn == null) return;
+    await _platform.closeReader(conn);
+
+    if (_reader != null && _poolPtr != null) {
+      _platform.poolReleaseReader(dbName, _poolPtr!, _reader!.ptr);
+      _reader = null;
+      _releaseReaderLock();
+    } else if (_readerHoldsWriterLock) {
+      _readerHoldsWriterLock = false;
+      _releaseWriterLock();
+    }
   }
 
   /// Returns `true` if a transaction is currently active.
@@ -625,8 +812,17 @@ class DbasSqlite {
     if (_isInTransaction) {
       return;
     }
-    await _platform.executeSql(_db!, 'BEGIN TRANSACTION', syncWebDb: true);
-    _isInTransaction = true;
+    await _acquireWriterLock();
+    try {
+      if (!isOpened()) {
+        throw StateError('Database was closed while waiting for writer lock.');
+      }
+      await _platform.executeSql(_db!, 'BEGIN TRANSACTION', syncWebDb: true);
+      _isInTransaction = true;
+    } catch (_) {
+      _releaseWriterLock();
+      rethrow;
+    }
   }
 
   /// Commits the current transaction, persisting all changes made since
@@ -642,6 +838,7 @@ class DbasSqlite {
     try {
       await _platform.executeSql(_db!, 'COMMIT', syncWebDb: true);
       _isInTransaction = false;
+      _releaseWriterLock();
     } catch(e) {
       await rollback();
       rethrow;
@@ -662,6 +859,7 @@ class DbasSqlite {
       await _platform.executeSql(_db!, 'ROLLBACK', syncWebDb: true);
     } finally {
       _isInTransaction = false;
+      _releaseWriterLock();
     }
   }
 
@@ -698,5 +896,6 @@ class DbasSqlite {
       rethrow;
     }
   }
+
 }
 

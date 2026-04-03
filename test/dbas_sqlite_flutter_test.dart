@@ -114,6 +114,7 @@ void main() async {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     ''', syncWebDb: true);
+    await testDbasSqlite.closeDb();
 
     String dbName = 'test_attach2.db';
     DbasSqlite dbasSqlite = await DbasSqlite.getInstance(dbName: dbName);
@@ -1284,6 +1285,387 @@ void main() async {
       expect(db.isInTransaction, isTrue);
     });
     expect(db.isInTransaction, isFalse);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Pool: transparent pooling
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('openDb with default pool works transparently', () async {
+    final db = await _createTestDb('pool_default.db');
+
+    await db.executeSql('CREATE TABLE pool_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO pool_tbl (id, val) VALUES (1, 'pooled')");
+
+    await db.executeReader('SELECT val FROM pool_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'pooled');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('openDb with readerPoolSize=0 uses single connection', () async {
+    final db = await DbasSqlite.getInstance(dbName: 'pool_zero.db');
+    final dbFile = File(await db.getAppDatabasePath(dbName: 'pool_zero.db'));
+    if (await db.databaseExists()) {
+      await dbFile.delete();
+    }
+
+    await db.openDb(readerPoolSize: 0);
+    expect(db.isOpened(), isTrue);
+
+    await db.executeSql('CREATE TABLE single_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO single_tbl (id, val) VALUES (1, 'single')");
+
+    await db.executeReader('SELECT val FROM single_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'single');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // streamCopyDb
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('streamCopyDb copies database to new name', () async {
+    final db = await _createTestDb('copy_src.db');
+
+    await db.executeSql('CREATE TABLE copy_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO copy_tbl (id, val) VALUES (1, 'copied')");
+    await db.closeDb();
+
+    // Re-open to ensure WAL is flushed
+    final srcDb = await DbasSqlite.getInstance(dbName: 'copy_src.db');
+    await srcDb.openDb();
+    await srcDb.streamCopyDb('copy_dest.db');
+    await srcDb.closeDb();
+
+    // Open the copy and verify data
+    final destDb = await DbasSqlite.getInstance(dbName: 'copy_dest.db');
+    await destDb.openDb();
+    expect(destDb.isOpened(), isTrue);
+
+    await destDb.executeReader('SELECT val FROM copy_tbl WHERE id = 1');
+    expect(await destDb.readRow(), isTrue);
+    expect(destDb.getColumnText(0), 'copied');
+    await destDb.closeReader();
+
+    await destDb.closeDb();
+    await destDb.dropDb();
+    await srcDb.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // attachStreamDb
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('attachStreamDb writes database from byte stream', () async {
+    // Create source DB
+    final srcDb = await _createTestDb('stream_src.db');
+    await srcDb.executeSql('CREATE TABLE stream_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await srcDb.executeSql("INSERT INTO stream_tbl (id, val) VALUES (1, 'streamed')");
+    final srcPath = await srcDb.getAppDatabasePath();
+    await srcDb.closeDb();
+
+    // Read source as a stream
+    final stream = File(srcPath).openRead();
+
+    // Attach via stream
+    final destDb = await DbasSqlite.getInstance(dbName: 'stream_dest.db');
+    final result = await destDb.attachStreamDb(stream);
+
+    expect(result.isOpened(), isTrue);
+
+    await result.executeReader('SELECT val FROM stream_tbl WHERE id = 1');
+    expect(await result.readRow(), isTrue);
+    expect(result.getColumnText(0), 'streamed');
+    await result.closeReader();
+
+    await result.closeDb();
+    await result.dropDb();
+    await srcDb.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // closeReader idempotent
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('closeReader is safe to call multiple times', () async {
+    final db = await _createTestDb('close_reader_idem.db');
+
+    await db.executeSql('CREATE TABLE cr_tbl (id INTEGER PRIMARY KEY)');
+    await db.executeSql('INSERT INTO cr_tbl (id) VALUES (1)');
+
+    await db.executeReader('SELECT id FROM cr_tbl');
+    expect(await db.readRow(), isTrue);
+
+    // Close twice — should not throw
+    await db.closeReader();
+    await db.closeReader();
+
+    // Should still be able to run queries after
+    await db.executeReader('SELECT id FROM cr_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 1);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // executeReader within a transaction
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('executeReader works within a transaction', () async {
+    final db = await _createTestDb('reader_in_txn.db');
+
+    await db.executeSql('CREATE TABLE rit_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO rit_tbl (id, val) VALUES (1, 'before')");
+
+    await db.beginTransaction();
+
+    await db.executeSql("INSERT INTO rit_tbl (id, val) VALUES (2, 'during')");
+
+    // Read within the same transaction — should see uncommitted data
+    await db.executeReader('SELECT val FROM rit_tbl ORDER BY id');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'before');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'during');
+    expect(await db.readRow(), isFalse);
+
+    await db.commit();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Sequential reader then writer
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('sequential reader then writer works correctly', () async {
+    final db = await _createTestDb('seq_rw.db');
+
+    await db.executeSql('CREATE TABLE seq_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO seq_tbl (id, val) VALUES (1, 'a')");
+
+    // Reader cycle
+    await db.executeReader('SELECT val FROM seq_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'a');
+    await db.closeReader();
+
+    // Writer after reader
+    await db.executeSql("UPDATE seq_tbl SET val = 'b' WHERE id = 1");
+
+    // Verify write took effect
+    await db.executeReader('SELECT val FROM seq_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'b');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Thread safety: concurrent writes serialized
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('concurrent executeSql calls are serialized and all succeed', () async {
+    final db = await _createTestDb('concurrent_writes.db');
+
+    await db.executeSql('CREATE TABLE cw_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    // Launch multiple writes concurrently
+    await Future.wait([
+      db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (1, 'a')"),
+      db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (2, 'b')"),
+      db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (3, 'c')"),
+    ]);
+
+    // All three rows should exist
+    await db.executeReader('SELECT COUNT(*) FROM cw_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 3);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Thread safety: writer lock held during transaction
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('concurrent transactions are serialized via writer lock', () async {
+    final db = await _createTestDb('txn_lock.db');
+
+    await db.executeSql('CREATE TABLE tl_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    final executionOrder = <int>[];
+
+    // Two transactions fired concurrently — must be serialized
+    await Future.wait([
+      db.transaction((db) async {
+        await db.executeSql("INSERT INTO tl_tbl (id, val) VALUES (1, 'a')");
+        executionOrder.add(1);
+      }),
+      db.transaction((db) async {
+        await db.executeSql("INSERT INTO tl_tbl (id, val) VALUES (2, 'b')");
+        executionOrder.add(2);
+      }),
+    ]);
+
+    // Both should have completed
+    expect(executionOrder.length, 2);
+    expect(executionOrder.toSet(), {1, 2});
+
+    // Both rows should exist
+    await db.executeReader('SELECT COUNT(*) FROM tl_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 2);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Thread safety: reader does not block writer (pool)
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('executeReader and executeSql do not deadlock', () async {
+    final db = await _createTestDb('rw_nodeadlock.db');
+
+    await db.executeSql('CREATE TABLE rw_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO rw_tbl (id, val) VALUES (1, 'initial')");
+
+    // Start a reader
+    await db.executeReader('SELECT val FROM rw_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'initial');
+    await db.closeReader();
+
+    // Writer should not be blocked
+    await db.executeSql("UPDATE rw_tbl SET val = 'updated' WHERE id = 1");
+
+    await db.executeReader('SELECT val FROM rw_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'updated');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Thread safety: closeDb while operations pending
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('closeDb cleans up state and subsequent operations throw', () async {
+    final db = await _createTestDb('close_state.db');
+
+    await db.executeSql('CREATE TABLE cs_tbl (id INTEGER PRIMARY KEY)');
+
+    await db.closeDb();
+
+    expect(db.isOpened(), isFalse);
+    expect(db.isInTransaction, isFalse);
+
+    expect(
+      () => db.executeSql('SELECT 1'),
+      throwsA(isA<StateError>()),
+    );
+    expect(
+      () => db.executeReader('SELECT 1'),
+      throwsA(isA<StateError>()),
+    );
+    expect(
+      () => db.beginTransaction(),
+      throwsA(isA<StateError>()),
+    );
+
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Multiple sequential reader sessions
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('multiple sequential executeReader sessions work correctly', () async {
+    final db = await _createTestDb('multi_reader.db');
+
+    await db.executeSql('CREATE TABLE mr_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO mr_tbl (id, val) VALUES (1, 'a')");
+    await db.executeSql("INSERT INTO mr_tbl (id, val) VALUES (2, 'b')");
+
+    // First reader session
+    await db.executeReader('SELECT val FROM mr_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'a');
+    await db.closeReader();
+
+    // Second reader session
+    await db.executeReader('SELECT val FROM mr_tbl WHERE id = 2');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'b');
+    await db.closeReader();
+
+    // Third session — full iteration
+    await db.executeReader('SELECT val FROM mr_tbl ORDER BY id');
+    final vals = <String>[];
+    while (await db.readRow()) {
+      vals.add(db.getColumnText(0));
+    }
+    expect(vals, ['a', 'b']);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Transaction with reads interleaved with writes
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('transaction with interleaved reads and writes', () async {
+    final db = await _createTestDb('txn_interleave.db');
+
+    await db.executeSql('CREATE TABLE ti_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await db.transaction((db) async {
+      await db.executeSql("INSERT INTO ti_tbl (id, val) VALUES (1, 'one')");
+
+      // Read back within same transaction
+      await db.executeReader('SELECT COUNT(*) FROM ti_tbl');
+      expect(await db.readRow(), isTrue);
+      expect(db.getColumnInt(0), 1);
+
+      await db.executeSql("INSERT INTO ti_tbl (id, val) VALUES (2, 'two')");
+
+      // Read again — should see both
+      await db.executeReader('SELECT COUNT(*) FROM ti_tbl');
+      expect(await db.readRow(), isTrue);
+      expect(db.getColumnInt(0), 2);
+    });
+
+    // Verify after commit
+    await db.executeReader('SELECT val FROM ti_tbl ORDER BY id');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'one');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'two');
+    expect(await db.readRow(), isFalse);
 
     await db.closeDb();
     await db.dropDb();

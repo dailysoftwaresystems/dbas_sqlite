@@ -13,3 +13,12 @@ final class DbasSqliteDbStruct extends Struct {
   external Pointer<Utf8> lastError;
   external Pointer<Utf8> fileName;
 }
+
+final class DbasSqlitePoolStruct extends Struct {
+  external Pointer<DbasSqliteDbStruct> writer;
+  external Pointer<Pointer<DbasSqliteDbStruct>> readers;
+  external Pointer<Bool> readerBusy;
+  @Int32()
+  external int readerCount;
+  external Pointer<Utf8> fileName;
+}

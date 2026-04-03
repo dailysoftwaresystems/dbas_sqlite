@@ -57,6 +57,22 @@ extern "C" {
     DLL_EXPORT void CloseReader(SQLiteDb* inst);
     DLL_EXPORT void CloseDb(SQLiteDb* inst);
 
+    // ─── Connection Pool ───
+
+    typedef struct SQLitePool {
+        SQLiteDb* writer;
+        SQLiteDb** readers;
+        bool* readerBusy;
+        int readerCount;
+        char* fileName;
+    } SQLitePool;
+
+    DLL_EXPORT SQLitePool* CreatePool(const char* fileName, int readerCount);
+    DLL_EXPORT SQLiteDb* PoolGetWriter(SQLitePool* pool);
+    DLL_EXPORT SQLiteDb* PoolAcquireReader(SQLitePool* pool);
+    DLL_EXPORT void PoolReleaseReader(SQLitePool* pool, SQLiteDb* reader);
+    DLL_EXPORT void ClosePool(SQLitePool* pool);
+
 #ifdef __cplusplus
 }
 #endif

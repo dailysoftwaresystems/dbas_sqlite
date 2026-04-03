@@ -103,6 +103,22 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'CloseDb')
   external void _closeDb(Pointer<DbasSqliteDbStruct> dbPtr);
 
+  // ── Connection Pool ────────────────────────────────────────────────────
+  @Native<Pointer<DbasSqlitePoolStruct> Function(Handle, Pointer<Utf8>, Int32)>(symbol: 'CreatePool')
+  external Pointer<DbasSqlitePoolStruct> _createPool(Pointer<Utf8> path, int readerCount);
+
+  @Native<Pointer<DbasSqliteDbStruct> Function(Handle, Pointer<DbasSqlitePoolStruct>)>(symbol: 'PoolGetWriter')
+  external Pointer<DbasSqliteDbStruct> _poolGetWriter(Pointer<DbasSqlitePoolStruct> poolPtr);
+
+  @Native<Pointer<DbasSqliteDbStruct> Function(Handle, Pointer<DbasSqlitePoolStruct>)>(symbol: 'PoolAcquireReader')
+  external Pointer<DbasSqliteDbStruct> _poolAcquireReader(Pointer<DbasSqlitePoolStruct> poolPtr);
+
+  @Native<Void Function(Handle, Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>)>(symbol: 'PoolReleaseReader')
+  external void _poolReleaseReader(Pointer<DbasSqlitePoolStruct> poolPtr, Pointer<DbasSqliteDbStruct> readerPtr);
+
+  @Native<Void Function(Handle, Pointer<DbasSqlitePoolStruct>)>(symbol: 'ClosePool')
+  external void _closePool(Pointer<DbasSqlitePoolStruct> poolPtr);
+
   // ── Initialize (no-op for AOT) ─────────────────────────────────────────
   @override
   Future<void> initialize() async {}
@@ -178,4 +194,16 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   void nativeCloseReader(Pointer<DbasSqliteDbStruct> dbPtr) => _closeReader(dbPtr);
   @override
   void nativeCloseDb(Pointer<DbasSqliteDbStruct> dbPtr) => _closeDb(dbPtr);
+
+  // ── Connection Pool ───────────────────────────────────────────────────
+  @override
+  Pointer<DbasSqlitePoolStruct> nativeCreatePool(Pointer<Utf8> path, int readerCount) => _createPool(path, readerCount);
+  @override
+  Pointer<DbasSqliteDbStruct> nativePoolGetWriter(Pointer<DbasSqlitePoolStruct> poolPtr) => _poolGetWriter(poolPtr);
+  @override
+  Pointer<DbasSqliteDbStruct> nativePoolAcquireReader(Pointer<DbasSqlitePoolStruct> poolPtr) => _poolAcquireReader(poolPtr);
+  @override
+  void nativePoolReleaseReader(Pointer<DbasSqlitePoolStruct> poolPtr, Pointer<DbasSqliteDbStruct> readerPtr) => _poolReleaseReader(poolPtr, readerPtr);
+  @override
+  void nativeClosePool(Pointer<DbasSqlitePoolStruct> poolPtr) => _closePool(poolPtr);
 }
