@@ -4,18 +4,31 @@ import 'dart:typed_data';
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
 import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as path;
 
 enum TestStatus { active, inactive, suspended }
 
-/// Helper to create a fresh database with a comprehensive test table.
-Future<DbasSqlite> _createTestDb(String dbName) async {
+/// Helper to create a fresh database.
+///
+/// Uses single connection (no pool) by default to minimize native resource
+/// overhead. Pool-specific tests use [readerPoolSize] explicitly.
+Future<DbasSqlite> _createTestDb(String dbName, {int readerPoolSize = 0}) async {
   final db = await DbasSqlite.getInstance(dbName: dbName);
   await db.dropDb();
-  await db.openDb();
+  await db.openDb(readerPoolSize: readerPoolSize);
   return db;
 }
 
 void main() async {
+  setUpAll(() async {
+    // Clean test database directory before all tests
+    final testDbDir = Directory(path.join(Directory.current.path, 'test', 'db'));
+    if (await testDbDir.exists()) {
+      await testDbDir.delete(recursive: true);
+    }
+    await testDbDir.create(recursive: true);
+  });
+
   // ──────────────────────────────────────────────────────────────────────
   // Existing tests
   // ──────────────────────────────────────────────────────────────────────
@@ -25,7 +38,7 @@ void main() async {
     final dbasSqlite = await DbasSqlite.getInstance(dbName: dbName);
     await dbasSqlite.dropDb();
 
-    await dbasSqlite.openDb();
+    await dbasSqlite.openDb(readerPoolSize: 0);
 
     File dbFile = File(await dbasSqlite.getAppDatabasePath(dbName: dbName));
 
@@ -94,7 +107,7 @@ void main() async {
     String testDbPath = await testDbasSqlite.getAppDatabasePath();
     await testDbasSqlite.dropDb();
 
-    await testDbasSqlite.openDb();
+    await testDbasSqlite.openDb(readerPoolSize: 0);
     await testDbasSqlite.executeSql('''
       CREATE TABLE users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1284,7 +1297,7 @@ void main() async {
   // ──────────────────────────────────────────────────────────────────────
 
   test('openDb with default pool works transparently', () async {
-    final db = await _createTestDb('pool_default.db');
+    final db = await _createTestDb('pool_default.db', readerPoolSize: 4);
 
     await db.executeSql('CREATE TABLE pool_tbl (id INTEGER PRIMARY KEY, val TEXT)');
     await db.executeSql("INSERT INTO pool_tbl (id, val) VALUES (1, 'pooled')");
