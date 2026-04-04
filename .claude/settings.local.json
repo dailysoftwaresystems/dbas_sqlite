@@ -12,7 +12,8 @@
       "Bash(chmod +x:*)",
       "Bash(xargs ls:*)",
       "Bash(otool -l /Users/rafaelgasperetti/src/DBAS.SQLite.Flutter/macos/dbas_sqlite.xcframework/macos-arm64_x86_64/dbas_sqlite.a)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(git rm:*)"
     ]
   }
 }
