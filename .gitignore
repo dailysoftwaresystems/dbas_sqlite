@@ -1,5 +1,14 @@
-# IDE
-.idea/
+# IDE - ignore user-specific, keep shareable project config
+.idea/caches/
+.idea/libraries/
+.idea/dictionaries/
+.idea/.name
+.idea/.gitignore
+.idea/copilot*.xml
+.idea/studiobot.xml
+.idea/deviceManager.xml
+.idea/markdown.xml
+.idea/workspace.xml
 
 # Miscellaneous
 *.class
