@@ -5,7 +5,14 @@
       "Bash(flutter test:*)",
       "Bash(grep:*)",
       "Bash(find lib/src/native -name \"*.dart\" -exec grep -l \"class DbasSqliteNativeApp\" {} \\\\;)",
-      "Bash(flutter analyze:*)"
+      "Bash(flutter analyze:*)",
+      "Bash(xcrun simctl:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\)['devices']; [print\\(f'{r}: {x[\\\\\"name\\\\\"]} \\({x[\\\\\"udid\\\\\"]}\\)'\\) for r,devs in d.items\\(\\) for x in devs if x['isAvailable']]\")",
+      "Bash(open -a Simulator)",
+      "Bash(chmod +x:*)",
+      "Bash(xargs ls:*)",
+      "Bash(otool -l /Users/rafaelgasperetti/src/DBAS.SQLite.Flutter/macos/dbas_sqlite.xcframework/macos-arm64_x86_64/dbas_sqlite.a)",
+      "Bash(find:*)"
     ]
   }
 }

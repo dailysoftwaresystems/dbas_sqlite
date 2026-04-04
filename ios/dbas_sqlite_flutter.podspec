@@ -18,10 +18,11 @@ Pod::Spec.new do |s|
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
-  s.platform = :ios, '12.0'
+  s.platform = :ios, '16.0'
 
   s.swift_version = '5.0'
   s.vendored_frameworks = 'ios/dbas_sqlite.xcframework'
+  s.libraries = 'c++'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'OTHER_LDFLAGS' => '-all_load',

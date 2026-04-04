@@ -14,4 +14,4 @@ PRODUCT_BUNDLE_IDENTIFIER = com.dailysoftwaresystems.dbas.sqlite.flutter.example
 PRODUCT_COPYRIGHT = Copyright © 2025 com.dailysoftwaresystems. All rights reserved.
 
 // macOS deployment target to suppress version warnings
-MACOSX_DEPLOYMENT_TARGET = 15.0
+MACOSX_DEPLOYMENT_TARGET = 13.0

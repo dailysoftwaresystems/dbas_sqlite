@@ -18,5 +18,5 @@ flutter clean
 rm -rf macos/Pods macos/Podfile.lock macos/Runner.xcworkspace
 flutter pub get
 pod install --project-directory=macos
-flutter run -d "macos" --project-root=example
+flutter run -d "macos"
 cd "$dir"

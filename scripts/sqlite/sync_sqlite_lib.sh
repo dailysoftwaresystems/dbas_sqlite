@@ -31,12 +31,12 @@ download_recursive() {
             mkdir -p "$path"
             curl -sL "$download_url" -o "$target_path" -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3.raw"
         elif [ "$type" = "dir" ]; then
-            download_recursive "$next_url" $target_path
+            download_recursive "$next_url" "$target_path"
         fi
     done
 }
 
-rm -rf "$NATIVE_LIBS_DIR/sqlite/*"
+rm -rf "$NATIVE_LIBS_DIR/sqlite/"*
 mkdir -p "$OUT_DIR"
 download_recursive "$BASE_URL" "$OUT_DIR"
 
@@ -56,12 +56,12 @@ mkdir -p "$SCRIPT_DIR/../../example/web/libs"
 cp -r "$OUT_DIR/android/a64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/arm64-v8a"
 cp -r "$OUT_DIR/android/armeabi/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/armeabi-v7a"
 cp -r "$OUT_DIR/android/x86_64/"* "$SCRIPT_DIR/../../android/src/main/jniLibs/x86_64"
-cp -r "$OUT_DIR/macos/a64/*"* "$SCRIPT_DIR/../../macos/libs/a64"
-cp -r "$OUT_DIR/macos/x86/*"* "$SCRIPT_DIR/../../macos/libs/x86"
-cp -r "$OUT_DIR/windows/*"* "$SCRIPT_DIR/../../windows/libs"
-cp -r "$OUT_DIR/linux/*"* "$SCRIPT_DIR/../../linux/libs"
-cp -r "$OUT_DIR/web/*"* "$SCRIPT_DIR/../../web/libs"
-cp -r "$OUT_DIR/web/*"* "$SCRIPT_DIR/../../example/web/libs"
+cp -r "$OUT_DIR/macos/a64/"* "$SCRIPT_DIR/../../macos/libs/a64"
+cp -r "$OUT_DIR/macos/x86/"* "$SCRIPT_DIR/../../macos/libs/x86"
+cp -r "$OUT_DIR/windows/"* "$SCRIPT_DIR/../../windows/libs"
+cp -r "$OUT_DIR/linux/"* "$SCRIPT_DIR/../../linux/libs"
+cp -r "$OUT_DIR/web/"* "$SCRIPT_DIR/../../web/libs"
+cp -r "$OUT_DIR/web/"* "$SCRIPT_DIR/../../example/web/libs"
 
 echo "Copying ios binaries..."
 mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"

@@ -99,6 +99,19 @@ class DbasSqliteWrapper {
     opfsFs = null;
 
     async initialize(dbName = 'dbas.db') {
+        if (typeof navigator === 'undefined' || !navigator.storage || !navigator.storage.getDirectory) {
+            throw new Error(
+                'OPFS is not available. Ensure the page is served over HTTPS (or localhost) ' +
+                'and the browser supports the Origin Private File System API.'
+            );
+        }
+        if (typeof FileSystemSyncAccessHandle === 'undefined') {
+            throw new Error(
+                'FileSystemSyncAccessHandle is not available. ' +
+                'DbasSqlite must be initialized from a Web Worker, not the main thread.'
+            );
+        }
+
         this.closeOpfsHandles();
         this.module = await DbasSqlite();
         this.module._dbas_vfs_register();

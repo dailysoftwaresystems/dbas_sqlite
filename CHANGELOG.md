@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.3 - 2026-04-04
+
+* Updated minimum platform versions: Android API 35, iOS 16.0, macOS 13.0 (Ventura)
+* Updated Android compileSdk to 35, NDK r29
+* Fixed CocoaPods base configuration warnings on macOS
+* Fixed `--project-root` flag in run scripts causing Flutter crash
+* Fixed glob patterns in `sync_sqlite_lib.sh`
+
 ## 2.0.1 - 2026-04-03
 
 * **Connection Pool (WAL mode)**: `openDb()` now creates a pool with 1 writer + N readers (default 4), configurable via `readerPoolSize` parameter

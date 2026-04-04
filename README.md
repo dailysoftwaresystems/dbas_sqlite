@@ -216,10 +216,21 @@ await db.openDb(readerPoolSize: 0);
 await db.streamCopyDb('myapp_backup.db');
 ```
 
+## Minimum Platform Versions
+
+| Platform | Minimum Version |
+|----------|----------------|
+| Android  | API 35         |
+| iOS      | 16.0           |
+| macOS    | 13.0 (Ventura) |
+| Linux    | x86_64         |
+| Windows  | x86_64         |
+| Web      | Modern browsers with OPFS support |
+
 ## Platform Notes
 
 - **iOS/macOS**: Uses xcframework for optimal performance
-- **Android**: Native library automatically included
+- **Android**: Native library automatically included (NDK r29)
 - **Windows/Linux**: Dynamic libraries bundled with app
 - **Web**: WASM module runs in a dedicated Web Worker with OPFS persistence. Requires `dbas_sqlite.js` and `dbas_sqlite_worker.js` in `web/libs/`
 
