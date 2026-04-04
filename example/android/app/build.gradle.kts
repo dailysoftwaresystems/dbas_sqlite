@@ -9,7 +9,7 @@ android {
     namespace = "com.dailysoftwaresystems.dbas.sqlite.flutter.example"
     compileSdk = flutter.compileSdkVersion
     //ndkVersion = flutter.ndkVersion
-    ndkVersion = "27.3.13750724"
+    ndkVersion = "29.0.13846066"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -38,7 +38,7 @@ android {
         manifestPlaceholders.putAll(mapOf("applicationName" to "com.dailysoftwaresystems.dbas.sqlite.flutter.example"))
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 35
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
