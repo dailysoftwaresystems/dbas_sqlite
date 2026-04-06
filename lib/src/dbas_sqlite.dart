@@ -38,6 +38,7 @@ import 'package:flutter/foundation.dart';
 /// ```
 class DbasSqlite {
   static final _sqliteOk = 0;
+  static final _sqliteMisuse = 20;
   static final _sqliteRange = 25;
   static final _sqliteRow = 100;
   static final _sqliteDone = 101;
@@ -309,16 +310,7 @@ class DbasSqlite {
         rethrow;
       }
 
-      int readResult = await _platform.readRow(conn);
-      if (!_sqliteSuccessResults.contains(readResult)) {
-        String? error = _platform.getLastDbError(conn);
-        await _platform.closeReader(conn);
-        if (error == null && readResult == 20) {
-          error = 'Misuse: possibly missing or invalid bind.';
-        }
-        error ??= 'Unknown error ($readResult).';
-        throw Exception("It was not possible to run the query ($readResult): $error");
-      }
+      int readResult = await _readRowAndValidate(conn, () => _platform.closeReader(conn));
 
       int result = 0;
       if (readResult != _sqliteRow) {
@@ -407,22 +399,27 @@ class DbasSqlite {
   /// Throws an [Exception] if the query execution fails.
   Future<bool> readRow() async {
     final conn = _reader ?? _db!;
-    int readResult = await _platform.readRow(conn);
-    if (!_sqliteSuccessResults.contains(readResult)) {
-      String? error = _platform.getLastDbError(conn);
-      await closeReader();
-      if (error == null && readResult == 20) {
-        error = 'Misuse: possibly missing or invalid bind.';
-      }
-      error ??= 'Unknown error ($readResult).';
-      throw Exception("It was not possible to run the query ($readResult): $error");
-    }
+    int readResult = await _readRowAndValidate(conn, () => closeReader());
 
     bool hasRow = readResult == _sqliteRow;
     if (!hasRow) {
       await closeReader();
     }
     return hasRow;
+  }
+
+  Future<int> _readRowAndValidate(DbasSqliteDb conn, Future<void> Function() onClose) async {
+    int readResult = await _platform.readRow(conn);
+    if (!_sqliteSuccessResults.contains(readResult)) {
+      String? error = _platform.getLastDbError(conn);
+      await onClose();
+      if (error == null && readResult == _sqliteMisuse) {
+        error = 'Misuse: possibly missing or invalid bind.';
+      }
+      error ??= 'Unknown error ($readResult).';
+      throw Exception("It was not possible to run the query ($readResult): $error");
+    }
+    return readResult;
   }
 
   /// Returns `true` if the column at [idx] is NULL.

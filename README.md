@@ -81,7 +81,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite_flutter: ^2.0.6
+  dbas_sqlite_flutter: ^2.0.7
 ```
 
 ## Setup

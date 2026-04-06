@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.7 - 2026-04-06
+
+* Unified `readRow` response handling between `executeSql` and `readRow` into a shared `_readRowAndValidate` method
+* Replaced magic number `20` with `_sqliteMisuse` constant
+
 ## 2.0.6 - 2026-04-06
 
 * Named parameter binding now silently skips parameters not found in the prepared statement, matching C#/SQLite behavior
