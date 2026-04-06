@@ -201,7 +201,7 @@ void main() async {
   test('executeSql throws Exception on invalid SQL', () async {
     final db = await _createTestDb('invalid_sql.db');
 
-    expect(
+    await expectLater(
       () => db.executeSql('INVALID SQL STATEMENT'),
       throwsA(anything),
     );
