@@ -81,7 +81,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite_flutter: ^2.0.1
+  dbas_sqlite_flutter: ^2.0.6
 ```
 
 ## Setup
@@ -150,6 +150,10 @@ await db.executeSql(
   'INSERT INTO users (name, email, age) VALUES (:name, :email, :age)',
   nameParams: {'name': 'Jane Smith', 'email': 'jane@example.com', 'age': 28},
 );
+
+// By default, extra named parameters not present in the SQL are silently
+// ignored (C#/SQLite behavior). To throw instead:
+db.throwOnMissingNamedParams = true;
 ```
 
 ### Rich Types

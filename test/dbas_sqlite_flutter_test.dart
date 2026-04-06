@@ -689,6 +689,201 @@ void main() async {
   });
 
   // ──────────────────────────────────────────────────────────────────────
+  // Named params: extra params silently skipped & throwOnMissingNamedParams
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('Extra named params are silently skipped by default', () async {
+    final db = await _createTestDb('skip_extra_params.db');
+
+    await db.executeSql('''
+      CREATE TABLE skip_tbl (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+      )
+    ''');
+
+    // :extra does not exist in the SQL — should be silently ignored
+    await db.executeSql(
+      'INSERT INTO skip_tbl (id, name) VALUES (:id, :name)',
+      nameParams: {'id': 1, 'name': 'Alice', 'extra': 'ignored'},
+    );
+
+    await db.executeReader('SELECT name FROM skip_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'Alice');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('Extra named params in executeReader are silently skipped', () async {
+    final db = await _createTestDb('skip_extra_reader.db');
+
+    await db.executeSql('''
+      CREATE TABLE skip_reader_tbl (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+      )
+    ''');
+
+    await db.executeSql(
+      'INSERT INTO skip_reader_tbl (id, name) VALUES (?, ?)',
+      params: [1, 'Alice'],
+    );
+
+    // :missing does not exist in the SQL — should be silently ignored
+    await db.executeReader(
+      'SELECT name FROM skip_reader_tbl WHERE id = :id',
+      nameParams: {'id': 1, 'missing': 'ignored'},
+    );
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'Alice');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('throwOnMissingNamedParams defaults to false', () async {
+    final db = await _createTestDb('throw_default.db');
+    expect(db.throwOnMissingNamedParams, isFalse);
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('throwOnMissingNamedParams can be set via getInstance', () async {
+    final db = await DbasSqlite.getInstance(
+      dbName: 'throw_via_instance.db',
+      throwOnMissingNamedParams: true,
+    );
+    expect(db.throwOnMissingNamedParams, isTrue);
+
+    await db.dropDb();
+  });
+
+  test('getInstance updates throwOnMissingNamedParams on cached instance', () async {
+    final db1 = await DbasSqlite.getInstance(
+      dbName: 'cached_flag.db',
+      throwOnMissingNamedParams: false,
+    );
+    expect(db1.throwOnMissingNamedParams, isFalse);
+
+    final db2 = await DbasSqlite.getInstance(
+      dbName: 'cached_flag.db',
+      throwOnMissingNamedParams: true,
+    );
+    expect(identical(db1, db2), isTrue);
+    expect(db2.throwOnMissingNamedParams, isTrue);
+    // The original reference reflects the update too
+    expect(db1.throwOnMissingNamedParams, isTrue);
+
+    await db1.dropDb();
+  });
+
+  test('throwOnMissingNamedParams throws on extra named params', () async {
+    final db = await _createTestDb('throw_extra.db');
+
+    await db.executeSql('''
+      CREATE TABLE throw_tbl (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+      )
+    ''');
+
+    db.throwOnMissingNamedParams = true;
+
+    // :extra does not exist in the SQL — should throw
+    await expectLater(
+      () => db.executeSql(
+        'INSERT INTO throw_tbl (id, name) VALUES (:id, :name)',
+        nameParams: {'id': 1, 'name': 'Alice', 'extra': 'boom'},
+      ),
+      throwsA(isA<Exception>()),
+    );
+
+    // Verify the row was NOT inserted (exception aborted the bind)
+    await db.executeReader('SELECT COUNT(*) FROM throw_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 0);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('throwOnMissingNamedParams does not throw when all params match', () async {
+    final db = await _createTestDb('throw_all_match.db');
+    db.throwOnMissingNamedParams = true;
+
+    await db.executeSql('''
+      CREATE TABLE match_tbl (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+      )
+    ''');
+
+    // All params exist in the SQL — should succeed regardless of the flag
+    await db.executeSql(
+      'INSERT INTO match_tbl (id, name) VALUES (:id, :name)',
+      nameParams: {'id': 1, 'name': 'Bob'},
+    );
+
+    await db.executeReader('SELECT name FROM match_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'Bob');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('throwOnMissingNamedParams can be toggled at runtime', () async {
+    final db = await _createTestDb('toggle_throw.db');
+
+    await db.executeSql('''
+      CREATE TABLE toggle_tbl (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+      )
+    ''');
+
+    // Default: off — extra params silently skipped
+    await db.executeSql(
+      'INSERT INTO toggle_tbl (id, name) VALUES (:id, :name)',
+      nameParams: {'id': 1, 'name': 'first', 'extra': 'ok'},
+    );
+
+    // Turn on — extra params should throw
+    db.throwOnMissingNamedParams = true;
+    await expectLater(
+      () => db.executeSql(
+        'INSERT INTO toggle_tbl (id, name) VALUES (:id, :name)',
+        nameParams: {'id': 2, 'name': 'second', 'extra': 'boom'},
+      ),
+      throwsA(isA<Exception>()),
+    );
+
+    // Turn back off — extra params silently skipped again
+    db.throwOnMissingNamedParams = false;
+    await db.executeSql(
+      'INSERT INTO toggle_tbl (id, name) VALUES (:id, :name)',
+      nameParams: {'id': 3, 'name': 'third', 'extra': 'ok'},
+    );
+
+    // Verify rows 1 and 3 exist (row 2 was never inserted due to the throw)
+    await db.executeReader('SELECT name FROM toggle_tbl ORDER BY id');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'first');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'third');
+    expect(await db.readRow(), isFalse);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
   // getContent
   // ──────────────────────────────────────────────────────────────────────
 

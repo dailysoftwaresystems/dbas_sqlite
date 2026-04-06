@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.6 - 2026-04-06
+
+* Named parameter binding now silently skips parameters not found in the prepared statement, matching C#/SQLite behavior
+* Extra named parameters no longer throw — only actual bind errors are raised
+* Added `throwOnMissingNamedParams` option to throw on unknown named parameters (defaults to `false`)
+
 ## 2.0.3 - 2026-04-04
 
 * Updated minimum platform versions: Android API 35, iOS 16.0, macOS 13.0 (Ventura)

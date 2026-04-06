@@ -38,6 +38,7 @@ import 'package:flutter/foundation.dart';
 /// ```
 class DbasSqlite {
   static final _sqliteOk = 0;
+  static final _sqliteRange = 25;
   static final _sqliteRow = 100;
   static final _sqliteDone = 101;
   static final _sqliteSuccessResults = [_sqliteOk, _sqliteRow, _sqliteDone];
@@ -54,7 +55,13 @@ class DbasSqlite {
   Completer<void>? _writerLock;
   Completer<void>? _readerLock;
 
-  DbasSqlite._dbasSqlite(this._platform, this.dbName);
+  /// When `true`, binding a named parameter that does not exist in the
+  /// prepared statement throws an exception instead of silently skipping it.
+  ///
+  /// Defaults to `false` (C#/SQLite-compatible behavior).
+  bool throwOnMissingNamedParams = false;
+
+  DbasSqlite._dbasSqlite(this._platform, this.dbName, {this.throwOnMissingNamedParams = false});
 
   /// Returns a singleton instance of [DbasSqlite] for the given [dbName].
   ///
@@ -62,12 +69,13 @@ class DbasSqlite {
   /// Otherwise, a new instance is created and cached.
   ///
   /// Defaults to `'dbas.db'` if no name is provided.
-  static Future<DbasSqlite> getInstance({String dbName = 'dbas.db'}) async {
+  static Future<DbasSqlite> getInstance({String dbName = 'dbas.db', bool throwOnMissingNamedParams = false}) async {
     if (_instance.containsKey(dbName)) {
+      _instance[dbName]!.throwOnMissingNamedParams = throwOnMissingNamedParams;
       return _instance[dbName]!;
     }
 
-    _instance[dbName] = DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName), dbName);
+    _instance[dbName] = DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName), dbName, throwOnMissingNamedParams: throwOnMissingNamedParams);
     return _instance[dbName]!;
   }
 
@@ -716,7 +724,13 @@ class DbasSqlite {
         throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
       }
 
-      if (paramResult == -1 || paramResult == 1) {
+      if (paramResult == _sqliteRange) {
+        if (throwOnMissingNamedParams) {
+          throw Exception("Named parameter '$paramName' not found in the prepared statement");
+        }
+        continue;
+      }
+      if (paramResult != _sqliteOk) {
         throw Exception("It was not possible to bind the named parameter: ${_platform.getLastDbError(conn) ?? 'Unknown error ($paramResult)'}");
       }
     }
