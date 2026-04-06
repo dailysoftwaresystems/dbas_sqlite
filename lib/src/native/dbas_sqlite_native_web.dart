@@ -201,7 +201,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   // ── SQL execution ─────────────────────────────────────────────────────
 
   @override
-  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) async {
+  Future<int> executeSql(int dbPtr, String sql) async {
     final result = await _send('executeSql', {'dbPtr': dbPtr, 'sql': sql});
     if (result is Map) {
       _row.updateFromExecuteSql(result);
@@ -297,7 +297,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   // ── Row reading (flushes buffered binds, caches row) ──────────────────
 
   @override
-  Future<int> readRow(int dbPtr, {bool syncWebDb = false}) async {
+  Future<int> readRow(int dbPtr) async {
     final args = <String, dynamic>{'dbPtr': dbPtr};
     if (_pendingBinds.isNotEmpty) {
       args['binds'] = List<Map<String, dynamic>>.from(_pendingBinds);

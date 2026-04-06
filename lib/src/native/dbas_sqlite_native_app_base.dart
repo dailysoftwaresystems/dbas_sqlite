@@ -151,7 +151,7 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   bool isOpened(int dbPtr) => nativeIsOpened(resolveDbPtr(dbPtr)) == 1;
 
   @override
-  Future<int> executeSql(int dbPtr, String sql, {bool syncWebDb = false}) async {
+  Future<int> executeSql(int dbPtr, String sql) async {
     Pointer<Utf8> sqlPtr = nullptr;
     try {
       sqlPtr = sql.toNativeUtf8();
@@ -295,7 +295,7 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   }
 
   @override
-  Future<int> readRow(int dbPtr, {bool syncWebDb = false}) async =>
+  Future<int> readRow(int dbPtr) async =>
       nativeReadRow(resolveDbPtr(dbPtr));
 
   @override

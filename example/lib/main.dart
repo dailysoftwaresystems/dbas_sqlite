@@ -43,7 +43,7 @@ class _MyAppState extends State<MyApp> {
           email TEXT UNIQUE NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-      ''', syncWebDb: true);
+      ''');
     } on Exception catch (e) {
       print('Failed: ${e.toString()}');
     }

@@ -87,8 +87,8 @@ final class DbasSqlitePlatform {
     return await _delegate[dbName]!.getContent(fileName);
   }
 
-  Future<int> executeSql(DbasSqliteDb db, String sql, {bool syncWebDb = false}) async =>
-      await _delegate[db.name]!.executeSql(db.ptr, sql, syncWebDb: syncWebDb);
+  Future<int> executeSql(DbasSqliteDb db, String sql) async =>
+      await _delegate[db.name]!.executeSql(db.ptr, sql);
 
   Future<int> prepareQuery(DbasSqliteDb db, String sql) async =>
       await _delegate[db.name]!.prepareQuery(db.ptr, sql);
@@ -111,7 +111,7 @@ final class DbasSqlitePlatform {
   int bindNameBlob(DbasSqliteDb db, String name, Uint8List value) =>
       _delegate[db.name]!.bindNameBlob(db.ptr, name, Uint8List.fromList(value));
 
-  Future<int> readRow(DbasSqliteDb db, {bool syncWebDb = false}) async => await _delegate[db.name]!.readRow(db.ptr, syncWebDb: syncWebDb);
+  Future<int> readRow(DbasSqliteDb db) async => await _delegate[db.name]!.readRow(db.ptr);
   bool isNull(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.isNull(db.ptr, colIndex);
 
   String getColumnText(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.getColumnText(db.ptr, colIndex);

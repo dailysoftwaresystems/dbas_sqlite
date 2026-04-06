@@ -272,11 +272,9 @@ class DbasSqlite {
   /// );
   /// ```
   ///
-  /// Set [syncWebDb] to `true` to persist changes to IndexedDB on web.
-  ///
   /// Throws a [StateError] if the database is not opened.
   /// Throws an [Exception] if the query cannot be prepared or executed.
-  Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams, bool syncWebDb = false}) async {
+  Future<int> executeSql(String sql, {List<Object?>? params, Map<String, Object?>? nameParams}) async {
     if (!isOpened()) {
       throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
@@ -303,7 +301,7 @@ class DbasSqlite {
         rethrow;
       }
 
-      int readResult = await _platform.readRow(conn, syncWebDb: syncWebDb);
+      int readResult = await _platform.readRow(conn);
       if (!_sqliteSuccessResults.contains(readResult)) {
         String? error = _platform.getLastDbError(conn);
         await _platform.closeReader(conn);
@@ -398,12 +396,10 @@ class DbasSqlite {
   /// Returns `true` if a row is available, `false` when all rows have been
   /// read. The reader is automatically closed when there are no more rows.
   ///
-  /// Set [syncWebDb] to `true` to persist any changes to IndexedDB on web.
-  ///
   /// Throws an [Exception] if the query execution fails.
-  Future<bool> readRow({bool syncWebDb = false}) async {
+  Future<bool> readRow() async {
     final conn = _reader ?? _db!;
-    int readResult = await _platform.readRow(conn, syncWebDb: syncWebDb);
+    int readResult = await _platform.readRow(conn);
     if (!_sqliteSuccessResults.contains(readResult)) {
       String? error = _platform.getLastDbError(conn);
       await closeReader();
@@ -817,7 +813,7 @@ class DbasSqlite {
       if (!isOpened()) {
         throw StateError('Database was closed while waiting for writer lock.');
       }
-      await _platform.executeSql(_db!, 'BEGIN TRANSACTION', syncWebDb: true);
+      await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
       _isInTransaction = true;
     } catch (_) {
       _releaseWriterLock();
@@ -836,7 +832,7 @@ class DbasSqlite {
       return;
     }
     try {
-      await _platform.executeSql(_db!, 'COMMIT', syncWebDb: true);
+      await _platform.executeSql(_db!, 'COMMIT');
       _isInTransaction = false;
       _releaseWriterLock();
     } catch(e) {
@@ -856,7 +852,7 @@ class DbasSqlite {
       return;
     }
     try {
-      await _platform.executeSql(_db!, 'ROLLBACK', syncWebDb: true);
+      await _platform.executeSql(_db!, 'ROLLBACK');
     } finally {
       _isInTransaction = false;
       _releaseWriterLock();
@@ -897,5 +893,37 @@ class DbasSqlite {
     }
   }
 
+  /// Rebuilds the database file, repacking it into the minimum amount of
+  /// disk space.
+  ///
+  /// This is useful after deleting a large amount of data to reclaim unused
+  /// space, or to defragment the database file.
+  ///
+  /// **Note:** VACUUM cannot be run inside a transaction. If a transaction is
+  /// currently active, a [StateError] is thrown.
+  ///
+  /// ```dart
+  /// await db.executeSql('DELETE FROM logs WHERE created < ?', params: [cutoff]);
+  /// await db.vacuum();
+  /// ```
+  ///
+  /// Throws a [StateError] if the database is not opened.
+  /// Throws a [StateError] if a transaction is currently active.
+  Future<void> vacuum() async {
+    if (!isOpened()) {
+      throw StateError('Database is not opened. Please open the database before executing VACUUM.');
+    }
+    if (_isInTransaction) {
+      throw StateError('Cannot run VACUUM inside a transaction.');
+    }
+    await _acquireWriterLock();
+    try {
+      if (!isOpened()) {
+        throw StateError('Database was closed while waiting for writer lock.');
+      }
+      await _platform.executeSql(_db!, 'VACUUM');
+    } finally {
+      _releaseWriterLock();
+    }
+  }
 }
-
