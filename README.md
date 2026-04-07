@@ -25,6 +25,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 - Writer and reader locks are independent -- concurrent reads and writes via WAL mode
 - Transactions hold the writer lock for their full duration
 - Reads within a transaction use the writer connection to see uncommitted data
+- Pending reader sessions are automatically closed when a new `executeSql` or `executeReader` is called -- no need to manually close readers before starting a new operation
 - `closeDb()` safely releases all locks and unblocks any pending operations
 
 ### Database Operations
@@ -81,7 +82,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite_flutter: ^2.0.7
+  dbas_sqlite_flutter: ^2.0.9
 ```
 
 ## Setup

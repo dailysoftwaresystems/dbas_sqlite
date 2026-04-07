@@ -1864,4 +1864,211 @@ void main() async {
     await db.closeDb();
     await db.dropDb();
   });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Prepare failure: recovery and error reporting
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('executeSql prepare failure includes error code and recovers', () async {
+    final db = await _createTestDb('prepare_fail_exec.db');
+    await db.executeSql('CREATE TABLE pfe_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    // Trigger prepare failure (references non-existent table)
+    try {
+      await db.executeSql('SELECT * FROM nonexistent_table');
+      fail('Should have thrown');
+    } on Exception catch (e) {
+      expect(e.toString(), contains('(1)'));
+    }
+
+    // Connection must still be usable — stmt was properly finalized
+    await db.executeSql("INSERT INTO pfe_tbl (id, val) VALUES (1, 'ok')");
+    await db.executeReader('SELECT val FROM pfe_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'ok');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeReader prepare failure includes error code and recovers', () async {
+    final db = await _createTestDb('prepare_fail_reader.db');
+    await db.executeSql('CREATE TABLE pfr_tbl (id INTEGER PRIMARY KEY)');
+    await db.executeSql('INSERT INTO pfr_tbl (id) VALUES (1)');
+
+    try {
+      await db.executeReader('SELECT * FROM nonexistent_table');
+      fail('Should have thrown');
+    } on Exception catch (e) {
+      expect(e.toString(), contains('(1)'));
+    }
+
+    // Reader must still work — lock/pool was properly released
+    await db.executeReader('SELECT id FROM pfr_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 1);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeSql prepare failure within transaction keeps transaction intact', () async {
+    final db = await _createTestDb('prepare_fail_txn.db');
+    await db.executeSql('CREATE TABLE pft_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await db.beginTransaction();
+    await db.executeSql("INSERT INTO pft_tbl (id, val) VALUES (1, 'one')");
+
+    // Prepare failure mid-transaction
+    await expectLater(
+      () => db.executeSql('SELECT * FROM nonexistent_table'),
+      throwsA(isA<Exception>()),
+    );
+
+    // Transaction should still be active and usable
+    expect(db.isInTransaction, isTrue);
+    await db.executeSql("INSERT INTO pft_tbl (id, val) VALUES (2, 'two')");
+    await db.commit();
+
+    // Both rows should be committed
+    await db.executeReader('SELECT COUNT(*) FROM pft_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 2);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Bind failure: recovery
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('executeSql bind failure recovers and connection remains usable', () async {
+    final db = await _createTestDb('bind_fail_exec.db');
+    await db.executeSql('CREATE TABLE bfe_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    // Bind 2 params to a statement with 1 placeholder — index 2 is out of range
+    // sqlite3_bind returns SQLITE_RANGE (25), now caught by != _sqliteOk
+    await expectLater(
+      () => db.executeSql(
+        'INSERT INTO bfe_tbl (id) VALUES (?)',
+        params: [1, 'extra'],
+      ),
+      throwsA(isA<Exception>()),
+    );
+
+    // Connection must still work — stmt was finalized by the finally block
+    await db.executeSql("INSERT INTO bfe_tbl (id, val) VALUES (1, 'ok')");
+    await db.executeReader('SELECT val FROM bfe_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'ok');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeReader bind failure recovers and reader is released', () async {
+    final db = await _createTestDb('bind_fail_reader.db', readerPoolSize: 2);
+    await db.executeSql('CREATE TABLE bfr_tbl (id INTEGER PRIMARY KEY)');
+    await db.executeSql('INSERT INTO bfr_tbl (id) VALUES (1)');
+
+    await expectLater(
+      () => db.executeReader(
+        'SELECT * FROM bfr_tbl WHERE id = ?',
+        params: [1, 'extra'],
+      ),
+      throwsA(isA<Exception>()),
+    );
+
+    // Pool reader must be released — subsequent reader should work
+    await db.executeReader('SELECT id FROM bfr_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 1);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Multiple temp tables in a single transaction (merge scenario)
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('multiple temp table DDL+DML in transaction does not corrupt stmt', () async {
+    final db = await _createTestDb('temp_tbl_txn.db');
+
+    await db.executeSql('''
+      CREATE TABLE src_tbl (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        parent_id INTEGER
+      )
+    ''');
+    await db.executeSql("INSERT INTO src_tbl (id, name, parent_id) VALUES (1, 'root', NULL)");
+    await db.executeSql("INSERT INTO src_tbl (id, name, parent_id) VALUES (2, 'child', 1)");
+    await db.executeSql("INSERT INTO src_tbl (id, name, parent_id) VALUES (3, 'grandchild', 2)");
+
+    await db.transaction((db) async {
+      // First temp table — staging data (like merge temp table)
+      await db.executeSql('CREATE TEMP TABLE __temp_merge__ (id INTEGER, name TEXT)');
+      await db.executeSql('INSERT INTO __temp_merge__ SELECT id, name FROM src_tbl');
+
+      await db.executeReader('SELECT COUNT(*) FROM __temp_merge__');
+      expect(await db.readRow(), isTrue);
+      expect(db.getColumnInt(0), 3);
+
+      // Second temp table — hierarchy resolution (self-recursive FK)
+      await db.executeSql('CREATE TEMP TABLE __temp_hier__ (id INTEGER, parent_id INTEGER)');
+      await db.executeSql('INSERT INTO __temp_hier__ SELECT id, parent_id FROM src_tbl WHERE parent_id IS NOT NULL');
+
+      await db.executeReader('SELECT COUNT(*) FROM __temp_hier__');
+      expect(await db.readRow(), isTrue);
+      expect(db.getColumnInt(0), 2);
+
+      // Cross-temp-table operation
+      await db.executeSql('''
+        INSERT INTO src_tbl (id, name, parent_id)
+        SELECT 4, 'merged', h.parent_id
+        FROM __temp_hier__ h
+        WHERE h.id = 3
+      ''');
+
+      // Clean up temp tables
+      await db.executeSql('DROP TABLE __temp_merge__');
+      await db.executeSql('DROP TABLE __temp_hier__');
+    });
+
+    // Verify final state
+    await db.executeReader('SELECT COUNT(*) FROM src_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 4);
+
+    await db.executeReader('SELECT name, parent_id FROM src_tbl WHERE id = 4');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'merged');
+    expect(db.getColumnInt(1), 2);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('rapid sequential executeSql in transaction all succeed', () async {
+    final db = await _createTestDb('rapid_txn.db');
+    await db.executeSql('CREATE TABLE rt_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await db.transaction((db) async {
+      for (int i = 1; i <= 50; i++) {
+        await db.executeSql(
+          'INSERT INTO rt_tbl (id, val) VALUES (?, ?)',
+          params: [i, 'row_$i'],
+        );
+      }
+    });
+
+    await db.executeReader('SELECT COUNT(*) FROM rt_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 50);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
 }

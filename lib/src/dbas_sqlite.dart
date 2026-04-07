@@ -288,6 +288,7 @@ class DbasSqlite {
       throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
 
+    await _closePendingReader();
     final lockHeld = _isInTransaction;
     if (!lockHeld) await _acquireWriterLock();
     try {
@@ -296,29 +297,26 @@ class DbasSqlite {
       }
       final conn = _db!;
       int prepared = await _platform.prepareQuery(conn, sql);
-      if (prepared == -1 || prepared == 1) {
+      if (prepared != _sqliteOk) {
+        String error = _platform.getLastDbError(conn) ?? 'Unknown error.';
         await _platform.closeReader(conn);
-        String error = _platform.getLastDbError(conn) ?? 'Unknown error ($prepared).';
-        throw Exception("It was not possible to prepare the query: $error");
+        throw Exception("It was not possible to prepare the query ($prepared): $error");
       }
 
       try {
         _bindParameters(conn, params);
         _bindNameParameters(conn, nameParams);
-      } catch (_) {
+
+        int readResult = await _readRowAndValidate(conn, () => _platform.closeReader(conn));
+
+        int result = 0;
+        if (readResult != _sqliteRow) {
+          result = _platform.getAffectedRows(conn);
+        }
+        return result;
+      } finally {
         await _platform.closeReader(conn);
-        rethrow;
       }
-
-      int readResult = await _readRowAndValidate(conn, () => _platform.closeReader(conn));
-
-      int result = 0;
-      if (readResult != _sqliteRow) {
-        result = _platform.getAffectedRows(conn);
-      }
-
-      await _platform.closeReader(conn);
-      return result;
     } finally {
       if (!lockHeld) _releaseWriterLock();
     }
@@ -345,7 +343,7 @@ class DbasSqlite {
       throw StateError('Database is not opened. Please open the database before executing SQL commands.');
     }
 
-    _readerHoldsWriterLock = false;
+    await _closePendingReader();
 
     if (_poolPtr != null && !_isInTransaction) {
       await _acquireReaderLock();
@@ -374,10 +372,10 @@ class DbasSqlite {
 
     final conn = _reader ?? _db!;
     int prepared = await _platform.prepareQuery(conn, sql);
-    if (prepared == -1 || prepared == 1) {
+    if (prepared != _sqliteOk) {
+      final error = _platform.getLastDbError(conn) ?? 'Unknown error.';
       await closeReader();
-      final error = _platform.getLastDbError(conn) ?? 'Unknown error ($prepared).';
-      throw Exception("It was not possible to prepare the query: $error");
+      throw Exception("It was not possible to prepare the query ($prepared): $error");
     }
 
     try {
@@ -627,6 +625,16 @@ class DbasSqlite {
     lock?.complete();
   }
 
+  /// Closes any reader left open by a previous [executeReader] that was not
+  /// fully consumed or explicitly closed. This prevents writer-lock deadlocks
+  /// when a new [executeSql] or [executeReader] is called while a previous
+  /// reader session is still active.
+  Future<void> _closePendingReader() async {
+    if (_readerHoldsWriterLock || _reader != null) {
+      await closeReader();
+    }
+  }
+
   Future<void> _acquireReaderLock() async {
     while (_readerLock != null) {
       await _readerLock!.future;
@@ -681,8 +689,8 @@ class DbasSqlite {
         throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
       }
 
-      if (paramResult == -1 || paramResult == 1) {
-        throw Exception("It was not possible to bind the parameter: ${_platform.getLastDbError(conn) ?? 'Unknown error ($paramResult)'}");
+      if (paramResult != _sqliteOk) {
+        throw Exception("It was not possible to bind the parameter ($paramResult): ${_platform.getLastDbError(conn) ?? 'Unknown error.'}");
       }
     }
   }

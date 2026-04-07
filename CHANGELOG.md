@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.9 - 2026-04-06
+
+* Fixed `executeSql` and `executeReader` only catching SQLite error codes -1 and 1 from `prepareQuery` — all non-zero codes (e.g. SQLITE_BUSY, SQLITE_NOMEM) are now properly detected, preventing `readRow` from operating on a NULL statement
+* Fixed `_bindParameters` only catching error codes -1 and 1 — all non-zero bind results (e.g. SQLITE_RANGE for out-of-bounds index) are now caught
+* Fixed writer-lock deadlock when `executeReader` or `executeSql` is called while a previous reader session is still open (e.g. caller read partial rows without calling `closeReader`); pending readers are now automatically closed before acquiring locks
+* Fixed `executeSql` not finalizing the prepared statement when `getAffectedRows` throws — `closeReader` is now guaranteed via try-finally
+* Error messages from `prepareQuery` and `_bindParameters` failures now include the SQLite error code for easier debugging
+* `getLastDbError` is now captured before `closeReader` on prepare failures to prevent potential loss of error context
+
 ## 2.0.7 - 2026-04-06
 
 * Unified `readRow` response handling between `executeSql` and `readRow` into a shared `_readRowAndValidate` method
