@@ -18,7 +18,7 @@ jobs:
         flutter-version: '3.41.4'
     - name: Auto set package version from pubspec.yaml
       run: |
-        version=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2)
+        version=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2 | tr -d '\r')
         echo "Building version: $version"
         echo "VERSION=$version" >> $GITHUB_ENV
     - name: Get Flutter dependencies
@@ -35,5 +35,7 @@ jobs:
         if gh release view "${{ env.VERSION }}" > /dev/null 2>&1; then
           echo "Release ${{ env.VERSION }} already exists, skipping."
         else
-          gh release create "${{ env.VERSION }}" --title "Release ${{ env.VERSION }}" --notes "Release ${{ env.VERSION }}"
+          gh release create "${{ env.VERSION }}" \
+            --title "Release ${{ env.VERSION }}" \
+            --notes "Release ${{ env.VERSION }}"
         fi
