@@ -6,14 +6,11 @@ on:
     branches: [ "main" ]
 permissions:
   contents: write
-  packages: write
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-      with:
-        path: ${{github.workspace}}
+    - uses: actions/checkout@v6
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
@@ -31,9 +28,12 @@ jobs:
     - name: Run Flutter tests
       run: flutter test
     - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        name: Release ${{ env.VERSION }}
-        tag_name: ${{ env.VERSION }}
-        body: Release ${{ env.VERSION }}
-        token: ${{ secrets.GITHUB_TOKEN }}
+      if: github.event_name == 'push'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if gh release view "${{ env.VERSION }}" > /dev/null 2>&1; then
+          echo "Release ${{ env.VERSION }} already exists, skipping."
+        else
+          gh release create "${{ env.VERSION }}" --title "Release ${{ env.VERSION }}" --notes "Release ${{ env.VERSION }}"
+        fi
