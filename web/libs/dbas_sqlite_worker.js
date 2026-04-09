@@ -4,6 +4,8 @@ importScripts('dbas_sqlite.js');
 
 let wrapper = null;
 const pools = new Map();
+let streamHandle = null;
+let streamOffset = 0;
 
 self.onmessage = async function (e) {
     const { id, method, args } = e.data;
@@ -129,6 +131,67 @@ async function handleMessage(method, args) {
         case 'attachDb':
             wrapper.attachDb(new Uint8Array(args.content));
             return true;
+
+        // ── Streamed attach (begin/chunk/end protocol) ──
+        // The wrapper's attachStreamDb() accepts a ReadableStream, which cannot
+        // cross the postMessage boundary. Instead, the same low-level FS operations
+        // (open/write/close) are performed directly via discrete messages.
+        // Writes chunks through the Emscripten filesystem backed by OPFS,
+        // avoiding the need to buffer the entire file in Dart memory.
+        // Note: beginStreamAttach opens with 'w+' which truncates any existing
+        // file, ensuring a clean write (same truncation semantics as attachDb).
+        case 'beginStreamAttach': {
+            if (!wrapper) throw new Error('beginStreamAttach: database not initialized. Call initialize first.');
+            if (streamHandle !== null) {
+                console.warn('beginStreamAttach: closing stale stream handle (previous stream was not properly ended/aborted)');
+                try { wrapper.module.FS.close(streamHandle); } catch (closeErr) {
+                    console.warn('beginStreamAttach: failed to close stale handle:', closeErr.message);
+                }
+                streamHandle = null;
+                streamOffset = 0;
+            }
+            streamHandle = wrapper.module.FS.open(wrapper.dbPath, 'w+');
+            streamOffset = 0;
+            return true;
+        }
+
+        case 'streamAttachChunk': {
+            if (!wrapper) throw new Error('streamAttachChunk: database not initialized. Call initialize first.');
+            if (streamHandle === null) throw new Error('No active stream attach. Call beginStreamAttach first.');
+            const data = new Uint8Array(args.bytes);
+            const written = wrapper.module.FS.write(streamHandle, data, 0, data.length, streamOffset);
+            if (written !== data.length) {
+                throw new Error('streamAttachChunk: short write (' + written + ' of ' + data.length + ' bytes at offset ' + streamOffset + ')');
+            }
+            streamOffset += data.length;
+            return true;
+        }
+
+        case 'endStreamAttach': {
+            if (!wrapper) throw new Error('endStreamAttach: database not initialized. Call initialize first.');
+            if (streamHandle === null) throw new Error('No active stream attach. Call beginStreamAttach first.');
+            try {
+                wrapper.module.FS.close(streamHandle);
+            } finally {
+                streamHandle = null;
+                streamOffset = 0;
+            }
+            return true;
+        }
+
+        case 'abortStreamAttach': {
+            const errors = [];
+            if (streamHandle !== null) {
+                try { wrapper.module.FS.close(streamHandle); } catch (closeErr) { errors.push('close: ' + closeErr.message); }
+                streamHandle = null;
+                streamOffset = 0;
+                try { wrapper.module.FS.unlink(wrapper.dbPath); } catch (unlinkErr) { errors.push('unlink: ' + unlinkErr.message); }
+            }
+            if (errors.length > 0) {
+                console.warn('abortStreamAttach cleanup issues:', errors.join('; '));
+            }
+            return true;
+        }
 
         case 'streamCopyDb':
             await wrapper.streamCopyDb(args.destName);

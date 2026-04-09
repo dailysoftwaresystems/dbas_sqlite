@@ -44,7 +44,7 @@ class DbasSqlite {
   static final _sqliteDone = 101;
   static final _sqliteSuccessResults = [_sqliteOk, _sqliteRow, _sqliteDone];
 
-  static final String _webDbDir = 'data';
+  static final String _webDbDir = 'dbas_data';
   static final Map<String, DbasSqlite> _instance = {};
   final DbasSqlitePlatform _platform;
   final String dbName;
@@ -86,7 +86,7 @@ class DbasSqlite {
     }
 
     final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/data'.replaceAll('\\', '/');
+    final dirPath = '${directory.path}/dbas_data'.replaceAll('\\', '/');
     final dir = Directory(dirPath);
 
     if (!await dir.exists()) {
@@ -138,10 +138,9 @@ class DbasSqlite {
   /// the entire content in memory.
   ///
   /// On native platforms the bytes are streamed directly to disk.
-  /// On web the Dart stream is bridged to a JS readable stream and written
-  /// chunk-by-chunk to the Emscripten virtual filesystem. Because the
-  /// Emscripten FS is memory-backed, the complete file still resides in
-  /// memory on web; however no extra Dart-side copy is made.
+  /// On web each chunk is sent to the Web Worker via postMessage and written
+  /// through the Emscripten filesystem backed by OPFS, so the complete file
+  /// does not need to be buffered in Dart memory.
   ///
   /// If a database with the same name already exists and is opened, it will be
   /// closed and removed before attaching the new database.

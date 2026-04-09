@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.1.2 - 2026-04-09
+
+* **Web streamed attach**: `attachStreamDb` now sends chunks individually to the Web Worker via a begin/chunk/end protocol instead of buffering the entire file in Dart memory
+* Renamed database directory from `data` to `dbas_data` across all platforms
+* Improved error handling: cleanup failures during stream attach are now logged instead of silently swallowed
+* Updated `attachStreamDb` doc comment to reflect the new OPFS-backed streaming implementation
+
+## 2.1.1 - 2026-04-07
+
+* Adjust pipes
+
+## 2.1.0 - 2026-04-07
+
+* Adjust pipes
+
+## 2.0.10 - 2026-04-06
+
+* Adjust pipes
+
 ## 2.0.9 - 2026-04-06
 
 * Fixed `executeSql` and `executeReader` only catching SQLite error codes -1 and 1 from `prepareQuery` — all non-zero codes (e.g. SQLITE_BUSY, SQLITE_NOMEM) are now properly detected, preventing `readRow` from operating on a NULL statement

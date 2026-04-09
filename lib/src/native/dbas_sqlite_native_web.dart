@@ -170,11 +170,21 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future attachStreamDb(String fileName, Stream<List<int>> stream) async {
-    final bytes = <int>[];
-    await for (final chunk in stream) {
-      bytes.addAll(chunk);
+    await _send('beginStreamAttach');
+    try {
+      await for (final chunk in stream) {
+        await _send('streamAttachChunk', {'bytes': chunk});
+      }
+      await _send('endStreamAttach');
+    } catch (e) {
+      try {
+        await _send('abortStreamAttach');
+      } catch (abortError) {
+        // ignore: avoid_print
+        print('attachStreamDb: abortStreamAttach also failed: $abortError');
+      }
+      rethrow;
     }
-    await _send('attachDb', {'content': bytes});
   }
 
   @override
