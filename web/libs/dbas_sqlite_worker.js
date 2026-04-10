@@ -2,10 +2,24 @@
 
 importScripts('dbas_sqlite.js');
 
-let wrapper = null;
-const pools = new Map();
-let streamHandle = null;
-let streamOffset = 0;
+const wrappers = new Map();
+const streamStates = new Map();
+const dbPtrs = new Map();
+const closedDbs = new Set();
+
+function getWrapper(dbName) {
+    const w = wrappers.get(dbName);
+    if (!w) throw new Error('DB not initialized: ' + dbName);
+    return w;
+}
+
+function getStreamState(dbName) {
+    return streamStates.get(dbName) || { handle: null, offset: 0 };
+}
+
+function setStreamState(dbName, state) {
+    streamStates.set(dbName, state);
+}
 
 self.onmessage = async function (e) {
     const { id, method, args } = e.data;
@@ -21,57 +35,91 @@ async function handleMessage(method, args) {
     switch (method) {
         // ── Lifecycle ──
         case 'initialize':
-            wrapper = await initPersistentFS(args.dbName);
+        case 'initDb': {
+            // Re-init if wrapper doesn't exist OR if the DB was closed
+            // (stale wrapper with freed SQLite handle needs replacement).
+            if (!wrappers.has(args.dbName) || closedDbs.has(args.dbName)) {
+                const w = await initPersistentFS(args.dbName);
+                wrappers.set(args.dbName, w);
+                closedDbs.delete(args.dbName);
+            }
             return true;
+        }
 
         case 'databaseExists':
-            return wrapper.databaseExists();
+            return getWrapper(args.dbName).databaseExists();
 
-        case 'openDb':
-            return wrapper.openDb();
+        case 'openDb': {
+            const w = getWrapper(args.dbName);
+            const ptr = w.openDb();
+            dbPtrs.set(args.dbName, ptr);
+            return ptr;
+        }
 
         case 'isOpened':
-            return wrapper.isOpened(args.dbPtr) === 1;
+            return getWrapper(args.dbName).isOpened(args.dbPtr) === 1;
 
-        case 'closeDb':
-            wrapper.closeDb(args.dbPtr);
+        case 'closeDb': {
+            const w = getWrapper(args.dbName);
+            w.closeDb(args.dbPtr);
+            dbPtrs.delete(args.dbName);
+            closedDbs.add(args.dbName);
             return true;
+        }
+
+        // Full cleanup: close DB + destroy wrapper so next initDb creates fresh module
+        case 'deinitDb': {
+            const ptr = dbPtrs.get(args.dbName);
+            if (ptr) {
+                try { wrappers.get(args.dbName)?.closeDb(ptr); } catch (e) {
+                    console.warn('deinitDb: closeDb failed for ' + args.dbName + ':', e.message);
+                }
+                dbPtrs.delete(args.dbName);
+            }
+            wrappers.delete(args.dbName);
+            streamStates.delete(args.dbName);
+            closedDbs.delete(args.dbName);
+            return true;
+        }
 
         // ── Execute SQL (fire-and-forget style) ──
         case 'executeSql': {
-            const rc = wrapper.executeSql(args.dbPtr, args.sql);
+            const w = getWrapper(args.dbName);
+            const rc = w.executeSql(args.dbPtr, args.sql);
             return {
                 rc,
-                affectedRows: wrapper.getAffectedRows(args.dbPtr),
-                lastInsertedId: wrapper.getLastInsertedId(args.dbPtr),
-                lastError: wrapper.getLastDbError(args.dbPtr),
+                affectedRows: w.getAffectedRows(args.dbPtr),
+                lastInsertedId: w.getLastInsertedId(args.dbPtr),
+                lastError: w.getLastDbError(args.dbPtr),
             };
         }
 
         // ── Prepare Query ──
         case 'prepareQuery': {
-            const rc = wrapper.prepareQuery(args.dbPtr, args.sql);
+            const w = getWrapper(args.dbName);
+            const rc = w.prepareQuery(args.dbPtr, args.sql);
             let columnCount = 0;
             const columnNames = [];
             if (rc === 0) {
-                columnCount = wrapper.getColumnCount(args.dbPtr);
+                columnCount = w.getColumnCount(args.dbPtr);
                 for (let i = 0; i < columnCount; i++) {
-                    columnNames.push(wrapper.getColumnName(args.dbPtr, i));
+                    columnNames.push(w.getColumnName(args.dbPtr, i));
                 }
             }
             return {
                 rc,
                 columnCount,
                 columnNames,
-                lastError: wrapper.getLastDbError(args.dbPtr),
+                lastError: w.getLastDbError(args.dbPtr),
             };
         }
 
         // ── Read Row (with buffered binds) ──
         case 'readRow': {
+            const w = getWrapper(args.dbName);
             if (args.binds && args.binds.length > 0) {
                 for (const bind of args.binds) {
-                    const bindRc = applyBind(args.dbPtr, bind);
+                    const bindRc = applyBind(w, args.dbPtr, bind);
                     if (bindRc !== 0) {
                         return {
                             status: -1,
@@ -79,33 +127,33 @@ async function handleMessage(method, args) {
                             columnCount: 0,
                             affectedRows: 0,
                             lastInsertedId: 0,
-                            lastError: wrapper.getLastDbError(args.dbPtr),
+                            lastError: w.getLastDbError(args.dbPtr),
                             bindError: true,
                         };
                     }
                 }
             }
 
-            const status = wrapper.readRow(args.dbPtr);
+            const status = w.readRow(args.dbPtr);
             let columns = null;
-            let columnCount = wrapper.getColumnCount(args.dbPtr);
+            let columnCount = w.getColumnCount(args.dbPtr);
 
             if (status === 100) {
                 columns = [];
                 for (let i = 0; i < columnCount; i++) {
-                    const type = wrapper.getColumnType(args.dbPtr, i);
-                    const isNull = wrapper.isNull(args.dbPtr, i) === 1;
+                    const type = w.getColumnType(args.dbPtr, i);
+                    const isNull = w.isNull(args.dbPtr, i) === 1;
                     let value = null;
                     if (!isNull) {
                         switch (type) {
-                            case 1: value = wrapper.getColumnInt(args.dbPtr, i); break;
-                            case 2: value = wrapper.getColumnDouble(args.dbPtr, i); break;
+                            case 1: value = w.getColumnInt(args.dbPtr, i); break;
+                            case 2: value = w.getColumnDouble(args.dbPtr, i); break;
                             case 4: {
-                                const blob = wrapper.getColumnBlob(args.dbPtr, i);
+                                const blob = w.getColumnBlob(args.dbPtr, i);
                                 value = blob ? Array.from(blob) : null;
                                 break;
                             }
-                            default: value = wrapper.getColumnText(args.dbPtr, i); break;
+                            default: value = w.getColumnText(args.dbPtr, i); break;
                         }
                     }
                     columns.push({ type, isNull, value });
@@ -116,76 +164,73 @@ async function handleMessage(method, args) {
                 status,
                 columns,
                 columnCount,
-                affectedRows: wrapper.getAffectedRows(args.dbPtr),
-                lastInsertedId: wrapper.getLastInsertedId(args.dbPtr),
-                lastError: wrapper.getLastDbError(args.dbPtr),
+                affectedRows: w.getAffectedRows(args.dbPtr),
+                lastInsertedId: w.getLastInsertedId(args.dbPtr),
+                lastError: w.getLastDbError(args.dbPtr),
             };
         }
 
         // ── Reader Management ──
         case 'closeReader':
-            wrapper.closeReader(args.dbPtr);
+            getWrapper(args.dbName).closeReader(args.dbPtr);
             return true;
 
         // ── File Operations ──
         case 'attachDb':
-            wrapper.attachDb(new Uint8Array(args.content));
+            getWrapper(args.dbName).attachDb(new Uint8Array(args.content));
             return true;
 
         // ── Streamed attach (begin/chunk/end protocol) ──
-        // The wrapper's attachStreamDb() accepts a ReadableStream, which cannot
-        // cross the postMessage boundary. Instead, the same low-level FS operations
-        // (open/write/close) are performed directly via discrete messages.
-        // Writes chunks through the Emscripten filesystem backed by OPFS,
-        // avoiding the need to buffer the entire file in Dart memory.
-        // Note: beginStreamAttach opens with 'w+' which truncates any existing
-        // file, ensuring a clean write (same truncation semantics as attachDb).
         case 'beginStreamAttach': {
-            if (!wrapper) throw new Error('beginStreamAttach: database not initialized. Call initialize first.');
-            if (streamHandle !== null) {
-                console.warn('beginStreamAttach: closing stale stream handle (previous stream was not properly ended/aborted)');
-                try { wrapper.module.FS.close(streamHandle); } catch (closeErr) {
+            const w = getWrapper(args.dbName);
+            const ss = getStreamState(args.dbName);
+            if (ss.handle !== null) {
+                console.warn('beginStreamAttach: closing stale stream handle for ' + args.dbName);
+                try { w.module.FS.close(ss.handle); } catch (closeErr) {
                     console.warn('beginStreamAttach: failed to close stale handle:', closeErr.message);
                 }
-                streamHandle = null;
-                streamOffset = 0;
             }
-            streamHandle = wrapper.module.FS.open(wrapper.dbPath, 'w+');
-            streamOffset = 0;
+            setStreamState(args.dbName, {
+                handle: w.module.FS.open(w.dbPath, 'w+'),
+                offset: 0
+            });
             return true;
         }
 
         case 'streamAttachChunk': {
-            if (!wrapper) throw new Error('streamAttachChunk: database not initialized. Call initialize first.');
-            if (streamHandle === null) throw new Error('No active stream attach. Call beginStreamAttach first.');
+            const w = getWrapper(args.dbName);
+            const ss = getStreamState(args.dbName);
+            if (ss.handle === null) throw new Error('No active stream attach for ' + args.dbName + '. Call beginStreamAttach first.');
             const data = new Uint8Array(args.bytes);
-            const written = wrapper.module.FS.write(streamHandle, data, 0, data.length, streamOffset);
+            const written = w.module.FS.write(ss.handle, data, 0, data.length, ss.offset);
             if (written !== data.length) {
-                throw new Error('streamAttachChunk: short write (' + written + ' of ' + data.length + ' bytes at offset ' + streamOffset + ')');
+                throw new Error('streamAttachChunk: short write (' + written + ' of ' + data.length + ' bytes at offset ' + ss.offset + ')');
             }
-            streamOffset += data.length;
+            ss.offset += data.length;
+            setStreamState(args.dbName, ss);
             return true;
         }
 
         case 'endStreamAttach': {
-            if (!wrapper) throw new Error('endStreamAttach: database not initialized. Call initialize first.');
-            if (streamHandle === null) throw new Error('No active stream attach. Call beginStreamAttach first.');
+            const w = getWrapper(args.dbName);
+            const ss = getStreamState(args.dbName);
+            if (ss.handle === null) throw new Error('No active stream attach for ' + args.dbName + '. Call beginStreamAttach first.');
             try {
-                wrapper.module.FS.close(streamHandle);
+                w.module.FS.close(ss.handle);
             } finally {
-                streamHandle = null;
-                streamOffset = 0;
+                setStreamState(args.dbName, { handle: null, offset: 0 });
             }
             return true;
         }
 
         case 'abortStreamAttach': {
+            const w = getWrapper(args.dbName);
+            const ss = getStreamState(args.dbName);
             const errors = [];
-            if (streamHandle !== null) {
-                try { wrapper.module.FS.close(streamHandle); } catch (closeErr) { errors.push('close: ' + closeErr.message); }
-                streamHandle = null;
-                streamOffset = 0;
-                try { wrapper.module.FS.unlink(wrapper.dbPath); } catch (unlinkErr) { errors.push('unlink: ' + unlinkErr.message); }
+            if (ss.handle !== null) {
+                try { w.module.FS.close(ss.handle); } catch (closeErr) { errors.push('close: ' + closeErr.message); }
+                setStreamState(args.dbName, { handle: null, offset: 0 });
+                try { w.module.FS.unlink(w.dbPath); } catch (unlinkErr) { errors.push('unlink: ' + unlinkErr.message); }
             }
             if (errors.length > 0) {
                 console.warn('abortStreamAttach cleanup issues:', errors.join('; '));
@@ -194,32 +239,17 @@ async function handleMessage(method, args) {
         }
 
         case 'streamCopyDb':
-            await wrapper.streamCopyDb(args.destName);
+            await getWrapper(args.dbName).streamCopyDb(args.destName);
             return true;
 
         case 'dropDb':
-            await wrapper.dropDb();
+            await getWrapper(args.dbName).dropDb();
             return true;
 
         case 'getContent': {
-            const data = wrapper.module.FS.readFile(wrapper.dbPath);
+            const w = getWrapper(args.dbName);
+            const data = w.module.FS.readFile(w.dbPath);
             return Array.from(data);
-        }
-
-        // ── Connection Pool ──
-        case 'createPool': {
-            const pool = wrapper.createPool(args.size);
-            pools.set(pool.poolPtr, pool);
-            return { poolPtr: pool.poolPtr, writerPtr: pool.writer };
-        }
-
-        case 'closePool': {
-            const pool = pools.get(args.poolPtr);
-            if (pool) {
-                pool.close();
-                pools.delete(args.poolPtr);
-            }
-            return true;
         }
 
         default:
@@ -227,20 +257,20 @@ async function handleMessage(method, args) {
     }
 }
 
-function applyBind(dbPtr, bind) {
+function applyBind(w, dbPtr, bind) {
     switch (bind.method) {
-        case 'bindNull': return wrapper.bindNull(dbPtr, bind.index);
-        case 'bindInt': return wrapper.bindInt(dbPtr, bind.index, bind.value);
-        case 'bindFloat': return wrapper.bindFloat(dbPtr, bind.index, bind.value);
-        case 'bindDouble': return wrapper.bindDouble(dbPtr, bind.index, bind.value);
-        case 'bindText': return wrapper.bindText(dbPtr, bind.index, bind.value);
-        case 'bindBlob': return wrapper.bindBlob(dbPtr, bind.index, new Uint8Array(bind.value));
-        case 'bindNameNull': return wrapper.bindNameNull(dbPtr, bind.name);
-        case 'bindNameInt': return wrapper.bindNameInt(dbPtr, bind.name, bind.value);
-        case 'bindNameFloat': return wrapper.bindNameFloat(dbPtr, bind.name, bind.value);
-        case 'bindNameDouble': return wrapper.bindNameDouble(dbPtr, bind.name, bind.value);
-        case 'bindNameText': return wrapper.bindNameText(dbPtr, bind.name, bind.value);
-        case 'bindNameBlob': return wrapper.bindNameBlob(dbPtr, bind.name, new Uint8Array(bind.value));
-        default: return 0;
+        case 'bindNull': return w.bindNull(dbPtr, bind.index);
+        case 'bindInt': return w.bindInt(dbPtr, bind.index, bind.value);
+        case 'bindFloat': return w.bindFloat(dbPtr, bind.index, bind.value);
+        case 'bindDouble': return w.bindDouble(dbPtr, bind.index, bind.value);
+        case 'bindText': return w.bindText(dbPtr, bind.index, bind.value);
+        case 'bindBlob': return w.bindBlob(dbPtr, bind.index, new Uint8Array(bind.value));
+        case 'bindNameNull': return w.bindNameNull(dbPtr, bind.name);
+        case 'bindNameInt': return w.bindNameInt(dbPtr, bind.name, bind.value);
+        case 'bindNameFloat': return w.bindNameFloat(dbPtr, bind.name, bind.value);
+        case 'bindNameDouble': return w.bindNameDouble(dbPtr, bind.name, bind.value);
+        case 'bindNameText': return w.bindNameText(dbPtr, bind.name, bind.value);
+        case 'bindNameBlob': return w.bindNameBlob(dbPtr, bind.name, new Uint8Array(bind.value));
+        default: throw new Error('Unknown bind method: ' + bind.method);
     }
 }

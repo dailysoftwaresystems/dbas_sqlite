@@ -184,4 +184,21 @@ abstract class DbasSqliteNativeInterface {
   int poolAcquireReader(int poolPtr);
   void poolReleaseReader(int poolPtr, int readerPtr);
   Future<void> closePool(int poolPtr);
+
+  // ── Pool lifecycle (web transaction lease management) ───
+  /// Acquire and hold a write lease for the duration of a transaction.
+  /// Default no-op for native (handled by Dart-level writer lock).
+  Future<void> beginTransactionLease() async {}
+
+  /// Release the write lease held during a transaction.
+  /// Default no-op for native.
+  Future<void> endTransactionLease() async {}
+
+  /// Hint that the next prepareQuery call is for a write operation.
+  /// On web, this acquires SlotMode.write instead of SlotMode.read.
+  /// Default no-op for native (handled by Dart-level writer lock).
+  void setWriteMode() {}
+
+  /// Global pool size configuration (set before first getInstance call).
+  static int workerPoolSize = 4;
 }

@@ -2071,4 +2071,203 @@ void main() async {
     await db.closeDb();
     await db.dropDb();
   });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Pool: concurrent reads and writes with pool active
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('concurrent writes with pool are serialized and all succeed', () async {
+    final db = await _createTestDb('pool_conc_writes.db', readerPoolSize: 4);
+
+    await db.executeSql('CREATE TABLE pcw_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await Future.wait([
+      db.executeSql("INSERT INTO pcw_tbl (id, val) VALUES (1, 'a')"),
+      db.executeSql("INSERT INTO pcw_tbl (id, val) VALUES (2, 'b')"),
+      db.executeSql("INSERT INTO pcw_tbl (id, val) VALUES (3, 'c')"),
+    ]);
+
+    await db.executeReader('SELECT COUNT(*) FROM pcw_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 3);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('pool: sequential reader then writer works correctly', () async {
+    final db = await _createTestDb('pool_seq_rw.db', readerPoolSize: 2);
+
+    await db.executeSql('CREATE TABLE psrw_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO psrw_tbl (id, val) VALUES (1, 'original')");
+
+    // Reader cycle (uses pool reader)
+    await db.executeReader('SELECT val FROM psrw_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'original');
+    await db.closeReader();
+
+    // Writer after reader
+    await db.executeSql("UPDATE psrw_tbl SET val = 'updated' WHERE id = 1");
+
+    // Verify write took effect
+    await db.executeReader('SELECT val FROM psrw_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'updated');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('pool: getLastInsertedId works after executeSql', () async {
+    final db = await _createTestDb('pool_last_id.db', readerPoolSize: 2);
+
+    await db.executeSql('CREATE TABLE pli_tbl (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)');
+    await db.executeSql("INSERT INTO pli_tbl (val) VALUES ('first')");
+
+    final lastId = db.getLastInsertedId();
+    expect(lastId, greaterThan(0));
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('pool: transaction with pool-enabled database', () async {
+    final db = await _createTestDb('pool_txn.db', readerPoolSize: 4);
+
+    await db.executeSql('CREATE TABLE pt_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO pt_tbl (id, val) VALUES (1, 'before')");
+
+    await db.beginTransaction();
+
+    await db.executeSql("INSERT INTO pt_tbl (id, val) VALUES (2, 'during')");
+
+    // Read within the same transaction — should see uncommitted data
+    await db.executeReader('SELECT val FROM pt_tbl ORDER BY id');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'before');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'during');
+    expect(await db.readRow(), isFalse);
+
+    await db.commit();
+
+    // Verify committed data
+    await db.executeReader('SELECT COUNT(*) FROM pt_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 2);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('pool: concurrent transactions are serialized', () async {
+    final db = await _createTestDb('pool_conc_txn.db', readerPoolSize: 2);
+
+    await db.executeSql('CREATE TABLE pct_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    final executionOrder = <int>[];
+
+    await Future.wait([
+      db.transaction((db) async {
+        await db.executeSql("INSERT INTO pct_tbl (id, val) VALUES (1, 'a')");
+        executionOrder.add(1);
+      }),
+      db.transaction((db) async {
+        await db.executeSql("INSERT INTO pct_tbl (id, val) VALUES (2, 'b')");
+        executionOrder.add(2);
+      }),
+    ]);
+
+    expect(executionOrder.length, 2);
+    expect(executionOrder.toSet(), {1, 2});
+
+    await db.executeReader('SELECT COUNT(*) FROM pct_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 2);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('pool: reader fallback to writer when all pool readers busy', () async {
+    // Use pool with 1 reader — holding it should trigger writer fallback
+    final db = await _createTestDb('pool_fallback.db', readerPoolSize: 1);
+
+    await db.executeSql('CREATE TABLE pf_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO pf_tbl (id, val) VALUES (1, 'test')");
+
+    // This should work even with small pool
+    await db.executeReader('SELECT val FROM pf_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'test');
+    await db.closeReader();
+
+    // Subsequent operations should still work
+    await db.executeSql("INSERT INTO pf_tbl (id, val) VALUES (2, 'test2')");
+
+    await db.executeReader('SELECT COUNT(*) FROM pf_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 2);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('pool: multiple databases work independently', () async {
+    final db1 = await _createTestDb('pool_multi_a.db', readerPoolSize: 2);
+    final db2 = await _createTestDb('pool_multi_b.db', readerPoolSize: 2);
+
+    await db1.executeSql('CREATE TABLE ma_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db2.executeSql('CREATE TABLE mb_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+
+    // Concurrent operations on different DBs
+    await Future.wait([
+      db1.executeSql("INSERT INTO ma_tbl (id, val) VALUES (1, 'db1')"),
+      db2.executeSql("INSERT INTO mb_tbl (id, val) VALUES (1, 'db2')"),
+    ]);
+
+    // Verify each DB independently
+    await db1.executeReader('SELECT val FROM ma_tbl WHERE id = 1');
+    expect(await db1.readRow(), isTrue);
+    expect(db1.getColumnText(0), 'db1');
+    await db1.closeReader();
+
+    await db2.executeReader('SELECT val FROM mb_tbl WHERE id = 1');
+    expect(await db2.readRow(), isTrue);
+    expect(db2.getColumnText(0), 'db2');
+    await db2.closeReader();
+
+    await db1.closeDb();
+    await db1.dropDb();
+    await db2.closeDb();
+    await db2.dropDb();
+  });
+
+  test('pool: prepare failure releases pool slot', () async {
+    final db = await _createTestDb('pool_prep_fail.db', readerPoolSize: 2);
+    await db.executeSql('CREATE TABLE ppf_tbl (id INTEGER PRIMARY KEY)');
+
+    // Bad SQL should fail and release the pool slot
+    await expectLater(
+      () => db.executeSql('INSERT INTO nonexistent_tbl VALUES (1)'),
+      throwsA(isA<Exception>()),
+    );
+
+    // Subsequent operations should still work (slot was released)
+    await db.executeSql('INSERT INTO ppf_tbl (id) VALUES (1)');
+
+    await db.executeReader('SELECT id FROM ppf_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 1);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
 }

@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_interface.dart';
+import 'dbas_sqlite_connection_pool.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 
 /// Base class for native app implementations (FFI and IO/AOT).
@@ -368,35 +369,61 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   Future closeDb(int dbPtr) async =>
       nativeCloseDb(resolveDbPtr(dbPtr));
 
-  // ── Connection Pool ──────────────────────────────────────────────────
+  // ── Connection Pool (Dart-managed, general-purpose) ─────────────────
+
+  static int _nextPoolKey = 1;
+  static final Map<int, DbasSqliteConnectionPool> _nativePools = {};
+
   @override
   Future<int> createPool(String path, int readerCount) async {
-    Pointer<Utf8> pathPtr = nullptr;
-    try {
-      pathPtr = path.toNativeUtf8();
-      final ptr = nativeCreatePool(pathPtr, readerCount);
-      return ptr.address;
-    } finally {
-      if (pathPtr != nullptr) {
-        calloc.free(pathPtr);
+    final connections = <DbasSqliteDb>[];
+
+    // Open readerCount + 1 general-purpose connections (all read-write)
+    for (int i = 0; i <= readerCount; i++) {
+      final ptr = await openDb(path);
+      if (ptr == 0 || !isOpened(ptr)) {
+        // Close any already-opened connections before throwing
+        for (final c in connections) {
+          nativeCloseDb(resolveDbPtr(c.ptr));
+        }
+        throw Exception('Failed to open connection $i for pool: $path');
+      }
+      connections.add(DbasSqliteDb(dbName, ptr));
+
+      // Enable WAL mode on every connection
+      Pointer<Utf8> walPtr = nullptr;
+      try {
+        walPtr = 'PRAGMA journal_mode=WAL'.toNativeUtf8();
+        nativeExecuteSql(resolveDbPtr(ptr), walPtr);
+      } finally {
+        if (walPtr != nullptr) calloc.free(walPtr);
       }
     }
+
+    final key = _nextPoolKey++;
+    _nativePools[key] = DbasSqliteConnectionPool(connections);
+    return key;
   }
 
   @override
   int poolGetWriter(int poolPtr) =>
-      nativePoolGetWriter(resolvePoolPtr(poolPtr)).address;
+      _nativePools[poolPtr]?.writer.ptr ?? 0;
 
   @override
   int poolAcquireReader(int poolPtr) =>
-      nativePoolAcquireReader(resolvePoolPtr(poolPtr)).address;
+      _nativePools[poolPtr]?.acquireReader()?.ptr ?? 0;
 
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) =>
-      nativePoolReleaseReader(resolvePoolPtr(poolPtr), resolveDbPtr(readerPtr));
+      _nativePools[poolPtr]?.releaseConnection(readerPtr);
 
   @override
-  Future<void> closePool(int poolPtr) async =>
-      nativeClosePool(resolvePoolPtr(poolPtr));
+  Future<void> closePool(int poolPtr) async {
+    final pool = _nativePools.remove(poolPtr);
+    if (pool == null) return;
+    for (final conn in pool.all) {
+      nativeCloseDb(resolveDbPtr(conn.ptr));
+    }
+  }
 }
 

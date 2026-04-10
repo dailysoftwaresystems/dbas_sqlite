@@ -187,4 +187,16 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   Future<void> closePool(int poolPtr) =>
       throw UnsupportedError('Not supported in web.');
+
+  @override
+  Future<void> beginTransactionLease() =>
+      throw UnsupportedError('Not supported in web.');
+
+  @override
+  Future<void> endTransactionLease() =>
+      throw UnsupportedError('Not supported in web.');
+
+  @override
+  void setWriteMode() =>
+      throw UnsupportedError('Not supported in web.');
 }

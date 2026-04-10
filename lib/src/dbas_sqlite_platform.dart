@@ -150,4 +150,14 @@ final class DbasSqlitePlatform {
 
   Future<void> closePool(String dbName, int poolPtr) async =>
       await _delegate[dbName]!.closePool(poolPtr);
+
+  // ── Pool lifecycle (web transaction lease management) ──────────────────
+  Future<void> beginTransactionLease(String dbName) async =>
+      await _delegate[dbName]!.beginTransactionLease();
+
+  Future<void> endTransactionLease(String dbName) async =>
+      await _delegate[dbName]!.endTransactionLease();
+
+  void setWriteMode(String dbName) =>
+      _delegate[dbName]!.setWriteMode();
 }

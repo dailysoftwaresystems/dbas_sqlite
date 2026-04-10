@@ -21,7 +21,10 @@
       "Bash(dart test:*)",
       "Bash(xargs cat:*)",
       "Bash(flutter pub:*)",
-      "Bash(python3 -m json.tool)"
+      "Bash(python3 -m json.tool)",
+      "Skill(pr-review-toolkit:review-pr)",
+      "Read(//c/Source/DailySoftware/DBAS.FileSystem.Dart/**)",
+      "Read(//c/Source/DailySoftware/DBAS.FileSystem.Dart/example/test_driver/**)"
     ]
   }
 }

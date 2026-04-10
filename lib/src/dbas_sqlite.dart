@@ -6,6 +6,7 @@ import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
   if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
 import 'package:dbas_sqlite_flutter/src/helpers/dbas_sqlite_platform_util.dart';
+import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
 import 'package:decimal/decimal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
@@ -70,11 +71,14 @@ class DbasSqlite {
   /// Otherwise, a new instance is created and cached.
   ///
   /// Defaults to `'dbas.db'` if no name is provided.
-  static Future<DbasSqlite> getInstance({String dbName = 'dbas.db', bool throwOnMissingNamedParams = false}) async {
+  static Future<DbasSqlite> getInstance({String dbName = 'dbas.db', bool throwOnMissingNamedParams = false, int workerPoolSize = 4}) async {
     if (_instance.containsKey(dbName)) {
       _instance[dbName]!.throwOnMissingNamedParams = throwOnMissingNamedParams;
       return _instance[dbName]!;
     }
+
+    // Configure global pool size before first platform initialization
+    DbasSqliteNativeInterface.workerPoolSize = workerPoolSize;
 
     _instance[dbName] = DbasSqlite._dbasSqlite(await DbasSqlitePlatform.getInstance(dbName: dbName), dbName, throwOnMissingNamedParams: throwOnMissingNamedParams);
     return _instance[dbName]!;
@@ -244,9 +248,6 @@ class DbasSqlite {
   Future<void> openDb({int readerPoolSize = 4}) async {
     String fileName = await getAppDatabasePath(dbName: dbName);
 
-    // Web Worker is single-threaded; pool adds no concurrency benefit.
-    if (kIsWeb) readerPoolSize = 0;
-
     if (readerPoolSize > 0) {
       final poolPtr = await _platform.createPool(dbName, fileName, readerPoolSize);
       if (poolPtr != 0) {
@@ -292,12 +293,15 @@ class DbasSqlite {
 
     await _closePendingReader();
     final lockHeld = _isInTransaction;
-    if (!lockHeld) await _acquireWriterLock();
+    if (!kIsWeb && !lockHeld) await _acquireWriterLock();
     try {
       if (!isOpened()) {
         throw StateError('Database was closed while waiting for writer lock.');
       }
       final conn = _db!;
+      // On web, hint that this prepareQuery is for a write operation
+      // so the pool acquires a write-exclusive slot.
+      if (kIsWeb && !lockHeld) _platform.setWriteMode(dbName);
       int prepared = await _platform.prepareQuery(conn, sql);
       if (prepared != _sqliteOk) {
         String error = _platform.getLastDbError(conn) ?? 'Unknown error.';
@@ -320,7 +324,7 @@ class DbasSqlite {
         await _platform.closeReader(conn);
       }
     } finally {
-      if (!lockHeld) _releaseWriterLock();
+      if (!kIsWeb && !lockHeld) _releaseWriterLock();
     }
   }
 
@@ -347,28 +351,30 @@ class DbasSqlite {
 
     await _closePendingReader();
 
-    if (_poolPtr != null && !_isInTransaction) {
-      await _acquireReaderLock();
-      if (!isOpened()) {
-        _releaseReaderLock();
-        throw StateError('Database was closed while waiting for reader lock.');
-      }
-      _reader = await _acquirePoolReader();
-      if (_reader == null) {
-        // All pool readers busy — fall back to writer connection
-        _releaseReaderLock();
-      }
-    }
-
-    // No pool or pool exhausted — use writer connection with writer lock
-    if (_reader == null) {
-      if (!_isInTransaction) {
-        await _acquireWriterLock();
+    if (!kIsWeb) {
+      if (_poolPtr != null && !_isInTransaction) {
+        await _acquireReaderLock();
         if (!isOpened()) {
-          _releaseWriterLock();
-          throw StateError('Database was closed while waiting for writer lock.');
+          _releaseReaderLock();
+          throw StateError('Database was closed while waiting for reader lock.');
         }
-        _readerHoldsWriterLock = true;
+        _reader = await _acquirePoolReader();
+        if (_reader == null) {
+          // All pool readers busy — fall back to writer connection
+          _releaseReaderLock();
+        }
+      }
+
+      // No pool or pool exhausted — use writer connection with writer lock
+      if (_reader == null) {
+        if (!_isInTransaction) {
+          await _acquireWriterLock();
+          if (!isOpened()) {
+            _releaseWriterLock();
+            throw StateError('Database was closed while waiting for writer lock.');
+          }
+          _readerHoldsWriterLock = true;
+        }
       }
     }
 
@@ -632,9 +638,10 @@ class DbasSqlite {
   /// when a new [executeSql] or [executeReader] is called while a previous
   /// reader session is still active.
   Future<void> _closePendingReader() async {
-    if (_readerHoldsWriterLock || _reader != null) {
-      await closeReader();
-    }
+    // On web, closeReader handles releasing the pool lease.
+    // On native, it releases the pool reader or writer lock.
+    // closeReader is idempotent (returns early if no active lease/reader).
+    await closeReader();
   }
 
   Future<void> _acquireReaderLock() async {
@@ -751,14 +758,16 @@ class DbasSqlite {
   /// to [getInstance] with the same name will create a fresh instance.
   Future<void> closeDb() async {
     await rollback();
-    _releaseWriterLock();
+    if (!kIsWeb) _releaseWriterLock();
 
-    if (_reader != null && _poolPtr != null) {
-      _platform.poolReleaseReader(dbName, _poolPtr!, _reader!.ptr);
-      _reader = null;
+    if (!kIsWeb) {
+      if (_reader != null && _poolPtr != null) {
+        _platform.poolReleaseReader(dbName, _poolPtr!, _reader!.ptr);
+        _reader = null;
+      }
+      _readerHoldsWriterLock = false;
+      _releaseReaderLock();
     }
-    _readerHoldsWriterLock = false;
-    _releaseReaderLock();
 
     if (_instance.containsKey(dbName)) {
       _instance.remove(dbName);
@@ -780,6 +789,12 @@ class DbasSqlite {
   /// be called manually to release resources early (e.g. when breaking out
   /// of a read loop).
   Future<void> closeReader() async {
+    if (kIsWeb) {
+      // On web, the pool handles slot release inside closeReader
+      await _platform.closeReader(_db!);
+      return;
+    }
+
     final conn = _reader ?? _db;
     if (conn == null) return;
     await _platform.closeReader(conn);
@@ -829,15 +844,29 @@ class DbasSqlite {
     if (_isInTransaction) {
       return;
     }
-    await _acquireWriterLock();
+    if (kIsWeb) {
+      await _platform.beginTransactionLease(dbName);
+    } else {
+      await _acquireWriterLock();
+    }
     try {
       if (!isOpened()) {
+        if (kIsWeb) {
+          await _platform.endTransactionLease(dbName);
+        } else {
+          _releaseWriterLock();
+        }
         throw StateError('Database was closed while waiting for writer lock.');
       }
       await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
       _isInTransaction = true;
     } catch (_) {
-      _releaseWriterLock();
+      if (_isInTransaction) rethrow;
+      if (kIsWeb) {
+        await _platform.endTransactionLease(dbName);
+      } else {
+        _releaseWriterLock();
+      }
       rethrow;
     }
   }
@@ -855,7 +884,11 @@ class DbasSqlite {
     try {
       await _platform.executeSql(_db!, 'COMMIT');
       _isInTransaction = false;
-      _releaseWriterLock();
+      if (kIsWeb) {
+        await _platform.endTransactionLease(dbName);
+      } else {
+        _releaseWriterLock();
+      }
     } catch(e) {
       await rollback();
       rethrow;
@@ -876,7 +909,11 @@ class DbasSqlite {
       await _platform.executeSql(_db!, 'ROLLBACK');
     } finally {
       _isInTransaction = false;
-      _releaseWriterLock();
+      if (kIsWeb) {
+        await _platform.endTransactionLease(dbName);
+      } else {
+        _releaseWriterLock();
+      }
     }
   }
 
@@ -937,14 +974,14 @@ class DbasSqlite {
     if (_isInTransaction) {
       throw StateError('Cannot run VACUUM inside a transaction.');
     }
-    await _acquireWriterLock();
+    if (!kIsWeb) await _acquireWriterLock();
     try {
       if (!isOpened()) {
         throw StateError('Database was closed while waiting for writer lock.');
       }
       await _platform.executeSql(_db!, 'VACUUM');
     } finally {
-      _releaseWriterLock();
+      if (!kIsWeb) _releaseWriterLock();
     }
   }
 }

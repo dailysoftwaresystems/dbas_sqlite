@@ -187,4 +187,16 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @override
   Future<void> closePool(int poolPtr) =>
       throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<void> beginTransactionLease() =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  Future<void> endTransactionLease() =>
+      throw UnsupportedError('Not supported in native app.');
+
+  @override
+  void setWriteMode() =>
+      throw UnsupportedError('Not supported in native app.');
 }
