@@ -528,26 +528,26 @@ class DbasSqliteWrapper {
     bindText(dbPtr, index, value) {
         const textPtr = this.allocString(value);
         try {
-            this.module._BindText(dbPtr, index, textPtr);
+            return this.module._BindText(dbPtr, index, textPtr);
         } finally {
             this.module._free(textPtr);
         }
     }
 
     bindInt(dbPtr, index, value) {
-        this.module._BindInt(dbPtr, index, value);
+        return this.module._BindInt(dbPtr, index, value);
     }
 
     bindFloat(dbPtr, index, value) {
-        this.module._BindFloat(dbPtr, index, value);
+        return this.module._BindFloat(dbPtr, index, value);
     }
 
     bindDouble(dbPtr, index, value) {
-        this.module._BindDouble(dbPtr, index, value);
+        return this.module._BindDouble(dbPtr, index, value);
     }
 
     bindNull(dbPtr, index) {
-        this.module._BindNull(dbPtr, index);
+        return this.module._BindNull(dbPtr, index);
     }
 
     bindBlob(dbPtr, index, data) {
@@ -555,7 +555,7 @@ class DbasSqliteWrapper {
         const dataPtr = this.module._malloc(len);
         try {
             this.module.HEAPU8.set(data, dataPtr);
-            this.module._BindBlob(dbPtr, index, dataPtr, len);
+            return this.module._BindBlob(dbPtr, index, dataPtr, len);
         } finally {
             this.module._free(dataPtr);
         }
@@ -565,7 +565,7 @@ class DbasSqliteWrapper {
         const namePtr = this.allocString(name);
         const valuePtr = this.allocString(value);
         try {
-            this.module._BindNameText(dbPtr, namePtr, valuePtr);
+            return this.module._BindNameText(dbPtr, namePtr, valuePtr);
         } finally {
             this.module._free(namePtr);
             this.module._free(valuePtr);
@@ -575,7 +575,7 @@ class DbasSqliteWrapper {
     bindNameInt(dbPtr, name, value) {
         const namePtr = this.allocString(name);
         try {
-            this.module._BindNameInt(dbPtr, namePtr, value);
+            return this.module._BindNameInt(dbPtr, namePtr, value);
         } finally {
             this.module._free(namePtr);
         }
@@ -584,7 +584,7 @@ class DbasSqliteWrapper {
     bindNameFloat(dbPtr, name, value) {
         const namePtr = this.allocString(name);
         try {
-            this.module._BindNameFloat(dbPtr, namePtr, value);
+            return this.module._BindNameFloat(dbPtr, namePtr, value);
         } finally {
             this.module._free(namePtr);
         }
@@ -593,7 +593,7 @@ class DbasSqliteWrapper {
     bindNameDouble(dbPtr, name, value) {
         const namePtr = this.allocString(name);
         try {
-            this.module._BindNameDouble(dbPtr, namePtr, value);
+            return this.module._BindNameDouble(dbPtr, namePtr, value);
         } finally {
             this.module._free(namePtr);
         }
@@ -602,7 +602,7 @@ class DbasSqliteWrapper {
     bindNameNull(dbPtr, name) {
         const namePtr = this.allocString(name);
         try {
-            this.module._BindNameNull(dbPtr, namePtr);
+            return this.module._BindNameNull(dbPtr, namePtr);
         } finally {
             this.module._free(namePtr);
         }
@@ -614,7 +614,7 @@ class DbasSqliteWrapper {
         const dataPtr = this.module._malloc(len);
         try {
             this.module.HEAPU8.set(data, dataPtr);
-            this.module._BindNameBlob(dbPtr, namePtr, dataPtr, len);
+            return this.module._BindNameBlob(dbPtr, namePtr, dataPtr, len);
         } finally {
             this.module._free(namePtr);
             this.module._free(dataPtr);
