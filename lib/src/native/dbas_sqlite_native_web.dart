@@ -128,7 +128,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     if (_initialized && _worker != null) return;
 
     try {
-      _worker = web.Worker('libs/dbas_sqlite_worker.js'.toJS);
+      // Flutter serves plugin assets at assets/packages/<package_name>/<asset_path>
+      _worker = web.Worker('assets/packages/dbas_sqlite_flutter/web/libs/dbas_sqlite_worker.js'.toJS);
       _worker!.onmessage = ((web.MessageEvent e) => _onMessage(e)).toJS;
       await _send('initialize', {'dbName': dbName});
       _initialized = true;

@@ -6,13 +6,11 @@ require 'yaml'
 pubspec = YAML.load_file(File.join('..', 'pubspec.yaml'))
 
 Pod::Spec.new do |s|
-  s.name             = 'dbas_sqlite_flutter'
+  s.name             = pubspec['name']
   s.version          = pubspec['version']
-  s.summary          = 'Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.'
-  s.description      = <<-DESC
-Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web.
-                       DESC
-  s.homepage         = 'https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter'
+  s.summary          = pubspec['description']
+  s.description      = pubspec['description']
+  s.homepage         = pubspec['homepage']
   s.license          = { :type => 'Proprietary', :file => '../LICENSE' }
   s.author           = { 'Daily Software Systems LTDA.' => 'dailysoftwaresystems@outlook.com' }
   s.source           = { :path => '.' }

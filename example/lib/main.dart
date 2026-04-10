@@ -1,72 +1,149 @@
-import 'package:flutter/material.dart';
-import 'dart:async';
-
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+import 'package:flutter/material.dart';
+
+import 'src/tabs/tab_crud.dart';
+import 'src/tabs/tab_db_ops.dart';
+import 'src/tabs/tab_setup.dart';
+import 'src/widgets/log_panel.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const DbasExampleApp());
 }
 
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
-
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  bool _isOpened = false;
-  bool _exists = false;
-
-  @override
-  void initState() {
-    super.initState();
-    initPlatformState();
-  }
-
-  // Platform messages are asynchronous, so we initialize in an async method.
-  Future<void> initPlatformState() async {
-    bool isOpened = false;
-    // Platform messages may fail, so we use a try/catch PlatformException.
-    // We also handle the message potentially returning null.
-    try {
-      final DbasSqlite plugin = await DbasSqlite.getInstance(dbName: 'dbas.db');
-      print('Opening database');
-      await plugin.openDb();
-      isOpened = plugin.isOpened();
-      _exists = await plugin.databaseExists();
-      print('Running create table');
-      await plugin.executeSql('''
-        CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          email TEXT UNIQUE NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      ''');
-    } on Exception catch (e) {
-      print('Failed: ${e.toString()}');
-    }
-
-    // If the widget was removed from the tree while the asynchronous platform
-    // message was in flight, we want to discard the reply rather than calling
-    // setState to update our non-existent appearance.
-    if (!mounted) return;
-
-    setState(() {
-      _isOpened = isOpened;
-    });
-  }
+class DbasExampleApp extends StatelessWidget {
+  const DbasExampleApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: Scaffold(
+      title: 'DBAS SQLite Example',
+      theme: ThemeData(
+        colorSchemeSeed: Colors.indigo,
+        useMaterial3: true,
+      ),
+      home: const ExampleHomePage(),
+    );
+  }
+}
+
+class ExampleHomePage extends StatefulWidget {
+  const ExampleHomePage({super.key});
+
+  @override
+  State<ExampleHomePage> createState() => _ExampleHomePageState();
+}
+
+class _ExampleHomePageState extends State<ExampleHomePage> {
+  DbasSqlite? _db;
+  bool _isLoading = false;
+  final List<String> _log = [];
+  final ScrollController _logScrollController = ScrollController();
+
+  Future<void> _runOp(Future<void> Function() op) async {
+    setState(() => _isLoading = true);
+    try {
+      await op();
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _addLog(String message) {
+    final now = DateTime.now();
+    final timestamp =
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    setState(() {
+      // Lines starting with spaces are continuation lines (e.g. row data), no timestamp
+      if (message.startsWith(' ')) {
+        _log.add('         $message');
+      } else {
+        _log.add('$timestamp $message');
+      }
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_logScrollController.hasClients) {
+        _logScrollController.jumpTo(
+          _logScrollController.position.maxScrollExtent,
+        );
+      }
+    });
+  }
+
+  void _clearLog() {
+    setState(() {
+      _log.clear();
+    });
+  }
+
+  void _onDbChanged(DbasSqlite? newDb) {
+    setState(() {
+      _db = newDb;
+    });
+  }
+
+  @override
+  void dispose() {
+    _logScrollController.dispose();
+    _db?.closeDb();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
         appBar: AppBar(
-          title: const Text('Plugin example app'),
+          title: const Text('DBAS SQLite Example'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(icon: Icon(Icons.settings), text: 'Setup'),
+              Tab(icon: Icon(Icons.table_chart), text: 'CRUD'),
+              Tab(icon: Icon(Icons.storage), text: 'DB Ops'),
+            ],
+          ),
         ),
-        body: Center(
-          child: Text('Is opened: $_isOpened, exists: $_exists\n'),
+        body: Column(
+          children: [
+            Expanded(
+              child: TabBarView(
+                children: [
+                  SetupTab(
+                    db: _db,
+                    isLoading: _isLoading,
+                    onLog: _addLog,
+                    onDbChanged: _onDbChanged,
+                    runOp: _runOp,
+                  ),
+                  CrudTab(
+                    db: _db,
+                    isLoading: _isLoading,
+                    onLog: _addLog,
+                    runOp: _runOp,
+                  ),
+                  DbOpsTab(
+                    db: _db,
+                    isLoading: _isLoading,
+                    onLog: _addLog,
+                    onDbChanged: _onDbChanged,
+                    runOp: _runOp,
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 200,
+              child: LogPanel(
+                entries: _log,
+                controller: _logScrollController,
+                onClear: _clearLog,
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -244,6 +244,9 @@ class DbasSqlite {
   Future<void> openDb({int readerPoolSize = 4}) async {
     String fileName = await getAppDatabasePath(dbName: dbName);
 
+    // Web Worker is single-threaded; pool adds no concurrency benefit.
+    if (kIsWeb) readerPoolSize = 0;
+
     if (readerPoolSize > 0) {
       final poolPtr = await _platform.createPool(dbName, fileName, readerPoolSize);
       if (poolPtr != 0) {
