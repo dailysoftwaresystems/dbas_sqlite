@@ -1,11 +1,21 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_app_base.dart';
+import 'dbas_sqlite_row_cache.dart';
+import 'dbas_sqlite_isolate_worker.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 
 class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   late DynamicLibrary _lib;
+
+  // ── Background isolate for heavy operations ────────────────────────────
+  SendPort? _workerPort;
+  int _nextCmdId = 0;
+  final Map<int, Completer<dynamic>> _workerPending = {};
+  String? _resolvedLibPath;
 
   late Pointer<DbasSqliteDbStruct> Function(Pointer<Utf8>) _openDb;
   late int Function(Pointer<DbasSqliteDbStruct>) _isOpened;
@@ -147,7 +157,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
         Int32 Function(Pointer<DbasSqliteDbStruct>),
         int Function(Pointer<DbasSqliteDbStruct>)>('GetAffectedRows');
     _getLastInsertedId = _lib.lookupFunction<
-        Int32 Function(Pointer<DbasSqliteDbStruct>),
+        Int64 Function(Pointer<DbasSqliteDbStruct>),
         int Function(Pointer<DbasSqliteDbStruct>)>('GetLastInsertedId');
     _closeReader = _lib.lookupFunction<
         Void Function(Pointer<DbasSqliteDbStruct>),
@@ -172,7 +182,140 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
     _closePool = _lib.lookupFunction<
         Void Function(Pointer<DbasSqlitePoolStruct>),
         void Function(Pointer<DbasSqlitePoolStruct>)>('ClosePool');
+
+    // Spawn background isolate for heavy FFI operations.
+    // The worker loads the same DLL independently.
+    _resolvedLibPath = (!isTest && (Platform.isIOS || Platform.isMacOS))
+        ? '' // process() library — worker handles this internally
+        : await getLibraryPath();
+    await _spawnWorker(_resolvedLibPath!);
   }
+
+  Future<void> _spawnWorker(String libPath) async {
+    final receivePort = ReceivePort();
+    final initMsg = WorkerInitMessage(receivePort.sendPort, libPath);
+
+    await Isolate.spawn(isolateWorkerEntryPoint, initMsg);
+
+    final portCompleter = Completer<SendPort>();
+    void failAllPending(Object error) {
+      for (final pending in _workerPending.values) {
+        if (!pending.isCompleted) pending.completeError(error);
+      }
+      _workerPending.clear();
+      _workerPort = null;
+    }
+
+    receivePort.listen(
+      (message) {
+        if (message is SendPort) {
+          portCompleter.complete(message);
+        } else if (message is IsolateResponse) {
+          final pending = _workerPending.remove(message.id);
+          if (pending != null) {
+            if (message.error != null) {
+              pending.completeError(Exception(message.error));
+            } else {
+              pending.complete(message.result);
+            }
+          }
+        }
+      },
+      onDone: () {
+        failAllPending(StateError('Worker isolate terminated unexpectedly'));
+      },
+      onError: (error) {
+        failAllPending(StateError('Worker isolate stream error: $error'));
+      },
+    );
+
+    _workerPort = await portCompleter.future;
+  }
+
+  Future<dynamic> _sendToWorker(String method, [Map<String, dynamic>? args]) {
+    if (_workerPort == null) {
+      throw StateError(
+        'Cannot send command "$method": worker isolate is not running',
+      );
+    }
+    final id = _nextCmdId++;
+    final completer = Completer<dynamic>();
+    _workerPending[id] = completer;
+    _workerPort!.send(IsolateCommand(id, method, args ?? {}));
+    return completer.future;
+  }
+
+  // ── Heavy operations offloaded to background isolate ───────────────────
+
+  @override
+  Future<int> executeSql(int dbPtr, String sql) async =>
+      await _sendToWorker('executeSql', {'dbPtr': dbPtr, 'sql': sql}) as int;
+
+  @override
+  Future<int> prepareQuery(int dbPtr, String sql) async {
+    final result = await _sendToWorker('prepareQuery', {'dbPtr': dbPtr, 'sql': sql});
+    if (result is Map) {
+      rowCache.updateFromPrepare(result);
+      return toIntSafe(result['rc']);
+    }
+    return toIntSafe(result);
+  }
+
+  @override
+  Future<int> readRow(int dbPtr) async {
+    final result = await _sendToWorker('readRow', {'dbPtr': dbPtr});
+    if (result is Map) {
+      rowCache.updateFromReadRow(result);
+      return toIntSafe(result['status']);
+    }
+    return toIntSafe(result);
+  }
+
+  @override
+  Future<int> openDb(String path) async =>
+      await _sendToWorker('openDb', {'path': path}) as int;
+
+  @override
+  Future closeReader(int dbPtr) async {
+    await _sendToWorker('closeReader', {'dbPtr': dbPtr});
+    rowCache.columns = null;
+  }
+
+  @override
+  Future closeDb(int dbPtr) async {
+    await _sendToWorker('closeDb', {'dbPtr': dbPtr});
+  }
+
+  // Pool management: createPool/closePool go through the worker isolate
+  // (they allocate/free the pool struct). The synchronous pool accessors
+  // (poolGetWriter/poolAcquireReader/poolReleaseReader) use main-isolate FFI
+  // directly. This is safe because:
+  // - createPool is awaited before any acquire/release calls
+  // - closePool is awaited after all acquire/release calls complete
+  // - acquire/release only touch the readerBusy[] array, which is not
+  //   accessed by the worker during SQL operations (executeSql/readRow)
+  @override
+  Future<int> createPool(String path, int readerCount) async =>
+      await _sendToWorker('createPool', {'path': path, 'readerCount': readerCount}) as int;
+
+  @override
+  int poolGetWriter(int poolPtr) =>
+      nativePoolGetWriter(resolvePoolPtr(poolPtr)).address;
+
+  @override
+  int poolAcquireReader(int poolPtr) {
+    final reader = nativePoolAcquireReader(resolvePoolPtr(poolPtr));
+    if (reader == nullptr || reader.address == 0) return 0;
+    return reader.address;
+  }
+
+  @override
+  void poolReleaseReader(int poolPtr, int readerPtr) =>
+      nativePoolReleaseReader(resolvePoolPtr(poolPtr), resolveDbPtr(readerPtr));
+
+  @override
+  Future<void> closePool(int poolPtr) async =>
+      await _sendToWorker('closePool', {'poolPtr': poolPtr});
 
   // ── Pointer validation ─────────────────────────────────────────────────
   @override

@@ -30,7 +30,7 @@ final class DbasSqlitePlatform {
 
   Future<DbasSqliteDb> openDb(String fileName) async {
     String dbName = _getDbName(fileName);
-    final dbPtr = await _delegate[dbName]!.openDb(fileName);
+    final dbPtr = await _getInterface(dbName: dbName).openDb(fileName);
 
     final isOpened = _delegate[dbName]!.isOpened(dbPtr);
     final lastError = isOpened ? null : _delegate[dbName]!.getLastDbError(dbPtr);
@@ -53,6 +53,8 @@ final class DbasSqlitePlatform {
   Future dropDb(String fileName) async {
     final dbName = _getDbName(fileName);
     await _delegate[dbName]!.dropDb(fileName);
+    _delegate.remove(dbName);
+    DbasSqliteNativeInterface.removeInstance(dbName: dbName);
   }
 
   bool isOpened(DbasSqliteDb db) => _delegate[db.name]!.isOpened(db.ptr);
@@ -100,7 +102,7 @@ final class DbasSqlitePlatform {
   int bindDecimal(DbasSqliteDb db, int index, Decimal value) => _delegate[db.name]!.bindText(db.ptr, index, value.toString());
   int bindText(DbasSqliteDb db, int index, String value) => _delegate[db.name]!.bindText(db.ptr, index, value);
   int bindBlob(DbasSqliteDb db, int index, Uint8List value) =>
-      _delegate[db.name]!.bindBlob(db.ptr, index, Uint8List.fromList(value));
+      _delegate[db.name]!.bindBlob(db.ptr, index, value);
 
   int bindNameNull(DbasSqliteDb db, String name) => _delegate[db.name]!.bindNameNull(db.ptr, name);
   int bindNameInt(DbasSqliteDb db, String name, int value) => _delegate[db.name]!.bindNameInt(db.ptr, name, value);
@@ -109,7 +111,7 @@ final class DbasSqlitePlatform {
   int bindNameDecimal(DbasSqliteDb db, String name, Decimal value) => _delegate[db.name]!.bindNameText(db.ptr, name, value.toString());
   int bindNameText(DbasSqliteDb db, String name, String value) => _delegate[db.name]!.bindNameText(db.ptr, name, value);
   int bindNameBlob(DbasSqliteDb db, String name, Uint8List value) =>
-      _delegate[db.name]!.bindNameBlob(db.ptr, name, Uint8List.fromList(value));
+      _delegate[db.name]!.bindNameBlob(db.ptr, name, value);
 
   Future<int> readRow(DbasSqliteDb db) async => await _delegate[db.name]!.readRow(db.ptr);
   bool isNull(DbasSqliteDb db, int colIndex) => _delegate[db.name]!.isNull(db.ptr, colIndex);
@@ -133,11 +135,16 @@ final class DbasSqlitePlatform {
   int getLastInsertedId(DbasSqliteDb db) => _delegate[db.name]!.getLastInsertedId(db.ptr);
 
   Future closeReader(DbasSqliteDb db) async => await _delegate[db.name]!.closeReader(db.ptr);
-  Future closeDb(DbasSqliteDb db) async => await _delegate[db.name]!.closeDb(db.ptr);
+  Future closeDb(DbasSqliteDb db) async {
+    await _delegate[db.name]!.closeDb(db.ptr);
+  }
 
   // ── Connection Pool ───────────────────────────────────────────────────
-  Future<int> createPool(String dbName, String fileName, int readerCount) async =>
-      await _delegate[dbName]!.createPool(fileName, readerCount);
+  Future<int> createPool(String dbName, String fileName, int readerCount) async {
+    final delegate = _getInterface(dbName: dbName);
+    await delegate.initialize();
+    return await delegate.createPool(fileName, readerCount);
+  }
 
   int poolGetWriter(String dbName, int poolPtr) =>
       _delegate[dbName]!.poolGetWriter(poolPtr);
@@ -148,8 +155,9 @@ final class DbasSqlitePlatform {
   void poolReleaseReader(String dbName, int poolPtr, int readerPtr) =>
       _delegate[dbName]!.poolReleaseReader(poolPtr, readerPtr);
 
-  Future<void> closePool(String dbName, int poolPtr) async =>
-      await _delegate[dbName]!.closePool(poolPtr);
+  Future<void> closePool(String dbName, int poolPtr) async {
+    await _delegate[dbName]!.closePool(poolPtr);
+  }
 
   // ── Pool lifecycle (web transaction lease management) ──────────────────
   Future<void> beginTransactionLease(String dbName) async =>

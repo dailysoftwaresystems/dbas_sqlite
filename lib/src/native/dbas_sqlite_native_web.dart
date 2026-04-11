@@ -2,26 +2,29 @@ import 'dart:async';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'dbas_sqlite_native_interface.dart';
 import 'dbas_sqlite_web_pool.dart';
+import 'dbas_sqlite_row_cache.dart';
 
+/// Web implementation backed by a single Web Worker running the DBAS.SQLite
+/// WASM module with an in-process WAL connection pool.
+///
+/// The cursor-based Dart API is adapted by buffering SQL + params during
+/// `prepareQuery`/`bindXxx`, then issuing a single `exec` or `query` on the
+/// first `readRow` call and caching all results.
 class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
-  late DbasSqliteWebPool _pool;
+  DbasSqliteWebPool? _pool;
   bool _initialized = false;
   bool _dbOpened = false;
-  int? _cachedWriterPtr;
 
-  /// The currently acquired slot lease (held during cursor sessions).
-  SlotLease? _currentLease;
+  String? _pendingSql;
+  final List<dynamic> _pendingPositionalParams = [];
+  final Map<String, dynamic> _pendingNamedParams = {};
+  bool _isWriteQuery = false;
+  bool _nextPrepareIsWrite = false;
+  WebQueryBuffer? _queryBuffer;
 
-  /// Transaction lease — held from beginTransaction through commit/rollback.
-  SlotLease? _transactionLease;
-
-  /// Cached state from the last executeSql/readRow (survives lease release).
   int _lastAffectedRows = 0;
   int _lastInsertedId = 0;
   String? _lastError;
-
-  /// When true, the next prepareQuery acquires SlotMode.write instead of read.
-  bool _nextPrepareIsWrite = false;
 
   DbasSqliteNativeWeb(super.dbName);
 
@@ -32,27 +35,23 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   Future<void> initialize() async {
     if (_initialized) return;
-    _pool = DbasSqliteWebPool.getInstance(
-      workerCount: DbasSqliteNativeInterface.workerPoolSize,
-    );
     _initialized = true;
   }
 
   @override
   Future<int> openDb(String path) async {
-    final lease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      final dbPtr = await lease.slot.ensureDbOpened(dbName);
-      _dbOpened = dbPtr != 0;
-      return dbPtr;
-    } finally {
-      _pool.release(lease);
-    }
+    _dbOpened = true;
+    return 1;
   }
 
   @override
   Future<bool> databaseExists(String fileName) async {
-    return await _pool.sendToAny(dbName, 'databaseExists') == true;
+    // Initialize a pool worker to check — init opens the DB via OPFS.
+    // Infrastructure failures (worker load, OPFS unavailable) propagate
+    // to the caller rather than being masked as "database not found".
+    final pool = await DbasSqliteWebPool.create(dbName: dbName);
+    final result = await pool.send('exists');
+    return result == true;
   }
 
   @override
@@ -60,401 +59,281 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<void> closeDb(int dbPtr) async {
-    // Use the same cleanup path as closePool to properly handle
-    // stale wrappers, affinity removal, and closedDbs tracking.
-    await _pool.closeDbOnAllSlots(dbName);
+    await _pool?.close();
+    _pool = null;
+    DbasSqliteWebPool.removePool(dbName);
     _dbOpened = false;
   }
 
-  // ── File operations ───────────────────────────────────────────────────
+  // ── File operations (via worker protocol) ─────────────────────────────
 
   @override
   Future attachDb(String fileName, List<int> content) async {
-    final lease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      await lease.slot.ensureDbInitialized(dbName);
-      await lease.slot.send('attachDb', {'dbName': dbName, 'content': content});
-    } finally {
-      _pool.release(lease);
+    // Close existing pool — OPFS handles must be released first
+    if (_pool != null) {
+      await _pool!.close();
+      _pool = null;
+      DbasSqliteWebPool.removePool(dbName);
     }
+    final pool = await DbasSqliteWebPool.create(dbName: dbName);
+    // Use the chunked protocol (begin/chunk/end) — the worker closes
+    // the DB before writing and reopens after.
+    await pool.attachStreamChunked(
+      Stream.fromIterable([content]),
+      totalSize: content.length,
+    );
+    // Close and re-create so the next openDb starts fresh
+    await pool.close();
+    DbasSqliteWebPool.removePool(dbName);
   }
 
   @override
   Future attachStreamDb(String fileName, Stream<List<int>> stream) async {
-    final lease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      await lease.slot.ensureDbInitialized(dbName);
-      await lease.slot.send('beginStreamAttach', {'dbName': dbName});
-      try {
-        await for (final chunk in stream) {
-          await lease.slot.send('streamAttachChunk', {'dbName': dbName, 'bytes': chunk});
-        }
-        await lease.slot.send('endStreamAttach', {'dbName': dbName});
-      } catch (e) {
-        try {
-          await lease.slot.send('abortStreamAttach', {'dbName': dbName});
-        } catch (abortError) {
-          // ignore: avoid_print
-          print('attachStreamDb: abortStreamAttach also failed: $abortError');
-        }
-        rethrow;
-      }
-    } finally {
-      _pool.release(lease);
+    if (_pool != null) {
+      await _pool!.close();
+      _pool = null;
+      DbasSqliteWebPool.removePool(dbName);
     }
+    final pool = await DbasSqliteWebPool.create(dbName: dbName);
+    // True streaming — chunks flow from the Dart stream to the worker
+    // one at a time via attachStreamBegin/Chunk/End. The full database
+    // is never buffered in Dart memory.
+    await pool.attachStreamChunked(stream);
+    await pool.close();
+    DbasSqliteWebPool.removePool(dbName);
   }
 
   @override
   Future<List<int>> getContent(String fileName) async {
-    final lease = await _pool.acquire(dbName, SlotMode.read);
-    try {
-      await lease.slot.ensureDbInitialized(dbName);
-      final result = await lease.slot.send('getContent', {'dbName': dbName});
-      if (result is List) {
-        return result.cast<num>().map((e) => e.toInt()).toList();
-      }
-      return [];
-    } finally {
-      _pool.release(lease);
+    // Close pool to release OPFS handles, export via worker
+    if (_pool != null) {
+      await _pool!.close();
+      _pool = null;
+      DbasSqliteWebPool.removePool(dbName);
+      _dbOpened = false;
     }
+    final pool = await DbasSqliteWebPool.create(dbName: dbName);
+    // Streaming export — handles both Transferable Streams (Chrome/Firefox)
+    // and chunked postMessage fallback (Safari) automatically.
+    final bytes = await pool.exportContentStream();
+    await pool.close();
+    DbasSqliteWebPool.removePool(dbName);
+    return bytes;
   }
 
   @override
   Future<void> streamCopyDb(String sourceFileName, String destFileName) async {
     String destName = destFileName;
     if (destFileName.contains('/')) destName = destFileName.split('/').last;
-    final lease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      await lease.slot.ensureDbInitialized(dbName);
-      await lease.slot.send('streamCopyDb', {'dbName': dbName, 'destName': destName});
-    } finally {
-      _pool.release(lease);
-    }
+    await _ensurePool();
+    await _pool!.streamCopy(destName);
   }
 
   @override
   Future dropDb(String fileName) async {
-    final lease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      await lease.slot.ensureDbInitialized(dbName);
-      await lease.slot.send('dropDb', {'dbName': dbName});
-    } finally {
-      _pool.release(lease);
+    if (_pool != null) {
+      await _pool!.close();
+      _pool = null;
+      DbasSqliteWebPool.removePool(dbName);
     }
+    // Create a temporary worker to drop the DB files
+    final pool = await DbasSqliteWebPool.create(dbName: dbName);
+    await pool.drop();
+    await pool.close();
+    DbasSqliteWebPool.removePool(dbName);
+    _dbOpened = false;
   }
 
-  // ── SQL execution ─────────────────────────────────────────────────────
+  // ── SQL execution (direct, for BEGIN/COMMIT/ROLLBACK/PRAGMA) ──────────
 
   @override
   Future<int> executeSql(int dbPtr, String sql) async {
-    // If a transaction lease is held, reuse it
-    final lease = _transactionLease ?? await _pool.acquire(dbName, SlotMode.write);
-    final isTransactionScoped = _transactionLease != null;
-    try {
-      final slotDbPtr = await lease.slot.ensureDbOpened(dbName);
-      final result = await lease.slot.send('executeSql', {
-        'dbName': dbName, 'dbPtr': slotDbPtr, 'sql': sql,
-      });
-      if (result is Map) {
-        lease.slot.row.updateFromExecuteSql(result);
-        // Cache state before lease is released
-        _cacheSlotState(lease.slot);
-        return _toInt(result['rc']);
-      }
-      return _toInt(result);
-    } finally {
-      if (!isTransactionScoped) _pool.release(lease);
-    }
+    await _ensurePool();
+    final result = await _pool!.exec(sql);
+    _lastAffectedRows = toIntSafe(result['affectedRows']);
+    _lastInsertedId = toIntSafe(result['lastInsertId'] ?? result['lastInsertedId']);
+    _lastError = null;
+    return 0;
   }
+
+  // ── Cursor-based query ────────────────────────────────────────────────
 
   @override
   Future<int> prepareQuery(int dbPtr, String sql) async {
-    // Determine acquire mode: write if setWriteMode was called, else read
-    final mode = _nextPrepareIsWrite ? SlotMode.write : SlotMode.read;
+    _isWriteQuery = _nextPrepareIsWrite;
     _nextPrepareIsWrite = false;
+    _pendingSql = sql;
+    _pendingPositionalParams.clear();
+    _pendingNamedParams.clear();
+    _queryBuffer = null;
+    _lastError = null;
+    return 0;
+  }
 
-    // If a transaction lease is held, reuse it; otherwise acquire a new one
-    if (_transactionLease != null) {
-      _currentLease = _transactionLease;
-    } else {
-      _currentLease = await _pool.acquire(dbName, mode);
+  // ── Parameter binding (buffered until readRow) ────────────────────────
+
+  @override
+  int bindNull(int dbPtr, int index) { _ensureSlots(index); _pendingPositionalParams[index - 1] = null; return 0; }
+  @override
+  int bindInt(int dbPtr, int index, int value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
+  @override
+  int bindFloat(int dbPtr, int index, double value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
+  @override
+  int bindDouble(int dbPtr, int index, double value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
+  @override
+  int bindText(int dbPtr, int index, String value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
+  @override
+  int bindBlob(int dbPtr, int index, List<int> value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
+
+  @override
+  int bindNameNull(int dbPtr, String name) { _pendingNamedParams[name] = null; return 0; }
+  @override
+  int bindNameInt(int dbPtr, String name, int value) { _pendingNamedParams[name] = value; return 0; }
+  @override
+  int bindNameFloat(int dbPtr, String name, double value) { _pendingNamedParams[name] = value; return 0; }
+  @override
+  int bindNameDouble(int dbPtr, String name, double value) { _pendingNamedParams[name] = value; return 0; }
+  @override
+  int bindNameText(int dbPtr, String name, String value) { _pendingNamedParams[name] = value; return 0; }
+  @override
+  int bindNameBlob(int dbPtr, String name, List<int> value) { _pendingNamedParams[name] = value; return 0; }
+
+  void _ensureSlots(int index) {
+    while (_pendingPositionalParams.length < index) {
+      _pendingPositionalParams.add(null);
     }
-
-    final isTransactionScoped = _transactionLease != null;
-    try {
-      final slot = _currentLease!.slot;
-      final slotDbPtr = await slot.ensureDbOpened(dbName);
-      final result = await slot.send('prepareQuery', {
-        'dbName': dbName, 'dbPtr': slotDbPtr, 'sql': sql,
-      });
-      if (result is Map) {
-        slot.row.updateFromPrepare(result);
-        return _toInt(result['rc']);
-      }
-      return _toInt(result);
-    } catch (e) {
-      // Release lease on error (unless transaction-scoped)
-      if (!isTransactionScoped && _currentLease != null) {
-        _pool.release(_currentLease!);
-        _currentLease = null;
-      }
-      rethrow;
-    }
   }
 
-  // ── Parameter binding (buffered into current slot) ────────────────────
-
-  @override
-  int bindNull(int dbPtr, int index) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNull', 'index': index});
-    return 0;
-  }
-
-  @override
-  int bindInt(int dbPtr, int index, int value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindInt', 'index': index, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindFloat(int dbPtr, int index, double value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindFloat', 'index': index, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindDouble(int dbPtr, int index, double value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindDouble', 'index': index, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindText(int dbPtr, int index, String value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindText', 'index': index, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindBlob(int dbPtr, int index, List<int> value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindBlob', 'index': index, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindNameNull(int dbPtr, String name) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNameNull', 'name': name});
-    return 0;
-  }
-
-  @override
-  int bindNameInt(int dbPtr, String name, int value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNameInt', 'name': name, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindNameFloat(int dbPtr, String name, double value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNameFloat', 'name': name, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindNameDouble(int dbPtr, String name, double value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNameDouble', 'name': name, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindNameText(int dbPtr, String name, String value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNameText', 'name': name, 'value': value});
-    return 0;
-  }
-
-  @override
-  int bindNameBlob(int dbPtr, String name, List<int> value) {
-    _currentLease!.slot.pendingBinds.add({'method': 'bindNameBlob', 'name': name, 'value': value});
-    return 0;
-  }
-
-  // ── Row reading (flushes buffered binds, caches row in slot) ──────────
+  // ── Row reading ───────────────────────────────────────────────────────
 
   @override
   Future<int> readRow(int dbPtr) async {
-    final slot = _currentLease!.slot;
-    final slotDbPtr = slot.getDbPtr(dbName);
-    final args = <String, dynamic>{'dbName': dbName, 'dbPtr': slotDbPtr};
-    if (slot.pendingBinds.isNotEmpty) {
-      args['binds'] = List<Map<String, dynamic>>.from(slot.pendingBinds);
-      slot.pendingBinds.clear();
+    await _ensurePool();
+    const sqliteRow = 100;
+    const sqliteDone = 101;
+
+    if (_queryBuffer != null) {
+      return _queryBuffer!.moveNext() ? sqliteRow : sqliteDone;
     }
 
-    final result = await slot.send('readRow', args);
-    if (result is Map) {
-      slot.row.updateFromReadRow(result);
-      // Cache state for post-release access
-      _cacheSlotState(slot);
-      return _toInt(result['status']);
+    if (_pendingSql == null) return sqliteDone;
+    final sql = _pendingSql!;
+    final params = _buildParams();
+
+    try {
+      if (_isWriteQuery) {
+        final result = await _pool!.exec(sql, params);
+        _lastAffectedRows = toIntSafe(result['affectedRows']);
+        _lastInsertedId = toIntSafe(result['lastInsertId'] ?? result['lastInsertedId']);
+        _lastError = null;
+        _queryBuffer = WebQueryBuffer([]);
+        return sqliteDone;
+      } else {
+        final rows = await _pool!.query(sql, params);
+        _queryBuffer = WebQueryBuffer(rows);
+        return _queryBuffer!.moveNext() ? sqliteRow : sqliteDone;
+      }
+    } catch (e) {
+      _lastError = e.toString();
+      _queryBuffer = WebQueryBuffer([]);
+      return -1;
     }
-    return _toInt(result);
   }
 
-  // ── Column accessors (from current slot's row cache) ──────────────────
+  dynamic _buildParams() {
+    if (_pendingPositionalParams.isNotEmpty) return _pendingPositionalParams;
+    if (_pendingNamedParams.isNotEmpty) return _pendingNamedParams;
+    return null;
+  }
+
+  // ── Column accessors ──────────────────────────────────────────────────
 
   @override
-  bool isNull(int dbPtr, int colIndex) =>
-      _currentLease!.slot.row.columns?[colIndex].isNull ?? true;
-
+  bool isNull(int dbPtr, int colIndex) => _queryBuffer?.getColumnData(colIndex).isNull ?? true;
   @override
-  String getColumnText(int dbPtr, int colIndex) =>
-      _currentLease!.slot.row.columns?[colIndex].value?.toString() ?? '';
-
+  String getColumnText(int dbPtr, int colIndex) => _queryBuffer?.getColumnData(colIndex).value?.toString() ?? '';
   @override
-  int getColumnInt(int dbPtr, int colIndex) =>
-      _toInt(_currentLease!.slot.row.columns?[colIndex].value);
-
+  int getColumnInt(int dbPtr, int colIndex) => toIntSafe(_queryBuffer?.getColumnData(colIndex).value);
   @override
-  double getColumnFloat(int dbPtr, int colIndex) =>
-      _toDouble(_currentLease!.slot.row.columns?[colIndex].value);
-
+  double getColumnFloat(int dbPtr, int colIndex) => toDoubleSafe(_queryBuffer?.getColumnData(colIndex).value);
   @override
-  double getColumnDouble(int dbPtr, int colIndex) =>
-      _toDouble(_currentLease!.slot.row.columns?[colIndex].value);
-
+  double getColumnDouble(int dbPtr, int colIndex) => toDoubleSafe(_queryBuffer?.getColumnData(colIndex).value);
   @override
   List<int> getColumnBlob(int dbPtr, int columnIndex) {
-    final value = _currentLease!.slot.row.columns?[columnIndex].value;
+    final value = _queryBuffer?.getColumnData(columnIndex).value;
     if (value is List) return value.cast<num>().map((e) => e.toInt()).toList();
     return [];
   }
-
   @override
-  int getColumnBytes(int dbPtr, int columnIndex) =>
-      getColumnBlob(dbPtr, columnIndex).length;
-
+  int getColumnBytes(int dbPtr, int columnIndex) => getColumnBlob(dbPtr, columnIndex).length;
   @override
-  String getColumnName(int dbPtr, int colIndex) =>
-      colIndex < _currentLease!.slot.row.columnNames.length
-          ? _currentLease!.slot.row.columnNames[colIndex]
-          : '';
-
-  @override
-  int getColumnType(int dbPtr, int colIndex) =>
-      _currentLease!.slot.row.columns?[colIndex].type ?? 5;
-
-  @override
-  int getColumnCount(int dbPtr) => _currentLease!.slot.row.columnCount;
-
-  // ── State accessors (from cached state or current slot) ───────────────
-
-  @override
-  String? getLastDbError(int dbPtr) {
-    final slot = _currentLease?.slot ?? _transactionLease?.slot;
-    return slot?.row.lastError ?? _lastError;
+  String getColumnName(int dbPtr, int colIndex) {
+    if (_queryBuffer == null || colIndex >= _queryBuffer!.columnNames.length) return '';
+    return _queryBuffer!.columnNames[colIndex];
   }
+  @override
+  int getColumnType(int dbPtr, int colIndex) => _queryBuffer?.getColumnData(colIndex).type ?? 5;
+  @override
+  int getColumnCount(int dbPtr) => _queryBuffer?.columnCount ?? 0;
+
+  // ── State accessors ───────────────────────────────────────────────────
 
   @override
-  int getAffectedRows(int dbPtr) {
-    final slot = _currentLease?.slot ?? _transactionLease?.slot;
-    return slot?.row.affectedRows ?? _lastAffectedRows;
-  }
-
+  String? getLastDbError(int dbPtr) => _lastError;
   @override
-  int getLastInsertedId(int dbPtr) {
-    final slot = _currentLease?.slot ?? _transactionLease?.slot;
-    return slot?.row.lastInsertedId ?? _lastInsertedId;
-  }
+  int getAffectedRows(int dbPtr) => _lastAffectedRows;
+  @override
+  int getLastInsertedId(int dbPtr) => _lastInsertedId;
 
   // ── Reader management ─────────────────────────────────────────────────
 
   @override
   Future closeReader(int dbPtr) async {
-    if (_currentLease == null) return;
-
-    final lease = _currentLease!;
-    try {
-      final slot = lease.slot;
-      final slotDbPtr = slot.getDbPtr(dbName);
-      await slot.send('closeReader', {'dbName': dbName, 'dbPtr': slotDbPtr});
-      slot.row.columns = null;
-    } finally {
-      // Always release unless this is the transaction lease
-      if (_currentLease != _transactionLease) {
-        _pool.release(lease);
-      }
-      _currentLease = null;
-    }
+    _queryBuffer = null;
+    _pendingSql = null;
+    _pendingPositionalParams.clear();
+    _pendingNamedParams.clear();
   }
 
-  // ── Connection Pool (web pool handles this internally) ────────────────
+  // ── Connection Pool ───────────────────────────────────────────────────
 
   @override
   Future<int> createPool(String path, int readerCount) async {
-    // On web, the worker pool IS the pool. Open the DB eagerly on one worker.
-    final lease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      final dbPtr = await lease.slot.ensureDbOpened(dbName);
-      _cachedWriterPtr = dbPtr;
-      if (dbPtr != 0) _dbOpened = true;
-      return dbPtr; // Use dbPtr as pseudo pool pointer
-    } finally {
-      _pool.release(lease);
-    }
+    _pool = await DbasSqliteWebPool.create(dbName: dbName, readerCount: readerCount);
+    _dbOpened = true;
+    return 1;
   }
 
   @override
-  int poolGetWriter(int poolPtr) => _cachedWriterPtr ?? 0;
-
+  int poolGetWriter(int poolPtr) => 1;
   @override
   int poolAcquireReader(int poolPtr) => 0;
-
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) {}
 
   @override
   Future<void> closePool(int poolPtr) async {
-    await _pool.closeDbOnAllSlots(dbName);
-    _cachedWriterPtr = null;
+    await _pool?.close();
+    _pool = null;
+    DbasSqliteWebPool.removePool(dbName);
     _dbOpened = false;
   }
 
-  // ── Transaction lease management ──────────────────────────────────────
+  // ── Transaction lease (no-op: single worker serializes naturally) ─────
 
   @override
-  Future<void> beginTransactionLease() async {
-    _transactionLease = await _pool.acquire(dbName, SlotMode.write);
-    try {
-      await _transactionLease!.slot.ensureDbOpened(dbName);
-    } catch (e) {
-      _pool.release(_transactionLease!);
-      _transactionLease = null;
-      rethrow;
-    }
-  }
-
+  Future<void> beginTransactionLease() async {}
   @override
-  Future<void> endTransactionLease() async {
-    if (_transactionLease != null) {
-      _pool.release(_transactionLease!);
-      _transactionLease = null;
-    }
-  }
-
-  // ── Write mode hint ───────────────────────────────────────────────────
-
+  Future<void> endTransactionLease() async {}
   @override
-  void setWriteMode() {
-    _nextPrepareIsWrite = true;
-  }
+  void setWriteMode() { _nextPrepareIsWrite = true; }
 
   // ── Helpers ───────────────────────────────────────────────────────────
 
-  /// Cache slot state into instance fields so it survives lease release.
-  void _cacheSlotState(WorkerSlot slot) {
-    _lastAffectedRows = slot.row.affectedRows;
-    _lastInsertedId = slot.row.lastInsertedId;
-    _lastError = slot.row.lastError;
+  Future<void> _ensurePool() async {
+    _pool ??= await DbasSqliteWebPool.create(
+      dbName: dbName,
+      readerCount: DbasSqliteNativeInterface.workerPoolSize,
+    );
   }
-
-  static int _toInt(dynamic v) => v is int ? v : (v is num ? v.toInt() : 0);
-  static double _toDouble(dynamic v) => v is double ? v : (v is num ? v.toDouble() : 0.0);
 }

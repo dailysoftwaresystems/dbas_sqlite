@@ -1,392 +1,523 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:js_interop';
+import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
-/// Mode for acquiring a pool slot.
-enum SlotMode { read, write }
+import 'dbas_sqlite_row_cache.dart';
 
-int _toInt(dynamic v) => v is int ? v : (v is num ? v.toInt() : 0);
+const _workerUrl = 'assets/packages/dbas_sqlite_flutter/web/libs/dbas_sqlite_worker.js';
+// Relative to the worker script location (same directory), not the page root.
+// importScripts() inside the worker resolves URLs relative to the worker URL.
+const _libUrl = 'dbas_sqlite.js';
 
-/// Cached column data for a single column in the current row.
-class ColumnData {
-  final int type;
-  final bool isNull;
-  final dynamic value;
+/// Raw property accessor for JS objects (avoids dartify on complex types
+/// like ReadableStream that would lose their identity).
+@JS()
+extension type _JSObj._(JSObject _) implements JSObject {
+  external JSAny? operator [](String key);
+  external void operator []=(String key, JSAny? value);
+}
 
-  ColumnData({required this.type, required this.isNull, this.value});
+/// JS `Number(value)` — converts BigInt, strings, etc. to a JS Number.
+/// Used to safely extract int64 return values from Emscripten WASM exports
+/// which may arrive as BigInt.
+@JS('Number')
+external JSNumber _jsToNumber(JSAny? value);
 
-  factory ColumnData.fromMap(Map<String, dynamic> map) {
-    return ColumnData(
-      type: _toInt(map['type']),
-      isNull: map['isNull'] == true,
-      value: map['value'],
+/// Per-DB web pool backed by a single Web Worker running `dbas_sqlite_worker.js`.
+///
+/// The worker loads the WASM module, initializes OPFS, and opens the database.
+/// Inside the worker, `createPool(readerCount)` creates a WAL connection pool
+/// with 1 writer + N readers — all within the same WASM instance.
+///
+/// Communication follows the protocol from the DBAS.SQLite worker:
+///   init, exec, query, batch, drop, attachStreamBegin/Chunk/End,
+///   exportStream (Transferable + chunked fallback), streamCopy, close
+class DbasSqliteWebPool {
+  static final Map<String, DbasSqliteWebPool> _pools = {};
+  static final Map<String, Future<DbasSqliteWebPool>> _pending = {};
+
+  final String dbName;
+  final web.Worker _worker;
+  int _nextId = 0;
+  final Map<int, Completer<dynamic>> _requests = {};
+
+  /// Handlers for multi-message streaming protocols.
+  /// These receive the raw [_JSObj] (not dartified) so they can handle
+  /// non-dartifiable types like [ReadableStream].
+  final Map<int, void Function(_JSObj)> _streamHandlers = {};
+  bool _closed = false;
+
+  DbasSqliteWebPool._(this.dbName, this._worker) {
+    _worker.onmessage = ((web.MessageEvent e) {
+      final jsData = e.data;
+      if (jsData == null || jsData.isUndefinedOrNull) return;
+      final jsObj = jsData as _JSObj;
+
+      final idProp = jsObj['id'];
+      if (idProp == null || idProp.isUndefinedOrNull) return;
+      final id = (idProp as JSNumber).toDartDouble.toInt();
+
+      // Streaming handlers get raw JS (not dartified)
+      final streamHandler = _streamHandlers[id];
+      if (streamHandler != null) {
+        streamHandler(jsObj);
+        return;
+      }
+
+      // Normal single-response path
+      final data = (jsData as JSObject).dartify();
+      if (data is! Map) return;
+      final completer = _requests.remove(id);
+      if (completer == null) return;
+      if (data.containsKey('error') && data['error'] != null) {
+        final err = data['error'];
+        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
+        completer.completeError(Exception(msg.toString()));
+      } else {
+        completer.complete(data['result']);
+      }
+    }).toJS;
+    _worker.onerror = ((web.Event e) {
+      final error = Exception('Web Worker error: ${e.type}');
+      for (final c in _requests.values) {
+        if (!c.isCompleted) c.completeError(error);
+      }
+      _requests.clear();
+      // Propagate to stream handlers via synthetic error message
+      final handlers = Map.of(_streamHandlers);
+      _streamHandlers.clear();
+      for (final entry in handlers.entries) {
+        try {
+          final errMsg = <String, dynamic>{
+            'id': entry.key,
+            'error': {'code': 'WORKER_CRASHED', 'message': error.toString()},
+          }.jsify() as _JSObj;
+          entry.value(errMsg);
+        } catch (handlerError) {
+          // ignore: avoid_print
+          print('DbasSqliteWebPool: failed to propagate worker crash to '
+              'stream handler ${entry.key}: $handlerError');
+        }
+      }
+    }).toJS;
+  }
+
+  /// Get or create a pool for the given [dbName].
+  static Future<DbasSqliteWebPool> create({
+    required String dbName,
+    int readerCount = 3,
+  }) async {
+    if (_pools.containsKey(dbName)) return _pools[dbName]!;
+    return _pending.putIfAbsent(dbName, () async {
+      try {
+        return await _doCreate(dbName: dbName, readerCount: readerCount);
+      } finally {
+        _pending.remove(dbName);
+      }
+    });
+  }
+
+  static Future<DbasSqliteWebPool> _doCreate({
+    required String dbName,
+    int readerCount = 3,
+  }) async {
+    final worker = web.Worker(_workerUrl.toJS);
+    final pool = DbasSqliteWebPool._(dbName, worker);
+
+    // Initialize: load WASM + OPFS, open DB
+    await pool.send('init', {
+      'dbName': dbName.endsWith('.db') ? dbName : '$dbName.db',
+      'role': 'writer',
+      'libUrl': _libUrl,
+    });
+
+    _pools[dbName] = pool;
+    return pool;
+  }
+
+  /// Send a command to the worker and await the single response.
+  Future<dynamic> send(String action, [Map<String, dynamic>? payload]) {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+    final id = _nextId++;
+    final completer = Completer<dynamic>();
+    _requests[id] = completer;
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': action,
+        'payload': payload ?? {},
+      }.jsify());
+    } catch (e) {
+      _requests.remove(id);
+      completer.completeError(e);
+    }
+    return completer.future;
+  }
+
+  /// Execute a write statement.
+  ///
+  /// Uses raw JS property access for the result to correctly handle
+  /// `lastInsertId` which may be a JS BigInt (Emscripten `long long`).
+  Future<Map<String, dynamic>> exec(String sql, [dynamic params]) async {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+    final id = _nextId++;
+    final completer = Completer<dynamic>();
+    // Use a stream handler to get raw JS access (avoids dartify losing BigInt)
+    _streamHandlers[id] = (_JSObj jsData) {
+      _streamHandlers.remove(id);
+      final errorProp = jsData['error'];
+      if (errorProp != null && !errorProp.isUndefinedOrNull) {
+        final err = (errorProp as JSObject).dartify();
+        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
+        completer.completeError(Exception(msg.toString()));
+        return;
+      }
+      final resultProp = jsData['result'];
+      if (resultProp != null && !resultProp.isUndefinedOrNull) {
+        final jsResult = resultProp as _JSObj;
+        completer.complete(<String, dynamic>{
+          'affectedRows': _jsToInt(jsResult['affectedRows']),
+          'lastInsertId': _jsToInt(jsResult['lastInsertId']),
+        });
+      } else {
+        completer.complete({'affectedRows': 0, 'lastInsertId': 0});
+      }
+    };
+    final payload = <String, dynamic>{'sql': sql};
+    if (params != null) payload['params'] = params;
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'exec',
+        'payload': payload,
+      }.jsify());
+    } catch (e) {
+      _streamHandlers.remove(id);
+      completer.completeError(e);
+    }
+    final result = await completer.future;
+    if (result is Map) return Map<String, dynamic>.from(result);
+    return {'affectedRows': 0, 'lastInsertId': 0};
+  }
+
+  /// Execute a read query. Returns all rows.
+  Future<List<Map<String, dynamic>>> query(String sql, [dynamic params]) async {
+    final payload = <String, dynamic>{'sql': sql};
+    if (params != null) payload['params'] = params;
+    final result = await send('query', payload);
+    if (result is List) {
+      return result.map((row) => Map<String, dynamic>.from(row as Map)).toList();
+    }
+    if (result == null) return [];
+    throw StateError('Unexpected query result type: ${result.runtimeType}');
+  }
+
+  /// Execute a batch of statements.
+  Future<void> batch(List<Map<String, dynamic>> statements) async {
+    await send('batch', {'statements': statements});
+  }
+
+  /// Drop the database (removes all OPFS files).
+  Future<void> drop() async {
+    await send('drop');
+  }
+
+  // ── Streaming attach (chunked protocol) ─────────────────────────────────
+
+  /// Attach a database from a Dart [Stream] using the chunked protocol
+  /// (`attachStreamBegin` / `attachStreamChunk` / `attachStreamEnd`).
+  ///
+  /// Each chunk is transferred as an ArrayBuffer for zero-copy handoff.
+  /// The worker sends an ACK after each chunk, providing backpressure.
+  Future<void> attachStreamChunked(Stream<List<int>> stream, {int? totalSize}) async {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+
+    final id = _nextId++;
+    final readyCompleter = Completer<void>();
+    final endCompleter = Completer<void>();
+    Completer<void>? ackCompleter;
+
+    _streamHandlers[id] = (_JSObj jsData) {
+      // Error
+      final errorProp = jsData['error'];
+      if (errorProp != null && !errorProp.isUndefinedOrNull) {
+        _streamHandlers.remove(id);
+        final err = (errorProp as JSObject).dartify();
+        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
+        final exception = Exception(msg.toString());
+        if (!readyCompleter.isCompleted) readyCompleter.completeError(exception);
+        ackCompleter?.completeError(exception);
+        if (!endCompleter.isCompleted) endCompleter.completeError(exception);
+        return;
+      }
+
+      // Action-based messages (ready / ack)
+      final actionProp = jsData['action'];
+      if (actionProp != null && !actionProp.isUndefinedOrNull) {
+        final action = (actionProp as JSString).toDart;
+        if (action == 'attachStreamReady') {
+          if (!readyCompleter.isCompleted) readyCompleter.complete();
+        } else if (action == 'attachStreamAck') {
+          final ac = ackCompleter;
+          if (ac != null && !ac.isCompleted) ac.complete();
+        }
+        return;
+      }
+
+      // Normal result (from attachStreamEnd response)
+      final resultProp = jsData['result'];
+      if (resultProp != null && !resultProp.isUndefinedOrNull) {
+        _streamHandlers.remove(id);
+        if (!endCompleter.isCompleted) endCompleter.complete();
+      }
+    };
+
+    try {
+      // Begin — worker closes DB and opens FS path for writing
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'attachStreamBegin',
+        'payload': totalSize != null ? {'totalSize': totalSize} : <String, dynamic>{},
+      }.jsify());
+      await readyCompleter.future;
+
+      // Stream chunks with backpressure (wait for ACK after each)
+      await for (final chunk in stream) {
+        ackCompleter = Completer<void>();
+        final bytes = Uint8List.fromList(chunk);
+        final jsBuffer = bytes.buffer.toJS;
+        _worker.postMessage(<String, dynamic>{
+          'id': id,
+          'action': 'attachStreamChunk',
+          'payload': {'chunk': jsBuffer},
+        }.jsify(), [jsBuffer].toJS);
+        await ackCompleter.future;
+      }
+
+      // End — worker closes FS, reopens DB
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'attachStreamEnd',
+        'payload': <String, dynamic>{},
+      }.jsify());
+      await endCompleter.future;
+    } catch (e) {
+      _streamHandlers.remove(id);
+      // Fire-and-forget abort using the original session ID so the worker
+      // can correlate it with the active attach session.
+      if (!_closed) {
+        try {
+          _worker.postMessage(<String, dynamic>{
+            'id': id,
+            'action': 'attachStreamAbort',
+            'payload': <String, dynamic>{},
+          }.jsify());
+        } catch (_) {}
+      }
+      rethrow;
+    }
+  }
+
+  // ── Streaming export ────────────────────────────────────────────────────
+
+  /// Export the database content as bytes using the streaming protocol.
+  ///
+  /// Handles both the Transferable Streams path (Chrome/Firefox — the worker
+  /// sends a [ReadableStream]) and the chunked postMessage fallback (Safari —
+  /// `exportStreamChunk` messages with ACK-based backpressure).
+  Future<List<int>> exportContentStream() async {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+
+    final id = _nextId++;
+    final completer = Completer<List<int>>();
+    final chunks = <Uint8List>[];
+
+    _streamHandlers[id] = (_JSObj jsData) {
+      // Error
+      final errorProp = jsData['error'];
+      if (errorProp != null && !errorProp.isUndefinedOrNull) {
+        _streamHandlers.remove(id);
+        final err = (errorProp as JSObject).dartify();
+        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
+        if (!completer.isCompleted) completer.completeError(Exception(msg.toString()));
+        return;
+      }
+
+      // Chunked path: exportStreamChunk action
+      final actionProp = jsData['action'];
+      if (actionProp != null && !actionProp.isUndefinedOrNull) {
+        final action = (actionProp as JSString).toDart;
+        if (action == 'exportStreamChunk') {
+          final payloadObj = jsData['payload'] as _JSObj;
+          final chunkProp = payloadObj['chunk'];
+          if (chunkProp != null && !chunkProp.isUndefinedOrNull) {
+            chunks.add((chunkProp as JSArrayBuffer).toDart.asUint8List());
+          }
+          // Send ACK for backpressure
+          _worker.postMessage(<String, dynamic>{
+            'id': id,
+            'action': 'exportStreamAck',
+          }.jsify());
+        }
+        return;
+      }
+
+      // Result — either a ReadableStream (transferable path) or final
+      // success object from the chunked path.
+      final resultProp = jsData['result'];
+      if (resultProp != null && !resultProp.isUndefinedOrNull) {
+        if (resultProp.isA<web.ReadableStream>()) {
+          // Transferable Streams path — read chunks from the stream
+          _readStreamToBytes(resultProp as web.ReadableStream).then((bytes) {
+            _streamHandlers.remove(id);
+            if (!completer.isCompleted) completer.complete(bytes);
+          }).catchError((Object e) {
+            _streamHandlers.remove(id);
+            if (!completer.isCompleted) completer.completeError(e);
+          });
+        } else {
+          // Final success from chunked path — assemble accumulated chunks
+          _streamHandlers.remove(id);
+          if (!completer.isCompleted) {
+            final builder = BytesBuilder();
+            for (final c in chunks) {
+              builder.add(c);
+            }
+            completer.complete(builder.toBytes());
+          }
+        }
+        return;
+      }
+
+      // Progress messages — ignore
+    };
+
+    _worker.postMessage(<String, dynamic>{
+      'id': id,
+      'action': 'exportStream',
+      'payload': <String, dynamic>{},
+    }.jsify());
+
+    return completer.future.timeout(
+      const Duration(seconds: 120),
+      onTimeout: () {
+        _streamHandlers.remove(id);
+        throw TimeoutException('exportContentStream did not complete within 120 seconds');
+      },
     );
   }
-}
 
-/// Cached row data from the last readRow/prepareQuery/executeSql response.
-class RowData {
-  List<ColumnData>? columns;
-  int columnCount = 0;
-  List<String> columnNames = [];
-  int affectedRows = 0;
-  int lastInsertedId = 0;
-  String? lastError;
-
-  void updateFromPrepare(Map result) {
-    columns = null;
-    columnCount = _toInt(result['columnCount']);
-    columnNames = (result['columnNames'] as List?)?.cast<String>() ?? [];
-    lastError = _parseError(result['lastError']);
-  }
-
-  void updateFromReadRow(Map result) {
-    columnCount = _toInt(result['columnCount']);
-    affectedRows = _toInt(result['affectedRows']);
-    lastInsertedId = _toInt(result['lastInsertedId']);
-    lastError = _parseError(result['lastError']);
-
-    if (result['columns'] is List) {
-      columns = (result['columns'] as List)
-          .map((c) => ColumnData.fromMap(Map<String, dynamic>.from(c as Map)))
-          .toList();
-    } else {
-      columns = null;
-    }
-  }
-
-  void updateFromExecuteSql(Map result) {
-    affectedRows = _toInt(result['affectedRows']);
-    lastInsertedId = _toInt(result['lastInsertedId']);
-    lastError = _parseError(result['lastError']);
-  }
-
-  void clear() {
-    columns = null;
-    columnCount = 0;
-    columnNames = [];
-    affectedRows = 0;
-    lastInsertedId = 0;
-    lastError = null;
-  }
-
-  static String? _parseError(dynamic value) {
-    if (value == null) return null;
-    final str = value.toString();
-    if (str == 'null' || str.isEmpty) return null;
-    return str;
-  }
-}
-
-/// A single worker slot in the pool.
-class WorkerSlot {
-  final web.Worker worker;
-
-  int _nextRequestId = 0;
-  final Map<int, Completer<dynamic>> _pendingRequests = {};
-
-  /// Per-slot session state (mirrors what the worker holds in JS).
-  final RowData row = RowData();
-  final List<Map<String, dynamic>> pendingBinds = [];
-
-  /// DBs initialized on this worker (lazy).
-  final Set<String> _initializedDbs = {};
-
-  /// Per-DB dbPtr cache (each worker gets its own dbPtr when opening a DB).
-  final Map<String, int> _dbPtrs = {};
-
-  bool isBusy = false;
-
-  WorkerSlot(this.worker) {
-    worker.onmessage = ((web.MessageEvent e) => _onMessage(e)).toJS;
-    worker.onerror = ((web.Event e) => _onError(e)).toJS;
-  }
-
-  void _onMessage(web.MessageEvent event) {
-    final data = (event.data as JSObject).dartify();
-    if (data is! Map) return;
-
-    final id = data['id'];
-    if (id == null) return;
-
-    final completer = _pendingRequests.remove(id);
-    if (completer == null) return;
-
-    if (data.containsKey('error') && data['error'] != null) {
-      completer.completeError(Exception(data['error'].toString()));
-    } else {
-      completer.complete(data['result']);
-    }
-  }
-
-  void _onError(web.Event e) {
-    final error = Exception('Web Worker error: ${e.type}');
-    for (final completer in _pendingRequests.values) {
-      if (!completer.isCompleted) completer.completeError(error);
-    }
-    _pendingRequests.clear();
-  }
-
-  /// Send a message to this slot's worker and await the response.
-  Future<dynamic> send(String method, [Map<String, dynamic>? args]) async {
-    final id = _nextRequestId++;
-    final completer = Completer<dynamic>();
-    _pendingRequests[id] = completer;
-    worker.postMessage(<String, dynamic>{
-      'id': id, 'method': method, 'args': args ?? {},
-    }.jsify());
-    return completer.future;
-  }
-
-  /// Ensure this worker has initialized the given DB.
-  Future<void> ensureDbInitialized(String dbName) async {
-    if (_initializedDbs.contains(dbName)) return;
-    await send('initDb', {'dbName': dbName});
-    _initializedDbs.add(dbName);
-  }
-
-  /// Open a DB on this worker if not already opened, return the dbPtr.
-  Future<int> ensureDbOpened(String dbName) async {
-    await ensureDbInitialized(dbName);
-    if (_dbPtrs.containsKey(dbName)) return _dbPtrs[dbName]!;
-    final ptr = _toInt(await send('openDb', {'dbName': dbName}));
-    if (ptr == 0) {
-      throw Exception('Failed to open database "$dbName" on worker slot');
-    }
-    _dbPtrs[dbName] = ptr;
-    return ptr;
-  }
-
-  /// Get the cached dbPtr for a DB on this worker.
-  int getDbPtr(String dbName) => _dbPtrs[dbName] ?? 0;
-
-  /// Mark a DB as closed on this worker.
-  void clearDbPtr(String dbName) {
-    _dbPtrs.remove(dbName);
-  }
-
-  /// Forget all state for a DB.
-  void forgetDb(String dbName) {
-    _dbPtrs.remove(dbName);
-    _initializedDbs.remove(dbName);
-  }
-}
-
-/// A lease representing an acquired slot.
-class SlotLease {
-  final WorkerSlot slot;
-  final String dbName;
-  final SlotMode mode;
-
-  SlotLease(this.slot, this.dbName, this.mode);
-}
-
-/// Global web worker pool. Manages N workers shared across all databases.
-///
-/// Uses **per-DB slot affinity**: each database is pinned to a single worker
-/// because each Emscripten module has its own isolated virtual filesystem.
-/// Cross-worker FS synchronization is not guaranteed, so all operations for
-/// a given DB must go through the same worker.
-///
-/// Parallelism comes from different databases using different workers.
-///
-/// Thread safety rules:
-/// - Write: only 1 writer per DB at a time (others queue)
-/// - Read: allowed concurrently with other reads (but same slot, so serialized)
-/// - Different DBs can operate in parallel on different slots
-class DbasSqliteWebPool {
-  static DbasSqliteWebPool? _instance;
-
-  final List<WorkerSlot> _slots;
-
-  /// Per-DB slot affinity: each DB is pinned to a specific worker.
-  final Map<String, WorkerSlot> _dbAffinity = {};
-
-  /// Tracks which DB currently has an active write lease.
-  final Map<String, SlotLease> _activeWriters = {};
-
-  /// Wait queue: callers waiting for a free slot or write access.
-  final Queue<_WaitEntry> _waitQueue = Queue<_WaitEntry>();
-
-  DbasSqliteWebPool._(this._slots);
-
-  /// Get or create the global pool singleton.
-  ///
-  /// The [workerCount] is only effective on the first call. Subsequent calls
-  /// return the existing pool.
-  static DbasSqliteWebPool getInstance({int workerCount = 4}) {
-    if (_instance != null) return _instance!;
-
-    final slots = <WorkerSlot>[];
-    for (int i = 0; i < workerCount; i++) {
-      final worker = web.Worker(
-        'assets/packages/dbas_sqlite_flutter/web/libs/dbas_sqlite_worker.js'.toJS,
-      );
-      slots.add(WorkerSlot(worker));
-    }
-
-    _instance = DbasSqliteWebPool._(slots);
-    return _instance!;
-  }
-
-  /// Acquire a slot for the given DB and mode.
-  ///
-  /// If the DB already has an affinity slot, waits for that specific slot.
-  /// Otherwise picks any free slot and establishes affinity.
-  Future<SlotLease> acquire(String dbName, SlotMode mode) async {
-    // Try immediate acquisition
-    final lease = _tryAcquire(dbName, mode);
-    if (lease != null) return lease;
-
-    // Queue and wait
-    final completer = Completer<SlotLease>();
-    _waitQueue.add(_WaitEntry(dbName, mode, completer));
-    return completer.future;
-  }
-
-  /// Release a previously acquired slot.
-  void release(SlotLease lease) {
-    lease.slot.isBusy = false;
-    lease.slot.row.clear();
-    lease.slot.pendingBinds.clear();
-
-    if (lease.mode == SlotMode.write) {
-      _activeWriters.remove(lease.dbName);
-    }
-
-    // Try to satisfy queued waiters
-    _drainWaitQueue();
-  }
-
-  /// Close a DB on its affinity worker and release the affinity.
-  ///
-  /// Sends `closeDb` to close the SQLite connection. The Emscripten wrapper
-  /// is left alive — the next `initDb` always creates a fresh wrapper
-  /// (replacing the stale one) without destroying shared OPFS state that
-  /// other DBs on the same worker might depend on.
-  Future<void> closeDbOnAllSlots(String dbName) async {
-    final affinitySlot = _dbAffinity[dbName];
-    if (affinitySlot == null) return;
-
-    // Wait for the affinity slot to be free (with timeout)
-    int waitMs = 0;
-    while (affinitySlot.isBusy) {
-      await Future.delayed(const Duration(milliseconds: 1));
-      if (++waitMs > 10000) {
-        throw StateError(
-          'closeDbOnAllSlots("$dbName"): timed out after 10s waiting for '
-          'slot to become free. A pool lease may be leaked.',
-        );
-      }
-    }
-    affinitySlot.isBusy = true;
+  /// Read all bytes from a [ReadableStream] (used for the Transferable
+  /// Streams export path).
+  Future<Uint8List> _readStreamToBytes(web.ReadableStream stream) async {
+    final reader = stream.getReader() as web.ReadableStreamDefaultReader;
+    final builder = BytesBuilder();
     try {
-      final dbPtr = affinitySlot.getDbPtr(dbName);
-      if (dbPtr != 0) {
-        await affinitySlot.send('closeDb', {'dbName': dbName, 'dbPtr': dbPtr});
-      }
-      affinitySlot.forgetDb(dbName);
-    } finally {
-      affinitySlot.isBusy = false;
-      _dbAffinity.remove(dbName);
-      _drainWaitQueue();
-    }
-  }
-
-  /// Send a one-shot message to the DB's affinity slot (or any available
-  /// slot for stateless queries like databaseExists).
-  Future<dynamic> sendToAny(String dbName, String method,
-      [Map<String, dynamic>? args]) async {
-    final lease = await acquire(dbName, SlotMode.read);
-    try {
-      await lease.slot.ensureDbInitialized(dbName);
-      args ??= {};
-      args['dbName'] = dbName;
-      return await lease.slot.send(method, args);
-    } finally {
-      release(lease);
-    }
-  }
-
-  SlotLease? _tryAcquire(String dbName, SlotMode mode) {
-    if (mode == SlotMode.write && _activeWriters.containsKey(dbName)) {
-      return null; // Another write is active for this DB
-    }
-
-    // If this DB has an affinity slot, use it
-    final affinitySlot = _dbAffinity[dbName];
-    if (affinitySlot != null) {
-      if (!affinitySlot.isBusy) {
-        affinitySlot.isBusy = true;
-        final lease = SlotLease(affinitySlot, dbName, mode);
-        if (mode == SlotMode.write) {
-          _activeWriters[dbName] = lease;
+      while (true) {
+        final result = await reader.read().toDart;
+        final jsResult = result as _JSObj;
+        final doneVal = jsResult['done'];
+        if (doneVal != null && !doneVal.isUndefinedOrNull &&
+            (doneVal as JSBoolean).toDart) {
+          break;
         }
-        return lease;
-      }
-      return null; // Affinity slot is busy, must wait
-    }
-
-    // No affinity yet — prefer a slot with no other DB affinity.
-    // Each Emscripten module (initPersistentFS) uses OPFS state that can
-    // conflict when two modules share a worker. Isolating each DB to its
-    // own worker avoids WASM memory access errors.
-    WorkerSlot? fallbackSlot;
-    for (final slot in _slots) {
-      if (!slot.isBusy) {
-        if (!_dbAffinity.containsValue(slot)) {
-          // Ideal: slot with no other DB affinity
-          slot.isBusy = true;
-          _dbAffinity[dbName] = slot;
-          final lease = SlotLease(slot, dbName, mode);
-          if (mode == SlotMode.write) {
-            _activeWriters[dbName] = lease;
+        final value = jsResult['value'];
+        if (value != null && !value.isUndefinedOrNull) {
+          if (value.isA<JSUint8Array>()) {
+            builder.add((value as JSUint8Array).toDart);
+          } else if (value.isA<JSArrayBuffer>()) {
+            builder.add((value as JSArrayBuffer).toDart.asUint8List());
+          } else {
+            throw StateError(
+              '_readStreamToBytes: unexpected chunk type from ReadableStream');
           }
-          return lease;
         }
-        fallbackSlot ??= slot;
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch (e) {
+        // ignore: avoid_print
+        print('DbasSqliteWebPool: releaseLock failed: $e');
       }
     }
-
-    // Fallback: share a slot if all have existing affinities
-    if (fallbackSlot != null) {
-      fallbackSlot.isBusy = true;
-      _dbAffinity[dbName] = fallbackSlot;
-      final lease = SlotLease(fallbackSlot, dbName, mode);
-      if (mode == SlotMode.write) {
-        _activeWriters[dbName] = lease;
-      }
-      return lease;
-    }
-
-    return null; // No free slots
+    return builder.toBytes();
   }
 
-  void _drainWaitQueue() {
-    final pending = <_WaitEntry>[];
-
-    while (_waitQueue.isNotEmpty) {
-      final entry = _waitQueue.removeFirst();
-      if (entry.completer.isCompleted) continue;
-
-      final lease = _tryAcquire(entry.dbName, entry.mode);
-      if (lease != null) {
-        entry.completer.complete(lease);
-      } else {
-        pending.add(entry);
-      }
+  /// Convert a JS value (Number, BigInt, or null) to a Dart int.
+  /// Uses JS `Number()` to handle BigInt from Emscripten `long long` returns.
+  static int _jsToInt(JSAny? v) {
+    if (v == null || v.isUndefinedOrNull) return 0;
+    // Use JS Number() to convert any numeric JS type (Number, BigInt, etc.)
+    // to a standard JS Number, then convert to Dart int.
+    try {
+      return _jsToNumber(v).toDartDouble.toInt();
+    } catch (_) {
+      return 0;
     }
+  }
 
-    // Re-add entries that couldn't be satisfied
-    _waitQueue.addAll(pending);
+  /// Copy the database to a new OPFS file.
+  Future<void> streamCopy(String destName) async {
+    await send('streamCopy', {
+      'destName': destName.endsWith('.db') ? destName : '$destName.db',
+    });
+  }
+
+  /// Close the worker and release resources.
+  Future<void> close() async {
+    if (_closed) return;
+    _pools.remove(dbName);
+    try {
+      await send('close');
+    } catch (e) {
+      // ignore: avoid_print
+      print('DbasSqliteWebPool: graceful close failed for "$dbName": $e');
+    }
+    _closed = true;
+    _worker.terminate();
+  }
+
+  static void removePool(String dbName) {
+    _pools.remove(dbName);
   }
 }
 
-class _WaitEntry {
-  final String dbName;
-  final SlotMode mode;
-  final Completer<SlotLease> completer;
+// ── WebQueryBuffer ─────────────────────────────────────────────────────
 
-  _WaitEntry(this.dbName, this.mode, this.completer);
+/// Buffered row data for cursor-based reading from query results.
+class WebQueryBuffer {
+  final List<Map<String, dynamic>> rows;
+  final List<String> columnNames;
+  int currentRowIndex = -1;
+
+  WebQueryBuffer(this.rows)
+      : columnNames = rows.isNotEmpty ? rows.first.keys.toList() : [];
+
+  bool moveNext() {
+    currentRowIndex++;
+    return currentRowIndex < rows.length;
+  }
+
+  Map<String, dynamic>? get currentRow =>
+      currentRowIndex >= 0 && currentRowIndex < rows.length
+          ? rows[currentRowIndex]
+          : null;
+
+  int get columnCount => columnNames.length;
+
+  ColumnData getColumnData(int index) {
+    if (currentRow == null || index >= columnNames.length) {
+      return ColumnData(type: 5, isNull: true);
+    }
+    final name = columnNames[index];
+    final value = currentRow![name];
+    if (value == null) return ColumnData(type: 5, isNull: true, value: null);
+    if (value is int) return ColumnData(type: 1, isNull: false, value: value);
+    if (value is double) return ColumnData(type: 2, isNull: false, value: value);
+    if (value is String) return ColumnData(type: 3, isNull: false, value: value);
+    if (value is List) return ColumnData(type: 4, isNull: false, value: value);
+    return ColumnData(type: 3, isNull: false, value: value.toString());
+  }
 }

@@ -25,6 +25,10 @@ abstract class DbasSqliteNativeInterface {
     return _instance[dbName]!;
   }
 
+  static void removeInstance({String dbName = 'dbas.db'}) {
+    _instance.remove(dbName);
+  }
+
   static DbasSqliteNativeInterface _getPlatform({String dbName = 'dbas.db'}) {
     if (kIsWeb) {
       return DbasSqliteNativeWeb(dbName);

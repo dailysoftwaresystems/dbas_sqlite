@@ -1,4 +1,4 @@
-name: Test Flutter Plugin
+name: Build and Test Flutter Plugin
 on:
   push:
     branches: [ "main" ]
@@ -23,10 +23,29 @@ jobs:
         echo "VERSION=$version" >> $GITHUB_ENV
     - name: Get Flutter dependencies
       run: flutter pub get
+    - name: Get example dependencies
+      working-directory: example
+      run: flutter pub get
     - name: Analyze code
       run: flutter analyze
-    - name: Run Flutter tests
-      run: flutter test
+    - name: Run native tests
+      run: flutter test test/
+    - name: Start ChromeDriver
+      run: |
+        chromedriver --port=4444 &
+        echo "CHROMEDRIVER_PID=$!" >> $GITHUB_ENV
+    - name: Run web integration tests
+      working-directory: example
+      timeout-minutes: 10
+      run: |
+        flutter drive \
+          --driver=test_driver/integration_test.dart \
+          --target=integration_test/dbas_sqlite_web_test.dart \
+          -d web-server \
+          --browser-name=chrome
+    - name: Stop ChromeDriver
+      if: always()
+      run: kill $CHROMEDRIVER_PID || true
     - name: Create Release
       if: github.event_name == 'push'
       env:

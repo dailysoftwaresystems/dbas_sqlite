@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_column_type.dart';
@@ -54,8 +55,11 @@ class DbasSqlite {
   int? _poolPtr;
   DbasSqliteDb? _reader;
   bool _readerHoldsWriterLock = false;
-  Completer<void>? _writerLock;
-  Completer<void>? _readerLock;
+  final Queue<Completer<void>> _writerWaitQueue = Queue<Completer<void>>();
+  bool _writerLockHeld = false;
+  final Queue<Completer<void>> _readerWaitQueue = Queue<Completer<void>>();
+  bool _readerLockHeld = false;
+  final Queue<Completer<void>> _poolReaderReleasedQueue = Queue<Completer<void>>();
 
   /// When `true`, binding a named parameter that does not exist in the
   /// prepared statement throws an exception instead of silently skipping it.
@@ -73,6 +77,13 @@ class DbasSqlite {
   /// Defaults to `'dbas.db'` if no name is provided.
   static Future<DbasSqlite> getInstance({String dbName = 'dbas.db', bool throwOnMissingNamedParams = false, int workerPoolSize = 4}) async {
     if (_instance.containsKey(dbName)) {
+      assert(
+        workerPoolSize == DbasSqliteNativeInterface.workerPoolSize,
+        'DbasSqlite.getInstance: workerPoolSize=$workerPoolSize was passed for '
+        'an already-initialized instance of "$dbName" (current pool size is '
+        '${DbasSqliteNativeInterface.workerPoolSize}). workerPoolSize is only '
+        'applied on the first call; subsequent values are ignored.',
+      );
       _instance[dbName]!.throwOnMissingNamedParams = throwOnMissingNamedParams;
       return _instance[dbName]!;
     }
@@ -101,7 +112,7 @@ class DbasSqlite {
 
   /// Checks whether the database file exists on disk (or in IndexedDB on web).
   Future<bool> databaseExists() async {
-    String fileName = kIsWeb ? dbName : await getAppDatabasePath(dbName: dbName);
+    final fileName = await getAppDatabasePath(dbName: dbName);
     return await _platform.databaseExists(fileName);
   }
 
@@ -293,7 +304,7 @@ class DbasSqlite {
 
     await _closePendingReader();
     final lockHeld = _isInTransaction;
-    if (!kIsWeb && !lockHeld) await _acquireWriterLock();
+    if (!lockHeld) await _acquireWriterLock();
     try {
       if (!isOpened()) {
         throw StateError('Database was closed while waiting for writer lock.');
@@ -301,7 +312,7 @@ class DbasSqlite {
       final conn = _db!;
       // On web, hint that this prepareQuery is for a write operation
       // so the pool acquires a write-exclusive slot.
-      if (kIsWeb && !lockHeld) _platform.setWriteMode(dbName);
+      if (kIsWeb) _platform.setWriteMode(dbName);
       int prepared = await _platform.prepareQuery(conn, sql);
       if (prepared != _sqliteOk) {
         String error = _platform.getLastDbError(conn) ?? 'Unknown error.';
@@ -324,7 +335,7 @@ class DbasSqlite {
         await _platform.closeReader(conn);
       }
     } finally {
-      if (!kIsWeb && !lockHeld) _releaseWriterLock();
+      if (!lockHeld) _releaseWriterLock();
     }
   }
 
@@ -489,7 +500,13 @@ class DbasSqlite {
     }
 
     final textValue = _platform.getColumnText(_reader ?? _db!, idx);
-    return Decimal.parse(textValue);
+    final result = Decimal.tryParse(textValue);
+    if (result == null) {
+      throw FormatException(
+        'getColumnDecimal: cannot parse column $idx value as Decimal: "$textValue"',
+      );
+    }
+    return result;
   }
 
   /// Returns the value of the column at [idx] as a [Decimal],
@@ -539,15 +556,45 @@ class DbasSqlite {
   ///
   /// Expects the column value in `HH:MM:SS` or `HH:MM:SS.mmm` format.
   Duration getColumnTime(int idx) {
-    final parts = _platform.getColumnText(_reader ?? _db!, idx).split(':');
-    final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
-    final secondsMs = parts.length > 2 ? parts[2].split('.').where((i) => i.trim() != '').toList() : ['0'];
+    final raw = _platform.getColumnText(_reader ?? _db!, idx);
+    final parts = raw.split(':');
+    if (parts.length < 2) {
+      throw FormatException(
+        'getColumnTime: column $idx value "$raw" is not in HH:MM or HH:MM:SS[.mmm] format',
+      );
+    }
+
+    int parsePart(String s, String label) {
+      final v = int.tryParse(s);
+      if (v == null) {
+        throw FormatException(
+          'getColumnTime: column $idx value "$raw" has invalid $label component "$s"',
+        );
+      }
+      return v;
+    }
+
+    final hours = parsePart(parts[0], 'hours');
+    final minutes = parsePart(parts[1], 'minutes');
+
+    int seconds = 0;
+    int milliseconds = 0;
+    if (parts.length > 2) {
+      final secParts = parts[2].split('.').where((s) => s.trim().isNotEmpty).toList();
+      seconds = parsePart(secParts.first, 'seconds');
+      if (secParts.length > 1) {
+        milliseconds = parsePart(
+          secParts.last.padRight(3, '0').substring(0, 3),
+          'milliseconds',
+        );
+      }
+    }
 
     return Duration(
-      hours: int.tryParse(parts[0]) ?? 0,
-      minutes: minute,
-      seconds: int.tryParse(secondsMs.first) ?? 0,
-      milliseconds: secondsMs.length > 1 ? int.tryParse(secondsMs.last.padRight(3, '0').substring(0, 3)) ?? 0 : 0,
+      hours: hours,
+      minutes: minutes,
+      seconds: seconds,
+      milliseconds: milliseconds,
     );
   }
 
@@ -619,18 +666,32 @@ class DbasSqlite {
     return _platform.getLastInsertedId(_db!);
   }
 
-  // ── Async locks (writer + reader independent) ──────────────────────
+  // ── Async locks (FIFO queues for writer + reader) ──────────────────
   Future<void> _acquireWriterLock() async {
-    while (_writerLock != null) {
-      await _writerLock!.future;
+    if (!_writerLockHeld) {
+      _writerLockHeld = true;
+      return;
     }
-    _writerLock = Completer<void>();
+    final waiter = Completer<void>();
+    _writerWaitQueue.add(waiter);
+    await waiter.future;
   }
 
   void _releaseWriterLock() {
-    final lock = _writerLock;
-    _writerLock = null;
-    lock?.complete();
+    if (_writerWaitQueue.isNotEmpty) {
+      _writerWaitQueue.removeFirst().complete();
+    } else {
+      _writerLockHeld = false;
+    }
+  }
+
+  void _cancelWriterWaitQueue() {
+    while (_writerWaitQueue.isNotEmpty) {
+      _writerWaitQueue.removeFirst().completeError(
+        StateError('Database was closed while waiting for writer lock.'),
+      );
+    }
+    _writerLockHeld = false;
   }
 
   /// Closes any reader left open by a previous [executeReader] that was not
@@ -645,27 +706,50 @@ class DbasSqlite {
   }
 
   Future<void> _acquireReaderLock() async {
-    while (_readerLock != null) {
-      await _readerLock!.future;
+    if (!_readerLockHeld) {
+      _readerLockHeld = true;
+      return;
     }
-    _readerLock = Completer<void>();
+    final waiter = Completer<void>();
+    _readerWaitQueue.add(waiter);
+    await waiter.future;
   }
 
   void _releaseReaderLock() {
-    final lock = _readerLock;
-    _readerLock = null;
-    lock?.complete();
+    if (_readerWaitQueue.isNotEmpty) {
+      _readerWaitQueue.removeFirst().complete();
+    } else {
+      _readerLockHeld = false;
+    }
   }
 
-  Future<DbasSqliteDb?> _acquirePoolReader({int maxRetries = 10}) async {
-    for (int i = 0; i < maxRetries; i++) {
-      final readerPtr = _platform.poolAcquireReader(dbName, _poolPtr!);
-      if (readerPtr != 0) {
-        return DbasSqliteDb(dbName, readerPtr);
-      }
-      await Future.delayed(const Duration(milliseconds: 2));
+  void _cancelReaderWaitQueue() {
+    while (_readerWaitQueue.isNotEmpty) {
+      _readerWaitQueue.removeFirst().completeError(
+        StateError('Database was closed while waiting for reader lock.'),
+      );
     }
-    return null;
+    _readerLockHeld = false;
+  }
+
+  Future<DbasSqliteDb?> _acquirePoolReader() async {
+    final readerPtr = _platform.poolAcquireReader(dbName, _poolPtr!);
+    if (readerPtr != 0) {
+      return DbasSqliteDb(dbName, readerPtr);
+    }
+    // All readers busy — wait for a release signal
+    final waiter = Completer<void>();
+    _poolReaderReleasedQueue.add(waiter);
+    await waiter.future;
+    // Retry once after signal
+    final retryPtr = _platform.poolAcquireReader(dbName, _poolPtr!);
+    return retryPtr != 0 ? DbasSqliteDb(dbName, retryPtr) : null;
+  }
+
+  void _drainPoolReaderWaitQueue() {
+    if (_poolReaderReleasedQueue.isNotEmpty) {
+      _poolReaderReleasedQueue.removeFirst().complete();
+    }
   }
 
   void _bindParameters(DbasSqliteDb conn, List<Object?>? parameters) {
@@ -692,6 +776,8 @@ class DbasSqlite {
         paramResult = _platform.bindText(conn, index, value);
       } else if (value is Uint8List) {
         paramResult = _platform.bindBlob(conn, index, value);
+      } else if (value is List<int>) {
+        paramResult = _platform.bindBlob(conn, index, Uint8List.fromList(value));
       } else if (value is Enum) {
         paramResult = _platform.bindInt(conn, index, value.index);
       } else {
@@ -758,7 +844,7 @@ class DbasSqlite {
   /// to [getInstance] with the same name will create a fresh instance.
   Future<void> closeDb() async {
     await rollback();
-    if (!kIsWeb) _releaseWriterLock();
+    _cancelWriterWaitQueue();
 
     if (!kIsWeb) {
       if (_reader != null && _poolPtr != null) {
@@ -766,7 +852,13 @@ class DbasSqlite {
         _reader = null;
       }
       _readerHoldsWriterLock = false;
-      _releaseReaderLock();
+      // Cancel any pool-reader waiters
+      while (_poolReaderReleasedQueue.isNotEmpty) {
+        _poolReaderReleasedQueue.removeFirst().completeError(
+          StateError('Database was closed while waiting for a reader connection.'),
+        );
+      }
+      _cancelReaderWaitQueue();
     }
 
     if (_instance.containsKey(dbName)) {
@@ -790,7 +882,8 @@ class DbasSqlite {
   /// of a read loop).
   Future<void> closeReader() async {
     if (kIsWeb) {
-      // On web, the pool handles slot release inside closeReader
+      // On web, the pool handles slot release inside closeReader.
+      if (_db == null) return;
       await _platform.closeReader(_db!);
       return;
     }
@@ -802,6 +895,7 @@ class DbasSqlite {
     if (_reader != null && _poolPtr != null) {
       _platform.poolReleaseReader(dbName, _poolPtr!, _reader!.ptr);
       _reader = null;
+      _drainPoolReaderWaitQueue();
       _releaseReaderLock();
     } else if (_readerHoldsWriterLock) {
       _readerHoldsWriterLock = false;
@@ -844,29 +938,17 @@ class DbasSqlite {
     if (_isInTransaction) {
       return;
     }
-    if (kIsWeb) {
-      await _platform.beginTransactionLease(dbName);
-    } else {
-      await _acquireWriterLock();
-    }
+    await _acquireWriterLock();
     try {
       if (!isOpened()) {
-        if (kIsWeb) {
-          await _platform.endTransactionLease(dbName);
-        } else {
-          _releaseWriterLock();
-        }
+        _releaseWriterLock();
         throw StateError('Database was closed while waiting for writer lock.');
       }
       await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
       _isInTransaction = true;
     } catch (_) {
       if (_isInTransaction) rethrow;
-      if (kIsWeb) {
-        await _platform.endTransactionLease(dbName);
-      } else {
-        _releaseWriterLock();
-      }
+      _releaseWriterLock();
       rethrow;
     }
   }
@@ -884,11 +966,7 @@ class DbasSqlite {
     try {
       await _platform.executeSql(_db!, 'COMMIT');
       _isInTransaction = false;
-      if (kIsWeb) {
-        await _platform.endTransactionLease(dbName);
-      } else {
-        _releaseWriterLock();
-      }
+      _releaseWriterLock();
     } catch(e) {
       await rollback();
       rethrow;
@@ -909,11 +987,7 @@ class DbasSqlite {
       await _platform.executeSql(_db!, 'ROLLBACK');
     } finally {
       _isInTransaction = false;
-      if (kIsWeb) {
-        await _platform.endTransactionLease(dbName);
-      } else {
-        _releaseWriterLock();
-      }
+      _releaseWriterLock();
     }
   }
 
@@ -941,11 +1015,15 @@ class DbasSqlite {
     try {
       await action(this);
       await commit();
-    } catch (_) {
+    } catch (originalError) {
       try {
         await rollback();
-      } catch (_) {
-        // Rollback failed, but we still rethrow the original exception.
+      } catch (rollbackError) {
+        throw StateError(
+          'Transaction failed: $originalError. '
+          'Additionally, rollback also failed: $rollbackError. '
+          'The database may be in an inconsistent state.',
+        );
       }
       rethrow;
     }
@@ -974,14 +1052,14 @@ class DbasSqlite {
     if (_isInTransaction) {
       throw StateError('Cannot run VACUUM inside a transaction.');
     }
-    if (!kIsWeb) await _acquireWriterLock();
+    await _acquireWriterLock();
     try {
       if (!isOpened()) {
         throw StateError('Database was closed while waiting for writer lock.');
       }
       await _platform.executeSql(_db!, 'VACUUM');
     } finally {
-      if (!kIsWeb) _releaseWriterLock();
+      _releaseWriterLock();
     }
   }
 }

@@ -578,6 +578,34 @@ void main() async {
     await db.dropDb();
   });
 
+  test('Blob bind accepts List<int> (not just Uint8List)', () async {
+    final db = await _createTestDb('blob_list_int_test.db');
+
+    await db.executeSql('''
+      CREATE TABLE blob_li_test (id INTEGER PRIMARY KEY, data BLOB)
+    ''');
+
+    // Use plain List<int> (not Uint8List) to exercise the List<int> branch
+    final data = List<int>.generate(256, (i) => i);
+    await db.executeSql(
+      'INSERT INTO blob_li_test (id, data) VALUES (?, ?)',
+      params: [1, data],
+    );
+
+    await db.executeReader('SELECT data FROM blob_li_test WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+
+    final result = db.getColumnBlob(0);
+    expect(result.length, 256);
+    expect(result[0], 0);
+    expect(result[127], 127);
+    expect(result[255], 255);
+
+    await db.closeReader();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   // ──────────────────────────────────────────────────────────────────────
   // Double binding and retrieval
   // ──────────────────────────────────────────────────────────────────────
@@ -2263,6 +2291,180 @@ void main() async {
     await db.executeSql('INSERT INTO ppf_tbl (id) VALUES (1)');
 
     await db.executeReader('SELECT id FROM ppf_tbl');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnInt(0), 1);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Issue fixes: regression tests
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('getColumnDecimal throws FormatException on non-numeric text', () async {
+    final db = await _createTestDb('decimal_err.db');
+    await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, 'not_a_number')");
+
+    await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(() => db.getColumnDecimal(0), throwsFormatException);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('getColumnTime throws FormatException on garbage input', () async {
+    final db = await _createTestDb('time_err.db');
+    await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, 'garbage')");
+
+    await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(() => db.getColumnTime(0), throwsFormatException);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('getColumnTime parses HH:MM format without seconds', () async {
+    final db = await _createTestDb('time_hhmm.db');
+    await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, '14:30')");
+
+    await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    final d = db.getColumnTime(0);
+    expect(d.inHours, 14);
+    expect(d.inMinutes % 60, 30);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('closeReader on closed web-style DB does not crash (Bug 1)', () async {
+    final db = await _createTestDb('close_reader_null.db');
+    await db.closeDb();
+    // Calling closeReader after closeDb should not throw
+    await db.closeReader();
+    await db.dropDb();
+  });
+
+  test('instance cleanup: dropDb cleans up platform delegates (Issue 7)', () async {
+    final db = await _createTestDb('cleanup.db');
+    await db.executeSql('CREATE TABLE cl_tbl (id INTEGER PRIMARY KEY)');
+    await db.closeDb();
+    await db.dropDb();
+
+    // Re-create with same name — should not use stale delegate
+    final db2 = await _createTestDb('cleanup.db');
+    await db2.executeSql('CREATE TABLE cl_tbl (id INTEGER PRIMARY KEY)');
+    await db2.closeDb();
+    await db2.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Row cache correctness across pool writer/reader interleaving
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('pool: row cache returns reader data after writer executeSql', () async {
+    final db = await _createTestDb('cache_interleave.db', readerPoolSize: 2);
+    await db.executeSql('CREATE TABLE ci_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO ci_tbl (id, val) VALUES (1, 'alpha')");
+    await db.executeSql("INSERT INTO ci_tbl (id, val) VALUES (2, 'beta')");
+
+    // Execute a write (touches writer's readRow path internally)
+    await db.executeSql("INSERT INTO ci_tbl (id, val) VALUES (3, 'gamma')");
+    final insertedId = db.getLastInsertedId();
+    expect(insertedId, 3);
+
+    // Now execute a reader query — should return reader data, not writer cache
+    await db.executeReader('SELECT val FROM ci_tbl ORDER BY id');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'alpha');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'beta');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'gamma');
+    expect(await db.readRow(), isFalse);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Pool exhaustion: reader held open, second read falls back to writer
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('pool: second reader falls back to writer when first reader held open', () async {
+    final db = await _createTestDb('pool_exhaust.db', readerPoolSize: 1);
+    await db.executeSql('CREATE TABLE pe_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db.executeSql("INSERT INTO pe_tbl (id, val) VALUES (1, 'first')");
+    await db.executeSql("INSERT INTO pe_tbl (id, val) VALUES (2, 'second')");
+
+    // First reader: hold open without closing
+    await db.executeReader('SELECT val FROM pe_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'first');
+    // Don't close reader — pool reader is still held
+
+    // Second read operation — should still work (falls back to writer or
+    // closePendingReader releases the first reader automatically)
+    await db.executeReader('SELECT val FROM pe_tbl WHERE id = 2');
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'second');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // C pool: open, close, reopen with different pool size
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('pool: close and reopen with different pool size', () async {
+    final db1 = await _createTestDb('pool_reopen.db', readerPoolSize: 1);
+    await db1.executeSql('CREATE TABLE pr_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    await db1.executeSql("INSERT INTO pr_tbl (id, val) VALUES (1, 'persisted')");
+    await db1.closeDb();
+
+    // Reopen with a different pool size
+    final db2 = await DbasSqlite.getInstance(dbName: 'pool_reopen.db');
+    await db2.openDb(readerPoolSize: 4);
+
+    await db2.executeReader('SELECT val FROM pr_tbl WHERE id = 1');
+    expect(await db2.readRow(), isTrue);
+    expect(db2.getColumnText(0), 'persisted');
+    await db2.closeReader();
+
+    await db2.closeDb();
+    await db2.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Error propagation from worker isolate
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('executeSql with invalid SQL propagates error from worker', () async {
+    final db = await _createTestDb('worker_err.db');
+    await db.executeSql('CREATE TABLE we_tbl (id INTEGER PRIMARY KEY)');
+
+    // Invalid SQL should propagate error through worker isolate
+    await expectLater(
+      () => db.executeSql('INVALID SQL THAT DOES NOT PARSE'),
+      throwsA(isA<Exception>()),
+    );
+
+    // Connection should still be usable after error
+    await db.executeSql('INSERT INTO we_tbl (id) VALUES (1)');
+
+    await db.executeReader('SELECT id FROM we_tbl');
     expect(await db.readRow(), isTrue);
     expect(db.getColumnInt(0), 1);
     await db.closeReader();

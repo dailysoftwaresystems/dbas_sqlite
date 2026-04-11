@@ -7,6 +7,14 @@
 #pragma once
 #include "sqlite/sqlite3.h"
 
+#ifndef __EMSCRIPTEN__
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -65,6 +73,13 @@ extern "C" {
         bool* readerBusy;
         int readerCount;
         char* fileName;
+#ifndef __EMSCRIPTEN__
+#ifdef _WIN32
+        CRITICAL_SECTION lock;
+#else
+        pthread_mutex_t lock;
+#endif
+#endif
     } SQLitePool;
 
     DLL_EXPORT SQLitePool* CreatePool(const char* fileName, int readerCount);

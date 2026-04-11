@@ -94,7 +94,7 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetAffectedRows')
   external int _getAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  @Native<Int32 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetLastInsertedId')
+  @Native<Int64 Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'GetLastInsertedId')
   external int _getLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr);
 
   @Native<Void Function(Handle, Pointer<DbasSqliteDbStruct>)>(symbol: 'CloseReader')

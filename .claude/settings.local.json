@@ -24,7 +24,15 @@
       "Bash(python3 -m json.tool)",
       "Skill(pr-review-toolkit:review-pr)",
       "Read(//c/Source/DailySoftware/DBAS.FileSystem.Dart/**)",
-      "Read(//c/Source/DailySoftware/DBAS.FileSystem.Dart/example/test_driver/**)"
+      "Read(//c/Source/DailySoftware/DBAS.FileSystem.Dart/example/test_driver/**)",
+      "Bash(xargs wc:*)",
+      "Bash(powershell:*)",
+      "Bash(flutter drive:*)",
+      "Bash(flutter build:*)",
+      "Bash(where chromedriver:*)",
+      "Bash(chromedriver:*)",
+      "Bash(tasklist)",
+      "Bash(dart:*)"
     ]
   }
 }

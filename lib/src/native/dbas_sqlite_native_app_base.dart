@@ -1,8 +1,9 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show protected;
 import 'dbas_sqlite_native_interface.dart';
-import 'dbas_sqlite_connection_pool.dart';
+import 'dbas_sqlite_row_cache.dart';
 import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 
 /// Base class for native app implementations (FFI and IO/AOT).
@@ -12,6 +13,16 @@ import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
 /// via the protected abstract [nativeXxx] methods.
 abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   DbasSqliteNativeAppBase(super.dbName);
+
+  /// Cached row data from the last [readRow] call — column accessors read
+  /// from this cache instead of making FFI calls per column.
+  ///
+  /// This is a single cache shared across all pool connections. This is safe
+  /// because [DbasSqlite] serializes all access: `executeSql` calls
+  /// `_closePendingReader()` before operating, and locks prevent concurrent
+  /// reader+writer usage on the same [DbasSqliteNativeAppBase] instance.
+  @protected
+  final RowData rowCache = RowData();
 
   // ── Protected abstract methods (raw native calls) ──────────────────────
   Pointer<DbasSqliteDbStruct> nativeOpenDb(Pointer<Utf8> path);
@@ -53,7 +64,7 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   void nativeCloseReader(Pointer<DbasSqliteDbStruct> dbPtr);
   void nativeCloseDb(Pointer<DbasSqliteDbStruct> dbPtr);
 
-  // ── Connection Pool ──
+  // ── Connection Pool (C-managed) ──
   Pointer<DbasSqlitePoolStruct> nativeCreatePool(Pointer<Utf8> path, int readerCount);
   Pointer<DbasSqliteDbStruct> nativePoolGetWriter(Pointer<DbasSqlitePoolStruct> poolPtr);
   Pointer<DbasSqliteDbStruct> nativePoolAcquireReader(Pointer<DbasSqlitePoolStruct> poolPtr);
@@ -165,19 +176,6 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   }
 
   @override
-  Future<int> prepareQuery(int dbPtr, String sql) async {
-    Pointer<Utf8> sqlPtr = nullptr;
-    try {
-      sqlPtr = sql.toNativeUtf8();
-      return nativePrepareQuery(resolveDbPtr(dbPtr), sqlPtr);
-    } finally {
-      if (sqlPtr != nullptr) {
-        calloc.free(sqlPtr);
-      }
-    }
-  }
-
-  @override
   int bindNull(int dbPtr, int index) =>
       nativeBindNull(resolveDbPtr(dbPtr), index);
 
@@ -200,9 +198,7 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
       valuePtr = value.toNativeUtf8();
       return nativeBindText(resolveDbPtr(dbPtr), index, valuePtr);
     } finally {
-      if (valuePtr != nullptr) {
-        calloc.free(valuePtr);
-      }
+      if (valuePtr != nullptr) calloc.free(valuePtr);
     }
   }
 
@@ -296,134 +292,181 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   }
 
   @override
-  Future<int> readRow(int dbPtr) async =>
-      nativeReadRow(resolveDbPtr(dbPtr));
+  Future<int> prepareQuery(int dbPtr, String sql) async {
+    Pointer<Utf8> sqlPtr = nullptr;
+    try {
+      sqlPtr = sql.toNativeUtf8();
+      final rc = nativePrepareQuery(resolveDbPtr(dbPtr), sqlPtr);
+      if (rc == 0) {
+        // Cache column metadata after successful prepare
+        final ptr = resolveDbPtr(dbPtr);
+        final count = nativeGetColumnCount(ptr);
+        final names = <String>[];
+        for (int i = 0; i < count; i++) {
+          names.add(nativeGetColumnName(ptr, i).toDartString());
+        }
+        rowCache.columnCount = count;
+        rowCache.columnNames = names;
+        rowCache.columns = null;
+      }
+      return rc;
+    } finally {
+      if (sqlPtr != nullptr) {
+        calloc.free(sqlPtr);
+      }
+    }
+  }
+
+  @override
+  Future<int> readRow(int dbPtr) async {
+    final ptr = resolveDbPtr(dbPtr);
+    final status = nativeReadRow(ptr);
+
+    // SQLite result codes
+    const sqliteRow = 100;
+
+    if (status == sqliteRow) {
+      // Cache all column values so getColumn* don't need FFI calls
+      final count = nativeGetColumnCount(ptr);
+      rowCache.columnCount = count;
+      final columns = <ColumnData>[];
+      for (int i = 0; i < count; i++) {
+        final type = nativeGetColumnType(ptr, i);
+        final isNull = nativeIsNull(ptr, i) == 1;
+        dynamic value;
+        if (!isNull) {
+          switch (type) {
+            case 1: // SQLITE_INTEGER
+              value = nativeGetColumnInt(ptr, i);
+            case 2: // SQLITE_FLOAT
+              value = nativeGetColumnDouble(ptr, i);
+            case 3: // SQLITE_TEXT
+              value = nativeGetColumnText(ptr, i).toDartString();
+            case 4: // SQLITE_BLOB
+              final blobPtr = nativeGetColumnBlob(ptr, i);
+              final length = nativeGetColumnBytes(ptr, i);
+              value = blobPtr.asTypedList(length).toList();
+            default:
+              value = null;
+          }
+        }
+        columns.add(ColumnData(type: type, isNull: isNull, value: value));
+      }
+      rowCache.columns = columns;
+    } else {
+      rowCache.columns = null;
+    }
+
+    // Cache state for post-read access
+    rowCache.affectedRows = nativeGetAffectedRows(ptr);
+    rowCache.lastInsertedId = nativeGetLastInsertedId(ptr);
+    final errorPtr = nativeGetLastDbError(ptr);
+    rowCache.lastError = (errorPtr == nullptr || errorPtr.address == 0)
+        ? null
+        : errorPtr.toDartString();
+
+    return status;
+  }
 
   @override
   bool isNull(int dbPtr, int colIndex) =>
-      nativeIsNull(resolveDbPtr(dbPtr), colIndex) == 1;
+      rowCache.columns?[colIndex].isNull ?? true;
 
   @override
   String getColumnText(int dbPtr, int colIndex) =>
-      nativeGetColumnText(resolveDbPtr(dbPtr), colIndex).toDartString();
+      rowCache.columns?[colIndex].value?.toString() ?? '';
 
   @override
   int getColumnInt(int dbPtr, int colIndex) =>
-      nativeGetColumnInt(resolveDbPtr(dbPtr), colIndex);
+      toIntSafe(rowCache.columns?[colIndex].value);
 
   @override
   double getColumnFloat(int dbPtr, int colIndex) =>
-      nativeGetColumnFloat(resolveDbPtr(dbPtr), colIndex);
+      toDoubleSafe(rowCache.columns?[colIndex].value);
 
   @override
   double getColumnDouble(int dbPtr, int colIndex) =>
-      nativeGetColumnDouble(resolveDbPtr(dbPtr), colIndex);
+      toDoubleSafe(rowCache.columns?[colIndex].value);
 
   @override
   List<int> getColumnBlob(int dbPtr, int columnIndex) {
-    final ptr = nativeGetColumnBlob(resolveDbPtr(dbPtr), columnIndex);
-    final length = nativeGetColumnBytes(resolveDbPtr(dbPtr), columnIndex);
-    return ptr.asTypedList(length);
+    final value = rowCache.columns?[columnIndex].value;
+    if (value is List) return value.cast<int>();
+    return [];
   }
 
   @override
   int getColumnBytes(int dbPtr, int columnIndex) =>
-      nativeGetColumnBytes(resolveDbPtr(dbPtr), columnIndex);
+      getColumnBlob(dbPtr, columnIndex).length;
 
   @override
   String getColumnName(int dbPtr, int colIndex) =>
-      nativeGetColumnName(resolveDbPtr(dbPtr), colIndex).toDartString();
+      colIndex < rowCache.columnNames.length ? rowCache.columnNames[colIndex] : '';
 
   @override
   int getColumnType(int dbPtr, int colIndex) =>
-      nativeGetColumnType(resolveDbPtr(dbPtr), colIndex);
+      rowCache.columns?[colIndex].type ?? 5;
 
   @override
-  int getColumnCount(int dbPtr) =>
-      nativeGetColumnCount(resolveDbPtr(dbPtr));
+  int getColumnCount(int dbPtr) => rowCache.columnCount;
 
   @override
-  String? getLastDbError(int dbPtr) {
-    final errorPtr = nativeGetLastDbError(resolveDbPtr(dbPtr));
+  String? getLastDbError(int dbPtr) => rowCache.lastError;
 
-    if (errorPtr == nullptr || errorPtr.address == 0) {
-      return null;
-    }
+  @override
+  int getAffectedRows(int dbPtr) => rowCache.affectedRows;
 
-    return errorPtr.toDartString();
+  @override
+  int getLastInsertedId(int dbPtr) => rowCache.lastInsertedId;
+
+  @override
+  Future closeReader(int dbPtr) async {
+    nativeCloseReader(resolveDbPtr(dbPtr));
+    rowCache.columns = null;
   }
-
-  @override
-  int getAffectedRows(int dbPtr) =>
-      nativeGetAffectedRows(resolveDbPtr(dbPtr));
-
-  @override
-  int getLastInsertedId(int dbPtr) =>
-      nativeGetLastInsertedId(resolveDbPtr(dbPtr));
-
-  @override
-  Future closeReader(int dbPtr) async =>
-      nativeCloseReader(resolveDbPtr(dbPtr));
 
   @override
   Future closeDb(int dbPtr) async =>
       nativeCloseDb(resolveDbPtr(dbPtr));
 
-  // ── Connection Pool (Dart-managed, general-purpose) ─────────────────
-
-  static int _nextPoolKey = 1;
-  static final Map<int, DbasSqliteConnectionPool> _nativePools = {};
+  // ── Connection Pool (C-managed) ─────────────────────────────────────
 
   @override
   Future<int> createPool(String path, int readerCount) async {
-    final connections = <DbasSqliteDb>[];
-
-    // Open readerCount + 1 general-purpose connections (all read-write)
-    for (int i = 0; i <= readerCount; i++) {
-      final ptr = await openDb(path);
-      if (ptr == 0 || !isOpened(ptr)) {
-        // Close any already-opened connections before throwing
-        for (final c in connections) {
-          nativeCloseDb(resolveDbPtr(c.ptr));
-        }
-        throw Exception('Failed to open connection $i for pool: $path');
+    Pointer<Utf8> pathPtr = nullptr;
+    try {
+      pathPtr = path.toNativeUtf8();
+      final poolPtr = nativeCreatePool(pathPtr, readerCount);
+      if (poolPtr == nullptr || poolPtr.address == 0) {
+        throw Exception('Failed to create pool: $path');
       }
-      connections.add(DbasSqliteDb(dbName, ptr));
-
-      // Enable WAL mode on every connection
-      Pointer<Utf8> walPtr = nullptr;
-      try {
-        walPtr = 'PRAGMA journal_mode=WAL'.toNativeUtf8();
-        nativeExecuteSql(resolveDbPtr(ptr), walPtr);
-      } finally {
-        if (walPtr != nullptr) calloc.free(walPtr);
-      }
+      return poolPtr.address;
+    } finally {
+      if (pathPtr != nullptr) calloc.free(pathPtr);
     }
-
-    final key = _nextPoolKey++;
-    _nativePools[key] = DbasSqliteConnectionPool(connections);
-    return key;
   }
 
   @override
-  int poolGetWriter(int poolPtr) =>
-      _nativePools[poolPtr]?.writer.ptr ?? 0;
+  int poolGetWriter(int poolPtr) {
+    final writer = nativePoolGetWriter(resolvePoolPtr(poolPtr));
+    return writer.address;
+  }
 
   @override
-  int poolAcquireReader(int poolPtr) =>
-      _nativePools[poolPtr]?.acquireReader()?.ptr ?? 0;
+  int poolAcquireReader(int poolPtr) {
+    final reader = nativePoolAcquireReader(resolvePoolPtr(poolPtr));
+    if (reader == nullptr || reader.address == 0) return 0;
+    return reader.address;
+  }
 
   @override
-  void poolReleaseReader(int poolPtr, int readerPtr) =>
-      _nativePools[poolPtr]?.releaseConnection(readerPtr);
+  void poolReleaseReader(int poolPtr, int readerPtr) {
+    nativePoolReleaseReader(resolvePoolPtr(poolPtr), resolveDbPtr(readerPtr));
+  }
 
   @override
   Future<void> closePool(int poolPtr) async {
-    final pool = _nativePools.remove(poolPtr);
-    if (pool == null) return;
-    for (final conn in pool.all) {
-      nativeCloseDb(resolveDbPtr(conn.ptr));
-    }
+    nativeClosePool(resolvePoolPtr(poolPtr));
   }
 }
 

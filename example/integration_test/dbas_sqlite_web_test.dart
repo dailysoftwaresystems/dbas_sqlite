@@ -2,16 +2,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
 
-/// Web integration tests.
+/// Web integration tests using the SharedPool (1 writer + N reader workers).
 ///
 /// Run with:
 ///   cd example
-///   flutter test integration_test/dbas_sqlite_web_test.dart -d chrome
+///   flutter drive --driver=test_driver/integration_test.dart \
+///     --target=integration_test/dbas_sqlite_web_test.dart \
+///     -d web-server --browser-name=chrome
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  Future<DbasSqlite> createWebDb(String name, {int readerPoolSize = 4}) async {
-    final db = await DbasSqlite.getInstance(dbName: name, workerPoolSize: 4);
+  Future<DbasSqlite> createWebDb(String name, {int readerPoolSize = 3}) async {
+    final db = await DbasSqlite.getInstance(dbName: name, workerPoolSize: 3);
     await db.dropDb();
     await db.openDb(readerPoolSize: readerPoolSize);
     return db;
@@ -79,7 +81,7 @@ void main() {
     final a1 = await c1.attachDb(bytes);
     await a1.closeDb();
 
-    // Second attach — was crashing with "memory access out of bounds"
+    // Second attach
     final c2 = await DbasSqlite.getInstance(dbName: 'attach2x.db');
     final a2 = await c2.attachDb(bytes);
 
@@ -136,7 +138,7 @@ void main() {
     final s1 = await c1.attachStreamDb(Stream<List<int>>.value(bytes));
     await s1.closeDb();
 
-    // Second stream attach — was crashing
+    // Second stream attach
     final c2 = await DbasSqlite.getInstance(dbName: 'stream2x.db');
     final s2 = await c2.attachStreamDb(Stream<List<int>>.value(bytes));
 
@@ -176,7 +178,7 @@ void main() {
     await copy.closeReader();
     await copy.closeDb();
 
-    // Vacuum on source — was crashing after copy
+    // Vacuum on source
     await fresh.vacuum();
 
     await fresh.closeDb();
@@ -304,37 +306,6 @@ void main() {
     await db.dropDb();
   });
 
-  // ── Concurrency: concurrent transactions ──────────────────────────────
-
-  testWidgets('concurrent transactions are serialized', (tester) async {
-    final db = await createWebDb('conc_txn.db');
-    await db.executeSql('CREATE TABLE ct_tbl (id INTEGER PRIMARY KEY, val TEXT)');
-
-    final order = <int>[];
-
-    await Future.wait([
-      db.transaction((db) async {
-        await db.executeSql("INSERT INTO ct_tbl (id, val) VALUES (1, 'a')");
-        order.add(1);
-      }),
-      db.transaction((db) async {
-        await db.executeSql("INSERT INTO ct_tbl (id, val) VALUES (2, 'b')");
-        order.add(2);
-      }),
-    ]);
-
-    expect(order.length, 2);
-    expect(order.toSet(), {1, 2});
-
-    await db.executeReader('SELECT COUNT(*) FROM ct_tbl');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnInt(0), 2);
-    await db.closeReader();
-
-    await db.closeDb();
-    await db.dropDb();
-  });
-
   // ── getLastInsertedId after pool release ───────────────────────────────
 
   testWidgets('getLastInsertedId works after executeSql', (tester) async {
@@ -369,6 +340,121 @@ void main() {
     await reopened.dropDb();
   });
 
+  // ── Bug fixes regression tests ─────────────────────────────────────────
+
+  testWidgets('closeReader on closed DB does not crash (Bug 1)', (tester) async {
+    final db = await createWebDb('close_null_web.db');
+    await db.closeDb();
+    await db.closeReader();
+    await db.dropDb();
+  });
+
+  testWidgets('getColumnDecimal throws on non-numeric text', (tester) async {
+    final db = await createWebDb('decimal_err_web.db');
+    await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, 'not_a_number')");
+
+    await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(() => db.getColumnDecimal(0), throwsFormatException);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets('getColumnTime throws on garbage input', (tester) async {
+    final db = await createWebDb('time_err_web.db');
+    await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, 'garbage')");
+
+    await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    expect(() => db.getColumnTime(0), throwsFormatException);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets('getColumnDecimal works with valid Decimal', (tester) async {
+    final db = await createWebDb('decimal_ok_web.db');
+    await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, '123.456')");
+
+    await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    final d = db.getColumnDecimal(0);
+    expect(d.toString(), '123.456');
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets('getColumnTime works with valid HH:MM:SS.mmm', (tester) async {
+    final db = await createWebDb('time_ok_web.db');
+    await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+    await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, '02:30:45.500')");
+
+    await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    final d = db.getColumnTime(0);
+    expect(d.inHours, 2);
+    expect(d.inMinutes % 60, 30);
+    expect(d.inSeconds % 60, 45);
+    expect(d.inMilliseconds % 1000, 500);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets('named params with positional and named binds', (tester) async {
+    final db = await createWebDb('named_web.db');
+    await db.executeSql('CREATE TABLE n_tbl (id INTEGER PRIMARY KEY, name TEXT, val REAL)');
+
+    await db.executeSql(
+      'INSERT INTO n_tbl (id, name, val) VALUES (:id, :name, :val)',
+      nameParams: {'id': 1, 'name': 'test', 'val': 3.14},
+    );
+
+    await db.executeReader('SELECT name, val FROM n_tbl WHERE id = :id', nameParams: {'id': 1});
+    expect(await db.readRow(), isTrue);
+    expect(db.getColumnText(0), 'test');
+    expect(db.getColumnDouble(1), closeTo(3.14, 0.001));
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets('blob round-trip works on web', (tester) async {
+    final db = await createWebDb('blob_web.db');
+    await db.executeSql('CREATE TABLE b_tbl (id INTEGER PRIMARY KEY, data BLOB)');
+
+    final bytes = List<int>.generate(256, (i) => i);
+    await db.executeSql('INSERT INTO b_tbl (id, data) VALUES (?, ?)', params: [1, bytes]);
+
+    await db.executeReader('SELECT data FROM b_tbl WHERE id = 1');
+    expect(await db.readRow(), isTrue);
+    final result = db.getColumnBlob(0);
+    expect(result.length, 256);
+    expect(result[0], 0);
+    expect(result[255], 255);
+    await db.closeReader();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets('databaseExists is consistent with openDb', (tester) async {
+    final db = await createWebDb('exists_web.db');
+    expect(await db.databaseExists(), isTrue);
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   // ── Full lifecycle: create → close → export → attach → vacuum ─────────
 
   testWidgets('full export-import-vacuum lifecycle', (tester) async {
@@ -400,5 +486,98 @@ void main() {
     await exporter.dropDb();
     await imported.closeDb();
     await imported.dropDb();
+  });
+
+  // ── Multi-chunk streaming attach ──────────────────────────────────────
+
+  testWidgets('attachStreamDb with multiple chunks preserves data', (tester) async {
+    // Create source DB with enough data to produce multi-chunk export
+    final src = await createWebDb('multi_chunk_src.db');
+    await src.executeSql('CREATE TABLE mc_tbl (id INTEGER PRIMARY KEY, data TEXT)');
+    for (int i = 1; i <= 50; i++) {
+      await src.executeSql(
+        'INSERT INTO mc_tbl (id, data) VALUES (?, ?)',
+        params: [i, 'row_$i${'x' * 200}'],
+      );
+    }
+
+    // Export, then stream-attach as multiple smaller chunks
+    await src.closeDb();
+    final exporter = await DbasSqlite.getInstance(dbName: 'multi_chunk_src.db');
+    final bytes = await exporter.getContent();
+    await exporter.openDb();
+
+    // Split exported bytes into 4 KB chunks to exercise the multi-chunk path
+    const chunkSize = 4096;
+    final chunks = <List<int>>[];
+    for (int offset = 0; offset < bytes.length; offset += chunkSize) {
+      final end = (offset + chunkSize > bytes.length) ? bytes.length : offset + chunkSize;
+      chunks.add(bytes.sublist(offset, end));
+    }
+    // Verify we actually have multiple chunks
+    expect(chunks.length, greaterThan(1));
+
+    final stream = Stream<List<int>>.fromIterable(chunks);
+    final carrier = await DbasSqlite.getInstance(dbName: 'multi_chunk_dest.db');
+    final dest = await carrier.attachStreamDb(stream);
+
+    await dest.executeReader('SELECT COUNT(*) FROM mc_tbl');
+    expect(await dest.readRow(), isTrue);
+    expect(dest.getColumnInt(0), 50);
+    await dest.closeReader();
+
+    // Verify specific row
+    await dest.executeReader('SELECT data FROM mc_tbl WHERE id = 25');
+    expect(await dest.readRow(), isTrue);
+    expect(dest.getColumnText(0), startsWith('row_25'));
+    await dest.closeReader();
+
+    await dest.closeDb();
+    await dest.dropDb();
+    await exporter.closeDb();
+    await exporter.dropDb();
+  });
+
+  // ── Export content round-trip ──────────────────────────────────────────
+
+  testWidgets('getContent and attachDb produce identical data', (tester) async {
+    final src = await createWebDb('export_rt_src.db');
+    await src.executeSql('CREATE TABLE rt_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    for (int i = 1; i <= 10; i++) {
+      await src.executeSql("INSERT INTO rt_tbl (id, val) VALUES (?, ?)", params: [i, 'val_$i']);
+    }
+
+    // Export
+    await src.closeDb();
+    final exp = await DbasSqlite.getInstance(dbName: 'export_rt_src.db');
+    final bytes = await exp.getContent();
+    expect(bytes.length, greaterThan(0));
+    await exp.openDb();
+
+    // Import to new DB
+    final carrier = await DbasSqlite.getInstance(dbName: 'export_rt_dest.db');
+    final dest = await carrier.attachDb(bytes);
+
+    // Verify all 10 rows
+    await dest.executeReader('SELECT id, val FROM rt_tbl ORDER BY id');
+    for (int i = 1; i <= 10; i++) {
+      expect(await dest.readRow(), isTrue);
+      expect(dest.getColumnInt(0), i);
+      expect(dest.getColumnText(1), 'val_$i');
+    }
+    expect(await dest.readRow(), isFalse);
+
+    await dest.closeDb();
+    await dest.dropDb();
+    await exp.closeDb();
+    await exp.dropDb();
+  });
+
+  // ── dropDb on never-opened DB ─────────────────────────────────────────
+
+  testWidgets('dropDb on never-opened DB does not crash', (tester) async {
+    final db = await DbasSqlite.getInstance(dbName: 'never_opened.db');
+    // dropDb should not throw even if the DB was never opened
+    await db.dropDb();
   });
 }

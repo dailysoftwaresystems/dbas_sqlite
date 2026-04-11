@@ -13,20 +13,31 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 - **Web** - WASM SQLite via dedicated Web Worker with OPFS persistence
 
 ### Connection Pool (WAL Mode)
-- `openDb()` automatically creates a connection pool with 1 writer + 4 readers (configurable)
+- `openDb()` automatically creates a C-level connection pool with 1 writer + 4 readers (configurable)
 - WAL mode enables concurrent reads and writes
 - Pool is fully transparent -- no API changes needed
 - Reads automatically use pool readers; writes use the dedicated writer
 - Falls back to single connection if pool creation fails or `readerPoolSize = 0`
+- Native pool has mutex-protected reader acquire/release for thread safety
 
 ### Thread Safety
-- **Writer mutex**: serializes all write operations (`executeSql`, transactions)
-- **Reader mutex**: serializes read sessions (`executeReader` through `closeReader`)
+- **Writer lock**: serializes all write operations (`executeSql`, transactions) on both web and native
+- **Reader lock**: serializes read sessions (`executeReader` through `closeReader`)
 - Writer and reader locks are independent -- concurrent reads and writes via WAL mode
 - Transactions hold the writer lock for their full duration
 - Reads within a transaction use the writer connection to see uncommitted data
 - Pending reader sessions are automatically closed when a new `executeSql` or `executeReader` is called -- no need to manually close readers before starting a new operation
 - `closeDb()` safely releases all locks and unblocks any pending operations
+
+### Background FFI Worker (Native)
+- All heavy FFI operations (`executeSql`, `prepareQuery`, `readRow`, `openDb`, `closeDb`) run on a dedicated background isolate
+- Column data is pre-fetched into a Dart-side cache after each `readRow` -- `getColumn*` calls are synchronous reads from Dart memory, not FFI round-trips
+- Bind operations remain synchronous on the main isolate for performance
+
+### True Streaming I/O (Web)
+- **`attachStreamDb(stream)`**: Streams a database to OPFS chunk by chunk via `attachStreamBegin`/`attachStreamChunk`/`attachStreamEnd` with ACK-based backpressure. The complete file is never buffered in Dart memory -- critical for large databases (500 MB+)
+- **`getContent()`**: Streams the database from OPFS chunk by chunk. Supports both Transferable Streams (Chrome/Firefox) and chunked postMessage fallback (Safari)
+- **`streamCopyDb(destDbName)`**: Copies between OPFS files chunk by chunk
 
 ### Database Operations
 - **Lifecycle**
@@ -91,17 +102,9 @@ dependencies:
 No additional setup required. Native libraries are automatically bundled.
 
 ### Web Setup
-For web support, copy the following files to your project's `web/libs/` directory:
+The WASM module and Web Worker are bundled as Flutter assets and loaded automatically by the plugin. No manual file copying or `<script>` tags needed.
 
-1. [`dbas_sqlite.js`](https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter/blob/main/web/libs/dbas_sqlite.js) - Auto-generated WASM SQLite module
-2. [`dbas_sqlite_worker.js`](https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter/blob/main/web/libs/dbas_sqlite_worker.js) - Web Worker entry point
-
-```bash
-mkdir -p web/libs
-# Copy both files to web/libs/
-```
-
-The WASM module runs inside a dedicated Web Worker for OPFS support. No `<script>` tags needed in `index.html` -- the plugin loads the worker automatically.
+The worker runs inside a dedicated Web Worker with OPFS persistence. Requires a modern browser with OPFS support (Chrome 86+, Firefox 111+, Safari 15.2+) served over HTTPS or localhost.
 
 ## Usage
 
@@ -237,7 +240,7 @@ await db.streamCopyDb('myapp_backup.db');
 - **iOS/macOS**: Uses xcframework for optimal performance
 - **Android**: Native library automatically included (NDK r29)
 - **Windows/Linux**: Dynamic libraries bundled with app
-- **Web**: WASM module runs in a dedicated Web Worker with OPFS persistence. Requires `dbas_sqlite.js` and `dbas_sqlite_worker.js` in `web/libs/`
+- **Web**: WASM module runs in a dedicated Web Worker with OPFS persistence. All heavy operations are serialized through the worker — column data is cached in Dart memory after each `readRow` for synchronous access
 
 ## License
 
