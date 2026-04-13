@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.3.0 - 2026-04-13
+
+### Breaking Changes
+
+- **`executeReader` now returns `DbasSqliteReader`**: Instead of storing reader state on the `DbasSqlite` instance, `executeReader` returns an independent `DbasSqliteReader` object. All column access methods (`getColumnText`, `getColumnInt`, `readRow`, `isColumnNull`, etc.) are now on the reader, not on `DbasSqlite`.
+- **`closeReader()` removed from `DbasSqlite`**: Use `reader.close()` on the returned `DbasSqliteReader` instead.
+- **`readRow()` removed from `DbasSqlite`**: Use `reader.readRow()` on the returned `DbasSqliteReader` instead.
+- **All `getColumn*` methods removed from `DbasSqlite`**: Use the corresponding methods on `DbasSqliteReader` instead.
+- **Readers must be explicitly closed**: The old auto-cleanup (`_closePendingReader`) no longer exists. Readers that don't exhaust all rows must be closed with `reader.close()` before the connection can be reused. `readRow()` still auto-closes when it returns `false`.
+
+### Added
+
+- **`DbasSqliteReader` class**: Independent reader object returned by `executeReader`. Each reader owns its own database connection (from the pool or writer fallback) and prepared statement. Multiple readers can coexist simultaneously, enabling parallel reads.
+- **`getColumnValue(index)`** on `DbasSqliteReader`: Returns the typed value of a column based on its SQLite type (int, double, text, blob, or null).
+- **Active reader tracking**: `DbasSqlite` now tracks all open readers. `closeDb()` automatically closes every active reader before shutting down the pool/connection, preventing use-after-free on lingering readers.
+- Exported `DbasSqliteReader` from the package barrel file.
+
+### Changed
+
+- **Pool reader acquisition is non-blocking**: `executeReader` now tries to acquire a pool reader without waiting. If all readers are busy, it falls back to the writer connection immediately instead of blocking.
+- **Reader lock removed**: The serializing reader lock (`_acquireReaderLock`/`_releaseReaderLock`) is no longer used by `executeReader`, since each reader independently manages its own pool connection lifecycle.
+- **`closeDb()` closes active readers**: All open `DbasSqliteReader` instances are closed before the database connection is shut down, ensuring pool connections and writer locks are properly released.
+
+### Migration Guide
+
+```dart
+// Before (2.2.x)
+await db.executeReader('SELECT * FROM users');
+while (await db.readRow()) {
+  print(db.getColumnText(0));
+}
+await db.closeReader();
+
+// After (2.3.0)
+final reader = await db.executeReader('SELECT * FROM users');
+while (await reader.readRow()) {
+  print(reader.getColumnText(0));
+}
+await reader.close();
+```
+
+Multiple parallel readers are now possible:
+
+```dart
+final r1 = await db.executeReader('SELECT * FROM orders');
+final r2 = await db.executeReader('SELECT * FROM products');
+// Both active simultaneously, each on their own pool connection
+while (await r1.readRow()) { /* ... */ }
+while (await r2.readRow()) { /* ... */ }
+await r1.close();
+await r2.close();
+```
+
 ## 2.2.0 - 2026-04-11
 
 ### Breaking Changes

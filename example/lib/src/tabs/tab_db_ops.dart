@@ -48,14 +48,14 @@ class DbOpsTab extends StatelessWidget {
       final carrier = await DbasSqlite.getInstance(dbName: 'attached.db');
       final attached = await carrier.attachDb(bytes);
 
-      await attached.executeReader('SELECT COUNT(*) FROM products');
+      final reader = await attached.executeReader('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await attached.readRow()) {
-          count = attached.getColumnInt(0);
+        if (await reader.readRow()) {
+          count = reader.getColumnInt(0);
         }
       } finally {
-        await attached.closeReader();
+        await reader.close();
       }
 
       await attached.closeDb();
@@ -76,14 +76,14 @@ class DbOpsTab extends StatelessWidget {
       final carrier = await DbasSqlite.getInstance(dbName: 'streamed.db');
       final streamed = await carrier.attachStreamDb(stream);
 
-      await streamed.executeReader('SELECT COUNT(*) FROM products');
+      final reader = await streamed.executeReader('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await streamed.readRow()) {
-          count = streamed.getColumnInt(0);
+        if (await reader.readRow()) {
+          count = reader.getColumnInt(0);
         }
       } finally {
-        await streamed.closeReader();
+        await reader.close();
       }
 
       await streamed.closeDb();
@@ -111,14 +111,14 @@ class DbOpsTab extends StatelessWidget {
       final copy = await DbasSqlite.getInstance(dbName: 'example_copy.db');
       await copy.openDb();
 
-      await copy.executeReader('SELECT COUNT(*) FROM products');
+      final reader = await copy.executeReader('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await copy.readRow()) {
-          count = copy.getColumnInt(0);
+        if (await reader.readRow()) {
+          count = reader.getColumnInt(0);
         }
       } finally {
-        await copy.closeReader();
+        await reader.close();
       }
 
       await copy.closeDb();

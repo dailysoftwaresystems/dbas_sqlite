@@ -28,12 +28,12 @@ void main() {
     await db.executeSql("INSERT INTO items (id, name) VALUES (1, 'hello')");
     await db.executeSql('INSERT INTO items (id, name) VALUES (?, ?)', params: [2, 'world']);
 
-    await db.executeReader('SELECT name FROM items ORDER BY id');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnText(0), 'hello');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnText(0), 'world');
-    expect(await db.readRow(), isFalse);
+    final reader = await db.executeReader('SELECT name FROM items ORDER BY id');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'hello');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'world');
+    expect(await reader.readRow(), isFalse);
 
     await db.closeDb();
     await db.dropDb();
@@ -55,10 +55,10 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'attached_web.db');
     final attached = await carrier.attachDb(bytes);
 
-    await attached.executeReader('SELECT COUNT(*) FROM products');
-    expect(await attached.readRow(), isTrue);
-    expect(attached.getColumnInt(0), 1);
-    await attached.closeReader();
+    final reader = await attached.executeReader('SELECT COUNT(*) FROM products');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 1);
+    await reader.close();
 
     await attached.closeDb();
     await attached.dropDb();
@@ -85,10 +85,10 @@ void main() {
     final c2 = await DbasSqlite.getInstance(dbName: 'attach2x.db');
     final a2 = await c2.attachDb(bytes);
 
-    await a2.executeReader('SELECT val FROM items WHERE id = 1');
-    expect(await a2.readRow(), isTrue);
-    expect(a2.getColumnText(0), 'first');
-    await a2.closeReader();
+    final reader = await a2.executeReader('SELECT val FROM items WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'first');
+    await reader.close();
 
     await a2.closeDb();
     await a2.dropDb();
@@ -112,10 +112,10 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'streamed_web.db');
     final streamed = await carrier.attachStreamDb(stream);
 
-    await streamed.executeReader('SELECT name FROM products WHERE id = 1');
-    expect(await streamed.readRow(), isTrue);
-    expect(streamed.getColumnText(0), 'streamed');
-    await streamed.closeReader();
+    final reader = await streamed.executeReader('SELECT name FROM products WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'streamed');
+    await reader.close();
 
     await streamed.closeDb();
     await streamed.dropDb();
@@ -142,10 +142,10 @@ void main() {
     final c2 = await DbasSqlite.getInstance(dbName: 'stream2x.db');
     final s2 = await c2.attachStreamDb(Stream<List<int>>.value(bytes));
 
-    await s2.executeReader('SELECT COUNT(*) FROM items');
-    expect(await s2.readRow(), isTrue);
-    expect(s2.getColumnInt(0), 1);
-    await s2.closeReader();
+    final reader = await s2.executeReader('SELECT COUNT(*) FROM items');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 1);
+    await reader.close();
 
     await s2.closeDb();
     await s2.dropDb();
@@ -172,10 +172,10 @@ void main() {
     final copy = await DbasSqlite.getInstance(dbName: 'copy_vac_dest.db');
     await copy.openDb();
 
-    await copy.executeReader('SELECT COUNT(*) FROM products');
-    expect(await copy.readRow(), isTrue);
-    expect(copy.getColumnInt(0), 1);
-    await copy.closeReader();
+    final reader = await copy.executeReader('SELECT COUNT(*) FROM products');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 1);
+    await reader.close();
     await copy.closeDb();
 
     // Vacuum on source
@@ -198,10 +198,10 @@ void main() {
     await db.executeSql('DELETE FROM big_tbl WHERE id > 5');
     await db.vacuum();
 
-    await db.executeReader('SELECT COUNT(*) FROM big_tbl');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnInt(0), 5);
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT COUNT(*) FROM big_tbl');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 5);
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -221,10 +221,10 @@ void main() {
     await db.executeSql("INSERT INTO txn_tbl (id, val) VALUES (2, 'rolled_back')");
     await db.rollback();
 
-    await db.executeReader('SELECT COUNT(*) FROM txn_tbl');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnInt(0), 1);
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT COUNT(*) FROM txn_tbl');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 1);
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -246,10 +246,10 @@ void main() {
       });
     } catch (_) {}
 
-    await db.executeReader('SELECT COUNT(*) FROM th_tbl');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnInt(0), 2);
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT COUNT(*) FROM th_tbl');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 2);
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -269,15 +269,15 @@ void main() {
       db2.executeSql("INSERT INTO tbl_b (id, val) VALUES (1, 'b')"),
     ]);
 
-    await db1.executeReader('SELECT val FROM tbl_a WHERE id = 1');
-    expect(await db1.readRow(), isTrue);
-    expect(db1.getColumnText(0), 'a');
-    await db1.closeReader();
+    final reader = await db1.executeReader('SELECT val FROM tbl_a WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'a');
+    await reader.close();
 
-    await db2.executeReader('SELECT val FROM tbl_b WHERE id = 1');
-    expect(await db2.readRow(), isTrue);
-    expect(db2.getColumnText(0), 'b');
-    await db2.closeReader();
+    final reader2 = await db2.executeReader('SELECT val FROM tbl_b WHERE id = 1');
+    expect(await reader2.readRow(), isTrue);
+    expect(reader2.getColumnText(0), 'b');
+    await reader2.close();
 
     await db1.closeDb();
     await db1.dropDb();
@@ -297,10 +297,10 @@ void main() {
       db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (3, 'c')"),
     ]);
 
-    await db.executeReader('SELECT COUNT(*) FROM cw_tbl');
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnInt(0), 3);
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT COUNT(*) FROM cw_tbl');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 3);
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -331,10 +331,10 @@ void main() {
     final reopened = await DbasSqlite.getInstance(dbName: 'reopen_web.db');
     await reopened.openDb();
 
-    await reopened.executeReader('SELECT val FROM ro_tbl WHERE id = 1');
-    expect(await reopened.readRow(), isTrue);
-    expect(reopened.getColumnText(0), 'persisted');
-    await reopened.closeReader();
+    final reader = await reopened.executeReader('SELECT val FROM ro_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'persisted');
+    await reader.close();
 
     await reopened.closeDb();
     await reopened.dropDb();
@@ -342,22 +342,15 @@ void main() {
 
   // ── Bug fixes regression tests ─────────────────────────────────────────
 
-  testWidgets('closeReader on closed DB does not crash (Bug 1)', (tester) async {
-    final db = await createWebDb('close_null_web.db');
-    await db.closeDb();
-    await db.closeReader();
-    await db.dropDb();
-  });
-
   testWidgets('getColumnDecimal throws on non-numeric text', (tester) async {
     final db = await createWebDb('decimal_err_web.db');
     await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
     await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, 'not_a_number')");
 
-    await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
-    expect(await db.readRow(), isTrue);
-    expect(() => db.getColumnDecimal(0), throwsFormatException);
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(() => reader.getColumnDecimal(0), throwsFormatException);
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -368,10 +361,10 @@ void main() {
     await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
     await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, 'garbage')");
 
-    await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
-    expect(await db.readRow(), isTrue);
-    expect(() => db.getColumnTime(0), throwsFormatException);
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(() => reader.getColumnTime(0), throwsFormatException);
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -382,11 +375,11 @@ void main() {
     await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
     await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, '123.456')");
 
-    await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
-    expect(await db.readRow(), isTrue);
-    final d = db.getColumnDecimal(0);
+    final reader = await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    final d = reader.getColumnDecimal(0);
     expect(d.toString(), '123.456');
-    await db.closeReader();
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -397,14 +390,14 @@ void main() {
     await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
     await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, '02:30:45.500')");
 
-    await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
-    expect(await db.readRow(), isTrue);
-    final d = db.getColumnTime(0);
+    final reader = await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    final d = reader.getColumnTime(0);
     expect(d.inHours, 2);
     expect(d.inMinutes % 60, 30);
     expect(d.inSeconds % 60, 45);
     expect(d.inMilliseconds % 1000, 500);
-    await db.closeReader();
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -419,11 +412,11 @@ void main() {
       nameParams: {'id': 1, 'name': 'test', 'val': 3.14},
     );
 
-    await db.executeReader('SELECT name, val FROM n_tbl WHERE id = :id', nameParams: {'id': 1});
-    expect(await db.readRow(), isTrue);
-    expect(db.getColumnText(0), 'test');
-    expect(db.getColumnDouble(1), closeTo(3.14, 0.001));
-    await db.closeReader();
+    final reader = await db.executeReader('SELECT name, val FROM n_tbl WHERE id = :id', nameParams: {'id': 1});
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'test');
+    expect(reader.getColumnDouble(1), closeTo(3.14, 0.001));
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -436,13 +429,13 @@ void main() {
     final bytes = List<int>.generate(256, (i) => i);
     await db.executeSql('INSERT INTO b_tbl (id, data) VALUES (?, ?)', params: [1, bytes]);
 
-    await db.executeReader('SELECT data FROM b_tbl WHERE id = 1');
-    expect(await db.readRow(), isTrue);
-    final result = db.getColumnBlob(0);
+    final reader = await db.executeReader('SELECT data FROM b_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    final result = reader.getColumnBlob(0);
     expect(result.length, 256);
     expect(result[0], 0);
     expect(result[255], 255);
-    await db.closeReader();
+    await reader.close();
 
     await db.closeDb();
     await db.dropDb();
@@ -473,10 +466,10 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'lifecycle_dest.db');
     final imported = await carrier.attachDb(bytes);
 
-    await imported.executeReader('SELECT val FROM lc_tbl WHERE id = 1');
-    expect(await imported.readRow(), isTrue);
-    expect(imported.getColumnText(0), 'lifecycle');
-    await imported.closeReader();
+    final reader = await imported.executeReader('SELECT val FROM lc_tbl WHERE id = 1');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'lifecycle');
+    await reader.close();
 
     // Vacuum on both should work
     await exporter.vacuum();
@@ -521,16 +514,16 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'multi_chunk_dest.db');
     final dest = await carrier.attachStreamDb(stream);
 
-    await dest.executeReader('SELECT COUNT(*) FROM mc_tbl');
-    expect(await dest.readRow(), isTrue);
-    expect(dest.getColumnInt(0), 50);
-    await dest.closeReader();
+    final reader = await dest.executeReader('SELECT COUNT(*) FROM mc_tbl');
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 50);
+    await reader.close();
 
     // Verify specific row
-    await dest.executeReader('SELECT data FROM mc_tbl WHERE id = 25');
-    expect(await dest.readRow(), isTrue);
-    expect(dest.getColumnText(0), startsWith('row_25'));
-    await dest.closeReader();
+    final reader2 = await dest.executeReader('SELECT data FROM mc_tbl WHERE id = 25');
+    expect(await reader2.readRow(), isTrue);
+    expect(reader2.getColumnText(0), startsWith('row_25'));
+    await reader2.close();
 
     await dest.closeDb();
     await dest.dropDb();
@@ -559,13 +552,13 @@ void main() {
     final dest = await carrier.attachDb(bytes);
 
     // Verify all 10 rows
-    await dest.executeReader('SELECT id, val FROM rt_tbl ORDER BY id');
+    final reader = await dest.executeReader('SELECT id, val FROM rt_tbl ORDER BY id');
     for (int i = 1; i <= 10; i++) {
-      expect(await dest.readRow(), isTrue);
-      expect(dest.getColumnInt(0), i);
-      expect(dest.getColumnText(1), 'val_$i');
+      expect(await reader.readRow(), isTrue);
+      expect(reader.getColumnInt(0), i);
+      expect(reader.getColumnText(1), 'val_$i');
     }
-    expect(await dest.readRow(), isFalse);
+    expect(await reader.readRow(), isFalse);
 
     await dest.closeDb();
     await dest.dropDb();

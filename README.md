@@ -20,14 +20,14 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 - Falls back to single connection if pool creation fails or `readerPoolSize = 0`
 - Native pool has mutex-protected reader acquire/release for thread safety
 
-### Thread Safety
+### Thread Safety & Parallel Readers
 - **Writer lock**: serializes all write operations (`executeSql`, transactions) on both web and native
-- **Reader lock**: serializes read sessions (`executeReader` through `closeReader`)
-- Writer and reader locks are independent -- concurrent reads and writes via WAL mode
+- **Independent readers**: each `executeReader` call returns a `DbasSqliteReader` with its own pool connection -- multiple readers can be active simultaneously
+- Pool readers are acquired non-blocking; if all are busy, the reader falls back to the writer connection
 - Transactions hold the writer lock for their full duration
 - Reads within a transaction use the writer connection to see uncommitted data
-- Pending reader sessions are automatically closed when a new `executeSql` or `executeReader` is called -- no need to manually close readers before starting a new operation
-- `closeDb()` safely releases all locks and unblocks any pending operations
+- Readers must be closed explicitly via `reader.close()` (or auto-closed when `readRow()` returns `false`) before the connection can be reused
+- `closeDb()` automatically closes all active readers, then releases all locks and unblocks any pending operations -- no risk of use-after-free on lingering readers
 
 ### Background FFI Worker (Native)
 - All heavy FFI operations (`executeSql`, `prepareQuery`, `readRow`, `openDb`, `closeDb`) run on a dedicated background isolate
@@ -43,7 +43,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 - **Lifecycle**
   - `getInstance(dbName:)` - Get singleton instance for a database
   - `openDb({readerPoolSize})` - Open database with connection pool
-  - `closeDb()` - Close database connection  
+  - `closeDb()` - Close database connection (automatically closes all active readers)
   - `isOpened()` - Check connection status
   - `getAppDatabasePath()` - Get platform-specific database path
   - `databaseExists()` - Check if the database file exists
@@ -57,9 +57,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 
 - **SQL Execution**
   - `executeSql(sql, {params, nameParams})` - Execute DDL/DML statements with optional positional or named parameters
-  - `executeReader(sql, {params, nameParams})` - Prepare a SELECT query with optional positional or named parameters
-  - `readRow()` - Read query results row by row
-  - `closeReader()` - Manually close the current prepared statement
+  - `executeReader(sql, {params, nameParams})` - Prepare a SELECT query, returns an independent `DbasSqliteReader`
 
 - **Transactions**
   - `beginTransaction()` - Begin a new transaction (idempotent)
@@ -68,7 +66,9 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
   - `transaction(action)` - Execute an action within a transaction with automatic commit/rollback
   - `isInTransaction` - Check if a transaction is currently active
 
-### Data Retrieval
+### Data Retrieval (`DbasSqliteReader`)
+- `readRow()` - Advance to next row (`true` if available, `false` and auto-closes when done)
+- `close()` - Manually close the reader and release its connection
 - **Column Access** (with nullable variants)
   - `getColumnText(index)` / `getColumnNullableText(index)` - Get string value
   - `getColumnInt(index)` / `getColumnNullableInt(index)` - Get integer value
@@ -79,6 +79,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
   - `getColumnTime(index)` / `getColumnNullableTime(index)` - Get Duration value
   - `getColumnEnum<T>(index, values)` / `getColumnNullableEnum<T>(index, values)` - Get enum value
   - `getColumnBlob(index)` / `getColumnNullableBlob(index)` - Get binary data
+  - `getColumnValue(index)` - Get typed value based on SQLite column type
   - `isColumnNull(index)` - Check if column is NULL
   - `getColumnType(index)` - Get column data type
   - `getColumnName(index)` - Get column name
@@ -136,13 +137,14 @@ await db.executeSql(
 );
 
 // Query data
-await db.executeReader('SELECT * FROM users WHERE age > ?', params: [25]);
-while (await db.readRow()) {
-  final name = db.getColumnText(0);
-  final email = db.getColumnNullableText(1);
-  final age = db.getColumnInt(2);
+final reader = await db.executeReader('SELECT * FROM users WHERE age > ?', params: [25]);
+while (await reader.readRow()) {
+  final name = reader.getColumnText(0);
+  final email = reader.getColumnNullableText(1);
+  final age = reader.getColumnInt(2);
   print('$name ($email) - age: $age');
 }
+await reader.close();
 
 await db.closeDb();
 ```
@@ -171,13 +173,14 @@ await db.executeSql(
   params: ['Widget', Decimal.parse('19.99'), true],
 );
 
-await db.executeReader('SELECT name, price, active FROM products');
-while (await db.readRow()) {
-  final name = db.getColumnText(0);
-  final price = db.getColumnDecimal(1);
-  final active = db.getColumnBool(2);
+final reader = await db.executeReader('SELECT name, price, active FROM products');
+while (await reader.readRow()) {
+  final name = reader.getColumnText(0);
+  final price = reader.getColumnDecimal(1);
+  final active = reader.getColumnBool(2);
   print('$name - \$$price (active: $active)');
 }
+await reader.close();
 ```
 
 ### Transactions

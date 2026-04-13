@@ -22,21 +22,21 @@ class CrudTab extends StatelessWidget {
   Future<void> _select() => runOp(() async {
     onLog('[...] Running SELECT...');
     try {
-      await db!.executeReader(
+      final reader = await db!.executeReader(
         'SELECT id, name, price, quantity, created_at FROM products ORDER BY id DESC LIMIT 10',
       );
       final rows = <String>[];
       try {
-        while (await db!.readRow()) {
-          final id = db!.getColumnInt(0);
-          final name = db!.getColumnText(1);
-          final price = db!.getColumnDouble(2);
-          final qty = db!.getColumnInt(3);
-          final createdAt = db!.getColumnText(4);
+        while (await reader.readRow()) {
+          final id = reader.getColumnInt(0);
+          final name = reader.getColumnText(1);
+          final price = reader.getColumnDouble(2);
+          final qty = reader.getColumnInt(3);
+          final createdAt = reader.getColumnText(4);
           rows.add('  #$id | $name | \$$price | qty:$qty | $createdAt');
         }
       } finally {
-        await db!.closeReader();
+        await reader.close();
       }
       if (rows.isEmpty) {
         onLog('[OK] SELECT: no rows found');
@@ -127,14 +127,14 @@ class CrudTab extends StatelessWidget {
         }
       });
 
-      await db!.executeReader('SELECT COUNT(*) FROM products');
+      final reader = await db!.executeReader('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await db!.readRow()) {
-          count = db!.getColumnInt(0);
+        if (await reader.readRow()) {
+          count = reader.getColumnInt(0);
         }
       } finally {
-        await db!.closeReader();
+        await reader.close();
       }
 
       onLog('[OK] Transaction committed: 5 rows inserted. Total products: $count');

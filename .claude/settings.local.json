@@ -32,7 +32,9 @@
       "Bash(where chromedriver:*)",
       "Bash(chromedriver:*)",
       "Bash(tasklist)",
-      "Bash(dart:*)"
+      "Bash(dart:*)",
+      "Bash(ls *.md *.yaml)",
+      "Bash(ls pubspec.* README* CHANGELOG*)"
     ]
   }
 }
