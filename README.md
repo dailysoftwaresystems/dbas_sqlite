@@ -94,7 +94,13 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite: git@github.com:dailysoftwaresystems/DBAS.SQLite.Flutter.git
+  dbas_sqlite: ^2.4.1
+```
+
+Or install with the Dart CLI:
+
+```bash
+flutter pub add dbas_sqlite
 ```
 
 ## Setup

@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.4.1 - 2026-05-05
+
+First public pub.dev release under the verified publisher
+[dailysoftwaresystems.com](https://pub.dev/publishers/dailysoftwaresystems.com).
+Functionally identical to 2.4.0 — this release exists to ship the
+build / packaging / governance fixes needed to publish.
+
+### Changed
+
+- **License**: relicensed from proprietary to **Apache 2.0**, matching
+  the sibling `DBAS.SQLite` native lib. The Apache license includes an
+  explicit patent grant, which is appropriate for a plugin that ships
+  prebuilt native binaries via FFI.
+- **README install snippet** updated to the pub.dev syntax
+  (`dbas_sqlite: ^2.4.1`) instead of the git URL.
+
+### Fixed
+
+- **macOS desktop link failure**: the macOS podspec did not declare
+  `s.libraries = 'c++'`, so consumer apps failed to link with
+  `Undefined symbols: std::__1::*, ___cxa_throw,
+  ___gxx_personality_v0`. Added the libc++ link declaration; iOS was
+  already correct.
+- **Windows desktop DLL bundling**: the `<package_name>_bundled_libraries`
+  CMake variable still used the pre-rename name, so Flutter no longer
+  saw the bundle declaration and the runner kept loading a stale DLL
+  that didn't export `GetSqliteVersion`. Renamed to match the new
+  package name.
+- **Android Gradle compile**: replaced the `org.yaml.snakeyaml.Yaml`
+  pubspec parse in `android/build.gradle` with a regex match — newer
+  Gradle versions no longer ship snakeyaml on the default classpath.
+- **AGP 9 forward-compat**: added `android.newDsl=false` to
+  `example/android/gradle.properties`. Flutter apps that depend on
+  plugins are not yet supported on AGP 9
+  ([flutter/flutter#181383](https://github.com/flutter/flutter/issues/181383)) —
+  this flag preserves the old DSL parsing so the build keeps working
+  when AGP 9 lands. Remove it once Flutter completes its AGP 9
+  migration.
+
+### Added
+
+- **`Pipeline` GitHub Actions workflow** (`.github/workflows/ci.yml`):
+  PR runs `flutter analyze` + native tests + web integration tests;
+  push-to-main with a bumped `version:` creates a GitHub release;
+  tag push triggers OIDC publish to pub.dev.
+- **`SECURITY.md`** — disclosure policy pointing security reports to
+  `security@dailysoftwaresystems.com`.
+- **`CODEOWNERS`** — every PR requires review from the DBAS dev team.
+
+### Internal
+
+- Plugin renamed across native folders: `dbas_sqlite_flutter_plugin` C++
+  classes → `dbas_sqlite_plugin`, Kotlin `DbasSqliteFlutterPlugin` →
+  `DbasSqlitePlugin`, Swift `DbasSqliteFlutterPlugin` →
+  `DbasSqlitePlugin`, podspec files renamed, Android namespace
+  `com.dailysoftwaresystems.dbas.sqlite.flutter` →
+  `com.dailysoftwaresystems.dbas.sqlite`. No public Dart API change —
+  the package name was already `dbas_sqlite` in 2.4.0.
+
 ## 2.4.0 - 2026-05-05
 
 ### Breaking Changes

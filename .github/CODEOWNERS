@@ -1,0 +1,31 @@
+# Code owners for DBAS.SQLite.Flutter.
+#
+# Every PR opened against `main` automatically requests review from the
+# team(s) listed below. When the branch protection rule on `main` has
+# "Require review from Code Owners" enabled, no merge can land without
+# at least one approval from a team member.
+#
+# Team slug — the @DBAS TL team. Display name has a space; the
+# GitHub @-mention slug uses a hyphen. Verify at
+# https://github.com/orgs/dailysoftwaresystems/teams/dbas-tl
+# and adjust if the slug differs.
+#
+# This must align with the org-level ruleset that gates approvals on
+# `main` (Settings → Code, planning, and automation → Repository rules
+# → Rulesets → ruleset #6652818). Anyone NOT on @DBAS TL or an
+# enterprise owner should be unable to bypass; CODEOWNERS only requests
+# their review and the ruleset enforces it.
+
+# Default owner for everything in the repo.
+*                                       @dailysoftwaresystems/dbas-tl
+
+# Build / release infrastructure — same owner, called out so anyone
+# scanning this file sees the publish path is gated.
+/.github/                               @dailysoftwaresystems/dbas-tl
+/scripts/                               @dailysoftwaresystems/dbas-tl
+/pubspec.yaml                           @dailysoftwaresystems/dbas-tl
+/CHANGELOG.md                           @dailysoftwaresystems/dbas-tl
+/LICENSE                                @dailysoftwaresystems/dbas-tl
+/SECURITY.md                            @dailysoftwaresystems/dbas-tl
+/ios/dbas_sqlite.podspec                @dailysoftwaresystems/dbas-tl
+/macos/dbas_sqlite.podspec              @dailysoftwaresystems/dbas-tl
