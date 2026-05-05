@@ -1,4 +1,4 @@
-name: CI
+name: Pipeline
 
 # Pipeline:
 #   - test          : pull_request → unit + web integration tests
@@ -83,10 +83,11 @@ jobs:
   # ─── ci-check: roll-up status reported back to the PR head SHA ───────
   #
   # GitHub branch protection can require a single named status — this
-  # job posts `CI / ci-check result` so the rule has one stable target
-  # regardless of how the upstream jobs evolve. `always()` ensures it
-  # runs even when `test` fails or is skipped, so the status is always
-  # published.
+  # job posts `Pipeline / ci-check result` so the rule has one stable
+  # target regardless of how the upstream jobs evolve. `always()` ensures
+  # it runs even when `test` fails or is skipped, so the status is always
+  # published. Keep the posted `context` in sync with the workflow's
+  # `name:` (the prefix before `/`) and the branch protection rule.
   ci-check:
     name: ci-check
     runs-on: ubuntu-latest
@@ -111,7 +112,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
-            -d "{\"state\":\"$STATE\",\"context\":\"CI / ci-check result\",\"description\":\"$DESC\"}"
+            -d "{\"state\":\"$STATE\",\"context\":\"Pipeline / ci-check result\",\"description\":\"$DESC\"}"
 
   # ─── Release: tag + GitHub release on main push when version bumped ──
   #
