@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.dailysoftwaresystems" "\0"
-            VALUE "FileDescription", "dbas_sqlite_flutter_example" "\0"
+            VALUE "FileDescription", "dbas_sqlite_example" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "dbas_sqlite_flutter_example" "\0"
+            VALUE "InternalName", "dbas_sqlite_example" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.dailysoftwaresystems. All rights reserved." "\0"
-            VALUE "OriginalFilename", "dbas_sqlite_flutter_example.exe" "\0"
-            VALUE "ProductName", "dbas_sqlite_flutter_example" "\0"
+            VALUE "OriginalFilename", "dbas_sqlite_example.exe" "\0"
+            VALUE "ProductName", "dbas_sqlite_example" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

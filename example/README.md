@@ -1,6 +1,6 @@
-# dbas_sqlite_flutter_example
+# dbas_sqlite_example
 
-Demonstrates how to use the dbas_sqlite_flutter plugin.
+Demonstrates how to use the dbas_sqlite plugin.
 
 ## Getting Started
 
