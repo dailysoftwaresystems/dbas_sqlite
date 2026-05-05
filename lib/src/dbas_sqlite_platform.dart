@@ -1,7 +1,7 @@
-import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
-    if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/native/dbas_sqlite_native_interface.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
+    if (dart.library.js_interop) 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// Platform dispatcher — routes per-call work to the
 /// per-`dbName` [DbasSqliteNativeInterface] delegate. Stateless: every

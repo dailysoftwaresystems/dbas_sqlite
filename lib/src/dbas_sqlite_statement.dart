@@ -4,12 +4,12 @@ import 'dart:developer' as developer;
 import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart';
 
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
-    if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_reader.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
+    if (dart.library.js_interop) 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_reader.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// A prepared SQL statement.
 ///
@@ -392,6 +392,13 @@ class DbasSqliteStatement {
     if (value is bool) return value ? 1 : 0;
     if (value is Decimal) return value.toString();
     if (value is Enum) return value.index;
+    // Blobs MUST cross the postMessage boundary as a typed-array so
+    // the JS wrapper's bindParams recognises them via
+    // `instanceof Uint8Array` and routes through bindBlob. A raw
+    // `List<int>` jsifies to a regular JS Array and gets stringified
+    // by the bindText fallback, silently corrupting the bytes.
+    if (value is Uint8List) return value;
+    if (value is List<int>) return Uint8List.fromList(value);
     return value;
   }
 

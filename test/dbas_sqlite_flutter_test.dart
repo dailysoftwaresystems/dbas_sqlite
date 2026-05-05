@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+import 'package:dbas_sqlite/dbas_sqlite.dart';
 import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as path;

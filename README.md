@@ -112,7 +112,7 @@ The worker runs inside a dedicated Web Worker with OPFS persistence. Requires a 
 ### Basic Example
 
 ```dart
-import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+import 'package:dbas_sqlite/dbas_sqlite.dart';
 
 // Get database instance
 final db = await DbasSqlite.getInstance(dbName: 'myapp.db');
@@ -121,7 +121,7 @@ final db = await DbasSqlite.getInstance(dbName: 'myapp.db');
 await db.openDb();
 
 // Create table
-await db.executeSql('''
+final createStmt = await db.prepareQuery('''
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -129,33 +129,75 @@ await db.executeSql('''
     age INTEGER
   )
 ''');
+try {
+  await createStmt.executeSql();
+} finally {
+  await createStmt.close();
+}
 
 // Insert with positional parameters
-await db.executeSql(
+final insertStmt = await db.prepareQuery(
   'INSERT INTO users (name, email, age) VALUES (?, ?, ?)',
-  params: ['John Doe', 'john@example.com', 30],
 );
+try {
+  await insertStmt.executeSql(params: ['John Doe', 'john@example.com', 30]);
+  print('Inserted user with id: ${insertStmt.getLastInsertedId()}');
+} finally {
+  await insertStmt.close();
+}
 
 // Query data
-final reader = await db.executeReader('SELECT * FROM users WHERE age > ?', params: [25]);
-while (await reader.readRow()) {
-  final name = reader.getColumnText(0);
-  final email = reader.getColumnNullableText(1);
-  final age = reader.getColumnInt(2);
-  print('$name ($email) - age: $age');
+final selectStmt = await db.prepareQuery('SELECT * FROM users WHERE age > ?');
+try {
+  final reader = await selectStmt.executeReader(params: [25]);
+  try {
+    while (await reader.readRow()) {
+      final name = reader.getColumnText(0);
+      final email = reader.getColumnNullableText(1);
+      final age = reader.getColumnInt(2);
+      print('$name ($email) - age: $age');
+    }
+  } finally {
+    await reader.close();
+  }
+} finally {
+  await selectStmt.close();
 }
-await reader.close();
 
 await db.closeDb();
+```
+
+### Statement Reuse
+
+A prepared statement can be executed many times with different params —
+the bind buffer is replayed against a fresh native handle on each call:
+
+```dart
+final stmt = await db.prepareQuery('INSERT INTO users (name) VALUES (?)');
+try {
+  for (final name in ['Alice', 'Bob', 'Carol']) {
+    await stmt.executeSql(params: [name]);
+  }
+} finally {
+  await stmt.close();
+}
 ```
 
 ### Named Parameters
 
 ```dart
-await db.executeSql(
+final stmt = await db.prepareQuery(
   'INSERT INTO users (name, email, age) VALUES (:name, :email, :age)',
-  nameParams: {'name': 'Jane Smith', 'email': 'jane@example.com', 'age': 28},
 );
+try {
+  await stmt.executeSql(nameParams: {
+    'name': 'Jane Smith',
+    'email': 'jane@example.com',
+    'age': 28,
+  });
+} finally {
+  await stmt.close();
+}
 
 // By default, extra named parameters not present in the SQL are silently
 // ignored (C#/SQLite behavior). To throw instead:
@@ -168,38 +210,58 @@ db.throwOnMissingNamedParams = true;
 import 'package:decimal/decimal.dart';
 
 // Supports Decimal, bool, DateTime, Duration, Enum and Blob
-await db.executeSql(
+final insStmt = await db.prepareQuery(
   'INSERT INTO products (name, price, active) VALUES (?, ?, ?)',
-  params: ['Widget', Decimal.parse('19.99'), true],
 );
-
-final reader = await db.executeReader('SELECT name, price, active FROM products');
-while (await reader.readRow()) {
-  final name = reader.getColumnText(0);
-  final price = reader.getColumnDecimal(1);
-  final active = reader.getColumnBool(2);
-  print('$name - \$$price (active: $active)');
+try {
+  await insStmt.executeSql(
+    params: ['Widget', Decimal.parse('19.99'), true],
+  );
+} finally {
+  await insStmt.close();
 }
-await reader.close();
+
+final selStmt = await db.prepareQuery('SELECT name, price, active FROM products');
+try {
+  final reader = await selStmt.executeReader();
+  try {
+    while (await reader.readRow()) {
+      final name = reader.getColumnText(0);
+      final price = reader.getColumnDecimal(1);
+      final active = reader.getColumnBool(2);
+      print('$name - \$$price (active: $active)');
+    }
+  } finally {
+    await reader.close();
+  }
+} finally {
+  await selStmt.close();
+}
 ```
 
 ### Transactions
 
 ```dart
 // Automatic commit/rollback
-await db.transaction((db) async {
-  await db.executeSql(
-    'INSERT INTO users (name) VALUES (?)', params: ['Alice'],
-  );
-  await db.executeSql(
-    'INSERT INTO users (name) VALUES (?)', params: ['Bob'],
-  );
+await db.transaction((tx) async {
+  final stmt = await tx.prepareQuery('INSERT INTO users (name) VALUES (?)');
+  try {
+    await stmt.executeSql(params: ['Alice']);
+    await stmt.executeSql(params: ['Bob']);
+  } finally {
+    await stmt.close();
+  }
 });
 
 // Manual control
 await db.beginTransaction();
 try {
-  await db.executeSql('INSERT INTO users (name) VALUES (?)', params: ['Alice']);
+  final stmt = await db.prepareQuery('INSERT INTO users (name) VALUES (?)');
+  try {
+    await stmt.executeSql(params: ['Alice']);
+  } finally {
+    await stmt.close();
+  }
   await db.commit();
 } catch (_) {
   await db.rollback();

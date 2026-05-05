@@ -4,8 +4,8 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart' show protected;
 import 'dbas_sqlite_native_interface.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_db.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// Base class for the native FFI app implementation.
 ///

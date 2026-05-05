@@ -65,7 +65,7 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.7"
-  dbas_sqlite_flutter:
+  dbas_sqlite:
     dependency: "direct main"
     description:
       path: ".."

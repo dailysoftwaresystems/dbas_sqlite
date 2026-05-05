@@ -1,12 +1,12 @@
 import 'dart:io';
-import 'package:dbas_sqlite_flutter/src/helpers/dbas_sqlite_platform_util.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 
-import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_app_selector.dart';
-import 'package:dbas_sqlite_flutter/src/native/stub/dbas_sqlite_native_web_stub.dart'
-    if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_web.dart';
+import 'package:dbas_sqlite/src/native/dbas_sqlite_native_app_selector.dart';
+import 'package:dbas_sqlite/src/native/stub/dbas_sqlite_native_web_stub.dart'
+    if (dart.library.js_interop) 'package:dbas_sqlite/src/native/dbas_sqlite_native_web.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -59,7 +59,7 @@ abstract class DbasSqliteNativeInterface {
     late String libAssetName;
     if (kIsWeb) {
       libAssetName = 'dbas_sqlite.js';
-      libAsset = path.join('dbas_sqlite_flutter', 'libs', libAssetName);
+      libAsset = path.join('dbas_sqlite', 'libs', libAssetName);
     }
 
     final dir = isTest ? Directory.current : await getApplicationSupportDirectory();
@@ -74,7 +74,7 @@ abstract class DbasSqliteNativeInterface {
       await dllFile.delete();
     }
 
-    libAsset = 'packages/dbas_sqlite_flutter/${libAsset.replaceAll('\\', '/')}';
+    libAsset = 'packages/dbas_sqlite/${libAsset.replaceAll('\\', '/')}';
     final buffer = await rootBundle.load(libAsset);
     await dllFile.writeAsBytes(buffer.buffer.asUint8List());
   }

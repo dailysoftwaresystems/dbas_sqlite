@@ -3,9 +3,9 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
-const _workerUrl = 'assets/packages/dbas_sqlite_flutter/web/libs/dbas_sqlite_worker.js';
+const _workerUrl = 'assets/packages/dbas_sqlite/web/libs/dbas_sqlite_worker.js';
 // Relative to the worker script location (same directory), not the page root.
 // importScripts() inside the worker resolves URLs relative to the worker URL.
 const _libUrl = 'dbas_sqlite.js';
@@ -79,7 +79,20 @@ class DbasSqliteWebPool {
       }
     }).toJS;
     _worker.onerror = ((web.Event e) {
-      final error = Exception('Web Worker error: ${e.type}');
+      // Capture the ErrorEvent's actual message / filename / lineno so
+      // worker-load failures (404 on the script URL, syntax error in
+      // the JS, COOP/COEP missing, etc.) surface a useful diagnostic
+      // instead of the generic event type 'error'.
+      String detail = e.type;
+      if (e.isA<web.ErrorEvent>()) {
+        final ev = e as web.ErrorEvent;
+        final parts = <String>[];
+        if (ev.message.isNotEmpty) parts.add(ev.message);
+        if (ev.filename.isNotEmpty) parts.add(ev.filename);
+        if (ev.lineno != 0) parts.add('line ${ev.lineno}');
+        if (parts.isNotEmpty) detail = parts.join(' @ ');
+      }
+      final error = Exception('Web Worker error: $detail');
       for (final c in _requests.values) {
         if (!c.isCompleted) c.completeError(error);
       }

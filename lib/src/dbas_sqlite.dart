@@ -3,12 +3,12 @@ import 'dart:collection';
 import 'dart:developer' as developer;
 import 'dart:io';
 
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart'
-    if (dart.library.js_interop) 'package:dbas_sqlite_flutter/src/stub/dbas_sqlite_db_stub.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_platform.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_statement.dart';
-import 'package:dbas_sqlite_flutter/src/helpers/dbas_sqlite_platform_util.dart';
-import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
+    if (dart.library.js_interop) 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_statement.dart';
+import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
+import 'package:dbas_sqlite/src/native/dbas_sqlite_native_interface.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;

@@ -8,8 +8,8 @@ import 'package:ffi/ffi.dart';
 import 'dbas_sqlite_native_app_base.dart';
 import 'dbas_sqlite_native_interface.dart';
 import 'dbas_sqlite_isolate_worker.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_db.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// Native FFI implementation for every Flutter platform except web.
 ///

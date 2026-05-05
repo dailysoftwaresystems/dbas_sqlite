@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'dbas_sqlite_native_interface.dart';
 import 'dbas_sqlite_web_pool.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// Web implementation backed by the JS pool wrapper
 /// (`web/libs/dbas_sqlite.js` + `dbas_sqlite_worker.js`). The Dart side

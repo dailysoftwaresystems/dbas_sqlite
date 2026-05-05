@@ -1,5 +1,5 @@
-import 'package:dbas_sqlite_flutter/src/native/dbas_sqlite_native_interface.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/native/dbas_sqlite_native_interface.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// Stub for unsupported native platforms. Every call throws
 /// [UnsupportedError] — the conditional export in

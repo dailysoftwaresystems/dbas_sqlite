@@ -1,4 +1,4 @@
-import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+import 'package:dbas_sqlite/dbas_sqlite.dart';
 import 'package:flutter/material.dart';
 
 import '../widgets/operation_button.dart';

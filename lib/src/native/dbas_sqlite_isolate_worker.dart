@@ -3,7 +3,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
-import 'package:dbas_sqlite_flutter/src/dbas_sqlite_db.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_db.dart';
 
 /// Init message sent to a worker isolate at spawn time.
 class WorkerInitMessage {

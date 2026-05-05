@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:dbas_sqlite_flutter_example/main.dart';
+import 'package:dbas_sqlite_example/main.dart';
 
 void main() {
   testWidgets('App renders with tabs', (WidgetTester tester) async {
