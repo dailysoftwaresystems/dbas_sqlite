@@ -1,0 +1,216 @@
+name: Pipeline
+
+# Pipeline:
+#   - test          : pull_request → unit + web integration tests
+#   - release       : push to main (version bumped) → GitHub release + tag
+#   - publish-pubdev: tag push (X.Y.Z) → pub.dev publish via OIDC
+#
+# The chain hop from `release` → `publish-pubdev` is the GitHub App
+# token: it (unlike GITHUB_TOKEN) is allowed to trigger downstream
+# workflow runs. So `gh release create X.Y.Z` from `release` fires
+# the tag-push event that gates `publish-pubdev`.
+#
+# The split is required by pub.dev: automated publishing rejects
+# OIDC tokens whose `ref` claim isn't `refs/tags/...`. We can't
+# publish from the main-push run, so we tag first and publish on
+# the tag.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['*.*.*']
+
+concurrency:
+  # Per-event group so the PR run, the main-push release run, and
+  # the tag-push publish run don't cancel each other (different
+  # pipelines). Within an event, cancel superseded runs on the
+  # same ref.
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  test:
+    name: Build + Flutter tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.41.4'
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Get example dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Analyze code
+        run: flutter analyze
+
+      - name: Run native tests
+        run: flutter test test/
+
+      - name: Start ChromeDriver
+        run: |
+          chromedriver --port=4444 &
+          echo "CHROMEDRIVER_PID=$!" >> $GITHUB_ENV
+
+      - name: Run web integration tests
+        working-directory: example
+        timeout-minutes: 10
+        run: |
+          flutter drive \
+            --driver=test_driver/integration_test.dart \
+            --target=integration_test/dbas_sqlite_web_test.dart \
+            -d web-server \
+            --browser-name=chrome
+
+      - name: Stop ChromeDriver
+        if: always()
+        run: kill $CHROMEDRIVER_PID || true
+
+  # ─── ci-check: roll-up status reported back to the PR head SHA ───────
+  #
+  # GitHub branch protection can require a single named status — this
+  # job posts `Pipeline / ci-check result` so the rule has one stable
+  # target regardless of how the upstream jobs evolve. `always()` ensures
+  # it runs even when `test` fails or is skipped, so the status is always
+  # published. Keep the posted `context` in sync with the workflow's
+  # `name:` (the prefix before `/`) and the branch protection rule.
+  ci-check:
+    name: ci-check
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    steps:
+      - name: Report status result
+        run: |
+          set -e
+          FAIL=0
+          [ "${{ needs.test.result }}" = "success" ] || FAIL=1
+
+          if [ "$FAIL" = "0" ]; then
+            STATE="success"
+            DESC="CI check passed"
+          else
+            STATE="failure"
+            DESC="CI check failed"
+          fi
+
+          curl -s --fail-with-body -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+            -d "{\"state\":\"$STATE\",\"context\":\"Pipeline / ci-check result\",\"description\":\"$DESC\"}"
+
+  # ─── Release: tag + GitHub release on main push when version bumped ──
+  #
+  # Runs ONLY on push to main. Reads the package version from
+  # pubspec.yaml and tags / releases that version. Skips silently if
+  # the version: line didn't move between github.event.before and
+  # github.sha — that's the gate that turns regular merges into
+  # releases only when a version bump landed.
+  #
+  # The App Token is used for both checkout and `gh release create`
+  # because, unlike GITHUB_TOKEN, App-Token-driven tag pushes DO
+  # fire downstream workflow runs — that's how `publish-pubdev`
+  # gets triggered.
+  release:
+    name: GitHub release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.DSS_BOTS_APP_ID }}
+          private-key: ${{ secrets.DSS_BOTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: DBAS.SQLite.Flutter
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Read version from pubspec.yaml
+        run: |
+          version=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2 | tr -d '\r')
+          echo "Building version: $version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Detect version change
+        id: detect
+        run: |
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            # First push to the branch — treat as changed.
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          before_version=$(git show "${{ github.event.before }}:pubspec.yaml" 2>/dev/null \
+                           | grep '^version:' | cut -d ' ' -f 2 | tr -d '\r' || true)
+          if [ "$before_version" = "${{ env.VERSION }}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged ($before_version); skipping release."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version bumped: $before_version → ${{ env.VERSION }}"
+          fi
+
+      - name: Create GitHub release
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if gh release view "${{ env.VERSION }}" > /dev/null 2>&1; then
+            echo "Release ${{ env.VERSION }} already exists, skipping."
+          else
+            gh release create "${{ env.VERSION }}" \
+              --title "Release ${{ env.VERSION }}" \
+              --notes "Release ${{ env.VERSION }}"
+          fi
+
+  # ─── Pub.dev: tag-push trigger → OIDC publish ────────────────────────
+  #
+  # Runs ONLY on tag pushes matching X.Y.Z. The GitHub App-Token-
+  # created tag from the `release` job above is what fires this.
+  #
+  # Auth to pub.dev is OIDC (id-token: write + environment: pub.dev).
+  # No long-lived pub.dev credentials are stored anywhere — pub.dev's
+  # automated-publishing config validates the OIDC token's repository,
+  # ref (must be refs/tags/X.Y.Z), and environment claims.
+  publish-pubdev:
+    name: Publish to pub.dev
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: pub.dev
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.41.4'
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Publish to pub.dev
+        run: flutter pub publish --force

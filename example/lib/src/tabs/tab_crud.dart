@@ -1,4 +1,4 @@
-import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+import 'package:dbas_sqlite/dbas_sqlite.dart';
 import 'package:flutter/material.dart';
 
 import '../widgets/operation_button.dart';
@@ -22,21 +22,26 @@ class CrudTab extends StatelessWidget {
   Future<void> _select() => runOp(() async {
     onLog('[...] Running SELECT...');
     try {
-      final reader = await db!.executeReader(
+      final stmt = await db!.prepareQuery(
         'SELECT id, name, price, quantity, created_at FROM products ORDER BY id DESC LIMIT 10',
       );
       final rows = <String>[];
       try {
-        while (await reader.readRow()) {
-          final id = reader.getColumnInt(0);
-          final name = reader.getColumnText(1);
-          final price = reader.getColumnDouble(2);
-          final qty = reader.getColumnInt(3);
-          final createdAt = reader.getColumnText(4);
-          rows.add('  #$id | $name | \$$price | qty:$qty | $createdAt');
+        final reader = await stmt.executeReader();
+        try {
+          while (await reader.readRow()) {
+            final id = reader.getColumnInt(0);
+            final name = reader.getColumnText(1);
+            final price = reader.getColumnDouble(2);
+            final qty = reader.getColumnInt(3);
+            final createdAt = reader.getColumnText(4);
+            rows.add('  #$id | $name | \$$price | qty:$qty | $createdAt');
+          }
+        } finally {
+          await reader.close();
         }
       } finally {
-        await reader.close();
+        await stmt.close();
       }
       if (rows.isEmpty) {
         onLog('[OK] SELECT: no rows found');
@@ -55,12 +60,18 @@ class CrudTab extends StatelessWidget {
     onLog('[...] Inserting with positional params...');
     try {
       final name = 'Widget-${DateTime.now().millisecondsSinceEpoch % 10000}';
-      await db!.executeSql(
+      final stmt = await db!.prepareQuery(
         'INSERT INTO products (name, price, quantity, created_at) VALUES (?, ?, ?, ?)',
-        params: [name, 9.99, 10, DateTime.now().toIso8601String()],
       );
-      final id = db!.getLastInsertedId();
-      onLog('[OK] Inserted "$name" with id=$id (positional params)');
+      try {
+        await stmt.executeSql(
+          params: [name, 9.99, 10, DateTime.now().toIso8601String()],
+        );
+        final id = stmt.getLastInsertedId();
+        onLog('[OK] Inserted "$name" with id=$id (positional params)');
+      } finally {
+        await stmt.close();
+      }
     } catch (e) {
       onLog('[ERROR] INSERT (positional): $e');
     }
@@ -70,17 +81,23 @@ class CrudTab extends StatelessWidget {
     onLog('[...] Inserting with named params...');
     try {
       final name = 'Gadget-${DateTime.now().millisecondsSinceEpoch % 10000}';
-      await db!.executeSql(
+      final stmt = await db!.prepareQuery(
         'INSERT INTO products (name, price, quantity, created_at) VALUES (:name, :price, :quantity, :created_at)',
-        nameParams: {
-          'name': name,
-          'price': 24.50,
-          'quantity': 5,
-          'created_at': DateTime.now().toIso8601String(),
-        },
       );
-      final id = db!.getLastInsertedId();
-      onLog('[OK] Inserted "$name" with id=$id (named params)');
+      try {
+        await stmt.executeSql(
+          nameParams: {
+            'name': name,
+            'price': 24.50,
+            'quantity': 5,
+            'created_at': DateTime.now().toIso8601String(),
+          },
+        );
+        final id = stmt.getLastInsertedId();
+        onLog('[OK] Inserted "$name" with id=$id (named params)');
+      } finally {
+        await stmt.close();
+      }
     } catch (e) {
       onLog('[ERROR] INSERT (named): $e');
     }
@@ -89,10 +106,15 @@ class CrudTab extends StatelessWidget {
   Future<void> _update() => runOp(() async {
     onLog('[...] Running UPDATE...');
     try {
-      final affected = await db!.executeSql(
+      final stmt = await db!.prepareQuery(
         'UPDATE products SET price = price * 1.1 WHERE id = (SELECT MAX(id) FROM products)',
       );
-      onLog('[OK] UPDATE: $affected row(s) affected (price +10% on last product)');
+      try {
+        final affected = await stmt.executeSql();
+        onLog('[OK] UPDATE: $affected row(s) affected (price +10% on last product)');
+      } finally {
+        await stmt.close();
+      }
     } catch (e) {
       onLog('[ERROR] UPDATE: $e');
     }
@@ -101,10 +123,15 @@ class CrudTab extends StatelessWidget {
   Future<void> _delete() => runOp(() async {
     onLog('[...] Running DELETE...');
     try {
-      final affected = await db!.executeSql(
+      final stmt = await db!.prepareQuery(
         'DELETE FROM products WHERE id = (SELECT MIN(id) FROM products)',
       );
-      onLog('[OK] DELETE: $affected row(s) deleted (oldest product)');
+      try {
+        final affected = await stmt.executeSql();
+        onLog('[OK] DELETE: $affected row(s) deleted (oldest product)');
+      } finally {
+        await stmt.close();
+      }
     } catch (e) {
       onLog('[ERROR] DELETE: $e');
     }
@@ -114,27 +141,36 @@ class CrudTab extends StatelessWidget {
     onLog('[...] Running transactioned bulk insert...');
     try {
       await db!.transaction((tx) async {
-        for (int i = 1; i <= 5; i++) {
-          await tx.executeSql(
-            'INSERT INTO products (name, price, quantity, created_at) VALUES (?, ?, ?, ?)',
-            params: [
-              'Batch-$i',
-              (i * 3.33),
-              i * 10,
-              DateTime.now().toIso8601String(),
-            ],
-          );
+        final stmt = await tx.prepareQuery(
+          'INSERT INTO products (name, price, quantity, created_at) VALUES (?, ?, ?, ?)',
+        );
+        try {
+          for (int i = 1; i <= 5; i++) {
+            await stmt.executeSql(
+              params: [
+                'Batch-$i',
+                (i * 3.33),
+                i * 10,
+                DateTime.now().toIso8601String(),
+              ],
+            );
+          }
+        } finally {
+          await stmt.close();
         }
       });
 
-      final reader = await db!.executeReader('SELECT COUNT(*) FROM products');
+      final countStmt = await db!.prepareQuery('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await reader.readRow()) {
-          count = reader.getColumnInt(0);
+        final reader = await countStmt.executeReader();
+        try {
+          if (await reader.readRow()) count = reader.getColumnInt(0);
+        } finally {
+          await reader.close();
         }
       } finally {
-        await reader.close();
+        await countStmt.close();
       }
 
       onLog('[OK] Transaction committed: 5 rows inserted. Total products: $count');

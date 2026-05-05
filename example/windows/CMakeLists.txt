@@ -1,10 +1,10 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14...3.27)
-project(dbas_sqlite_flutter_example LANGUAGES CXX)
+project(dbas_sqlite_example LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "dbas_sqlite_flutter_example")
+set(BINARY_NAME "dbas_sqlite_example")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -53,7 +53,7 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 # Enable the test target.
-set(include_dbas_sqlite_flutter_tests TRUE)
+set(include_dbas_sqlite_tests TRUE)
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.

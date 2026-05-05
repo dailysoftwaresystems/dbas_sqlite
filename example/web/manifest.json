@@ -1,11 +1,11 @@
 {
-    "name": "dbas_sqlite_flutter_example",
-    "short_name": "dbas_sqlite_flutter_example",
+    "name": "dbas_sqlite_example",
+    "short_name": "dbas_sqlite_example",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "Demonstrates how to use the dbas_sqlite_flutter plugin.",
+    "description": "Demonstrates how to use the dbas_sqlite plugin.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -1,7 +1,11 @@
-def pubspec = new org.yaml.snakeyaml.Yaml().load(new File("$project.projectDir/../pubspec.yaml").text)
+// Parse `version:` out of pubspec.yaml without pulling in snakeyaml — newer
+// Gradle versions no longer ship it on the default classpath, so importing
+// `org.yaml.snakeyaml.Yaml` fails with "unable to resolve class".
+def pubspecText = new File("$project.projectDir/../pubspec.yaml").text
+def versionMatcher = pubspecText =~ /(?m)^version:\s*(\S+)/
 
-group = "com.dailysoftwaresystems.dbas.sqlite.flutter"
-version = pubspec['version']
+group = "com.dailysoftwaresystems.dbas.sqlite"
+version = versionMatcher ? versionMatcher[0][1] : '0.0.0'
 
 buildscript {
     ext.kotlin_version = "2.1.0"
@@ -27,7 +31,7 @@ apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
 android {
-    namespace = "com.dailysoftwaresystems.dbas.sqlite.flutter"
+    namespace = "com.dailysoftwaresystems.dbas.sqlite"
 
     compileSdk = 35
 

@@ -1,12 +1,23 @@
 $ErrorActionPreference = "Stop"
 
-# Check defined Github token
-if (-not $env:GITHUB_TOKEN -or [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
-    Write-Error "❌ Environment variable GITHUB_TOKEN is not defined."
+# Verify GitHub CLI is installed
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    Write-Error "❌ GitHub CLI (gh) is not installed. Install from https://cli.github.com/"
     exit 1
 }
 
-$GitHubToken = $env:GITHUB_TOKEN
+# Verify the user is authenticated
+gh auth status *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "❌ Not authenticated with GitHub. Run 'gh auth login' first."
+    exit 1
+}
+
+$GitHubToken = (gh auth token).Trim()
+if ([string]::IsNullOrWhiteSpace($GitHubToken)) {
+    Write-Error "❌ Failed to retrieve GitHub token from gh CLI."
+    exit 1
+}
 $REPO = "dailysoftwaresystems/DBAS.SQLite"
 $BASE_URL = "https://api.github.com/repos/$REPO/contents/dbas/dist"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path

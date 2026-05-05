@@ -1,9 +1,12 @@
-add_library(dbas_sqlite STATIC IMPORTED GLOBAL)
-set_target_properties(dbas_sqlite PROPERTIES
+add_library(dbas_sqlite_native STATIC IMPORTED GLOBAL)
+set_target_properties(dbas_sqlite_native PROPERTIES
     IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/dbas_sqlite.xcframework/macos-arm64_x86_64/dbas_sqlite.a"
 )
 
-target_link_libraries(dbas_sqlite_flutter PRIVATE dbas_sqlite)
+# `dbas_sqlite` is the plugin target Flutter injects (matches `name:` in
+# pubspec.yaml). Renamed the imported static lib above to `dbas_sqlite_native`
+# so it doesn't collide with the Flutter-injected plugin target.
+target_link_libraries(dbas_sqlite PRIVATE dbas_sqlite_native)
 
 # --- Automatically copy SQLite DYLIB after build ---
 if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")

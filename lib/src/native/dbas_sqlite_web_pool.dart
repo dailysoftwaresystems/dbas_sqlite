@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:js_interop';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
-import 'dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
-const _workerUrl = 'assets/packages/dbas_sqlite_flutter/web/libs/dbas_sqlite_worker.js';
+const _workerUrl = 'assets/packages/dbas_sqlite/web/libs/dbas_sqlite_worker.js';
 // Relative to the worker script location (same directory), not the page root.
 // importScripts() inside the worker resolves URLs relative to the worker URL.
 const _libUrl = 'dbas_sqlite.js';
@@ -79,7 +80,20 @@ class DbasSqliteWebPool {
       }
     }).toJS;
     _worker.onerror = ((web.Event e) {
-      final error = Exception('Web Worker error: ${e.type}');
+      // Capture the ErrorEvent's actual message / filename / lineno so
+      // worker-load failures (404 on the script URL, syntax error in
+      // the JS, COOP/COEP missing, etc.) surface a useful diagnostic
+      // instead of the generic event type 'error'.
+      String detail = e.type;
+      if (e.isA<web.ErrorEvent>()) {
+        final ev = e as web.ErrorEvent;
+        final parts = <String>[];
+        if (ev.message.isNotEmpty) parts.add(ev.message);
+        if (ev.filename.isNotEmpty) parts.add(ev.filename);
+        if (ev.lineno != 0) parts.add('line ${ev.lineno}');
+        if (parts.isNotEmpty) detail = parts.join(' @ ');
+      }
+      final error = Exception('Web Worker error: $detail');
       for (final c in _requests.values) {
         if (!c.isCompleted) c.completeError(error);
       }
@@ -95,9 +109,12 @@ class DbasSqliteWebPool {
           }.jsify() as _JSObj;
           entry.value(errMsg);
         } catch (handlerError) {
-          // ignore: avoid_print
-          print('DbasSqliteWebPool: failed to propagate worker crash to '
-              'stream handler ${entry.key}: $handlerError');
+          developer.log(
+            'DbasSqliteWebPool: failed to propagate worker crash to '
+            'stream handler ${entry.key}',
+            name: 'dbas_sqlite.DbasSqliteWebPool',
+            error: handlerError,
+          );
         }
       }
     }).toJS;
@@ -176,10 +193,20 @@ class DbasSqliteWebPool {
       final resultProp = jsData['result'];
       if (resultProp != null && !resultProp.isUndefinedOrNull) {
         final jsResult = resultProp as _JSObj;
-        completer.complete(<String, dynamic>{
+        final out = <String, dynamic>{
           'affectedRows': _jsToInt(jsResult['affectedRows']),
           'lastInsertId': _jsToInt(jsResult['lastInsertId']),
-        });
+        };
+        // Propagate `rows` if the JS worker included it (current
+        // bundled `dbas_sqlite_worker.js` v4.3.6 doesn't, but a
+        // future build that supports SELECT through pool.exec will,
+        // and the in-transaction read path on web depends on it).
+        final rowsProp = jsResult['rows'];
+        if (rowsProp != null && !rowsProp.isUndefinedOrNull) {
+          final dartified = (rowsProp as JSObject).dartify();
+          if (dartified is List) out['rows'] = dartified;
+        }
+        completer.complete(out);
       } else {
         completer.complete({'affectedRows': 0, 'lastInsertId': 0});
       }
@@ -438,8 +465,11 @@ class DbasSqliteWebPool {
       try {
         reader.releaseLock();
       } catch (e) {
-        // ignore: avoid_print
-        print('DbasSqliteWebPool: releaseLock failed: $e');
+        developer.log(
+          'DbasSqliteWebPool: releaseLock failed',
+          name: 'dbas_sqlite.DbasSqliteWebPool',
+          error: e,
+        );
       }
     }
     return builder.toBytes();
@@ -468,15 +498,45 @@ class DbasSqliteWebPool {
   /// Close the worker and release resources.
   Future<void> close() async {
     if (_closed) return;
-    _pools.remove(dbName);
-    try {
-      await send('close');
-    } catch (e) {
-      // ignore: avoid_print
-      print('DbasSqliteWebPool: graceful close failed for "$dbName": $e');
-    }
+    // Flip the flag synchronously BEFORE awaiting the graceful close so
+    // any concurrent send() invocation rejects immediately instead of
+    // queueing a request whose response will never arrive once we
+    // terminate the worker below.
     _closed = true;
+    _pools.remove(dbName);
+
+    // Post the 'close' message directly (bypassing send() which now
+    // throws on _closed) and await the response inline.
+    final id = _nextId++;
+    final completer = Completer<dynamic>();
+    _requests[id] = completer;
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'close',
+        'payload': <String, dynamic>{},
+      }.jsify());
+      await completer.future;
+    } catch (e) {
+      developer.log(
+        'DbasSqliteWebPool: graceful close failed for "$dbName"',
+        name: 'dbas_sqlite.DbasSqliteWebPool',
+        error: e,
+      );
+    } finally {
+      _requests.remove(id);
+    }
+
     _worker.terminate();
+
+    // After terminate, any still-pending completers will never receive
+    // a response. Reject them so callers don't hang forever.
+    final closedErr = StateError('Pool closed for "$dbName"');
+    for (final c in _requests.values) {
+      if (!c.isCompleted) c.completeError(closedErr);
+    }
+    _requests.clear();
+    _streamHandlers.clear();
   }
 
   static void removePool(String dbName) {
@@ -487,13 +547,23 @@ class DbasSqliteWebPool {
 // ── WebQueryBuffer ─────────────────────────────────────────────────────
 
 /// Buffered row data for cursor-based reading from query results.
+///
+/// Column metadata caveat: the bundled `dbas_sqlite.js` (`runQuery`)
+/// returns rows as flat dicts only — column names are recoverable from
+/// `rows.first.keys` when at least one row is present, but an empty
+/// result set yields zero column names (and so `getColumnCount() == 0`,
+/// `getColumnName(i) == ''`). Callers that need column metadata for
+/// empty result sets must either: (a) supply [explicitColumnNames] from
+/// out-of-band knowledge of the SELECT shape, or (b) wait until the
+/// underlying JS protocol grows column-metadata support.
 class WebQueryBuffer {
   final List<Map<String, dynamic>> rows;
   final List<String> columnNames;
   int currentRowIndex = -1;
 
-  WebQueryBuffer(this.rows)
-      : columnNames = rows.isNotEmpty ? rows.first.keys.toList() : [];
+  WebQueryBuffer(this.rows, {List<String>? explicitColumnNames})
+      : columnNames = explicitColumnNames ??
+            (rows.isNotEmpty ? rows.first.keys.toList() : const []);
 
   bool moveNext() {
     currentRowIndex++;

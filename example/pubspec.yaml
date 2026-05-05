@@ -1,5 +1,5 @@
-name: dbas_sqlite_flutter_example
-description: "Demonstrates how to use the dbas_sqlite_flutter plugin."
+name: dbas_sqlite_example
+description: "Demonstrates how to use the dbas_sqlite plugin."
 version: 1.0.0
 homepage: https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter
 publish_to: 'none'
@@ -11,7 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   decimal: ^3.2.4
-  dbas_sqlite_flutter:
+  dbas_sqlite:
     path: ../
 
 dev_dependencies:

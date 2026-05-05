@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-pod lib lint dbas_sqlite_flutter.podspec --verbose
+pod lib lint dbas_sqlite.podspec --verbose
 
 xcodebuild -workspace TestApp.xcworkspace \
   -scheme TestApp \

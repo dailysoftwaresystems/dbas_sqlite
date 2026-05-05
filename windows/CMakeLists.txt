@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.14...3.27)
 
 # Project-level configuration.
-set(PROJECT_NAME "dbas_sqlite_flutter")
+set(PROJECT_NAME "dbas_sqlite")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
@@ -14,19 +14,19 @@ cmake_policy(VERSION 3.14...3.27)
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed
-set(PLUGIN_NAME "dbas_sqlite_flutter_plugin")
+set(PLUGIN_NAME "dbas_sqlite_plugin")
 
 # Any new source files that you add to the plugin should be added here.
 list(APPEND PLUGIN_SOURCES
-  "dbas_sqlite_flutter_plugin.cpp"
-  "dbas_sqlite_flutter_plugin.h"
+  "dbas_sqlite_plugin.cpp"
+  "dbas_sqlite_plugin.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
 # on PLUGIN_NAME above).
 add_library(${PLUGIN_NAME} SHARED
-  "include/dbas_sqlite_flutter/dbas_sqlite_flutter_plugin_c_api.h"
-  "dbas_sqlite_flutter_plugin_c_api.cpp"
+  "include/dbas_sqlite/dbas_sqlite_plugin_c_api.h"
+  "dbas_sqlite_plugin_c_api.cpp"
   ${PLUGIN_SOURCES}
 )
 
@@ -69,7 +69,9 @@ add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
 )
 
 # List of absolute paths to libraries that should be bundled with the plugin.
-set(dbas_sqlite_flutter_bundled_libraries
+# Flutter looks up bundled libraries via `<package_name>_bundled_libraries`
+# in the parent scope — keep this name in sync with `name:` in pubspec.yaml.
+set(dbas_sqlite_bundled_libraries
   "${CMAKE_CURRENT_SOURCE_DIR}/libs/${ARCH}/dbas_sqlite.dll"
   PARENT_SCOPE
 )
@@ -99,7 +101,7 @@ FetchContent_MakeAvailable(googletest)
 # The plugin's C API is not very useful for unit testing, so build the sources
 # directly into the test binary rather than using the DLL.
 add_executable(${TEST_RUNNER}
-  test/dbas_sqlite_flutter_plugin_test.cpp
+  test/dbas_sqlite_plugin_test.cpp
   ${PLUGIN_SOURCES}
 )
 apply_standard_settings(${TEST_RUNNER})

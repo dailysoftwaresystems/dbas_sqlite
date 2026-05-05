@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+import 'package:dbas_sqlite/dbas_sqlite.dart';
 import 'package:flutter/material.dart';
 
 import '../widgets/operation_button.dart';
@@ -48,14 +48,17 @@ class DbOpsTab extends StatelessWidget {
       final carrier = await DbasSqlite.getInstance(dbName: 'attached.db');
       final attached = await carrier.attachDb(bytes);
 
-      final reader = await attached.executeReader('SELECT COUNT(*) FROM products');
+      final stmt = await attached.prepareQuery('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await reader.readRow()) {
-          count = reader.getColumnInt(0);
+        final reader = await stmt.executeReader();
+        try {
+          if (await reader.readRow()) count = reader.getColumnInt(0);
+        } finally {
+          await reader.close();
         }
       } finally {
-        await reader.close();
+        await stmt.close();
       }
 
       await attached.closeDb();
@@ -76,14 +79,17 @@ class DbOpsTab extends StatelessWidget {
       final carrier = await DbasSqlite.getInstance(dbName: 'streamed.db');
       final streamed = await carrier.attachStreamDb(stream);
 
-      final reader = await streamed.executeReader('SELECT COUNT(*) FROM products');
+      final stmt = await streamed.prepareQuery('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await reader.readRow()) {
-          count = reader.getColumnInt(0);
+        final reader = await stmt.executeReader();
+        try {
+          if (await reader.readRow()) count = reader.getColumnInt(0);
+        } finally {
+          await reader.close();
         }
       } finally {
-        await reader.close();
+        await stmt.close();
       }
 
       await streamed.closeDb();
@@ -111,14 +117,17 @@ class DbOpsTab extends StatelessWidget {
       final copy = await DbasSqlite.getInstance(dbName: 'example_copy.db');
       await copy.openDb();
 
-      final reader = await copy.executeReader('SELECT COUNT(*) FROM products');
+      final stmt = await copy.prepareQuery('SELECT COUNT(*) FROM products');
       int count = 0;
       try {
-        if (await reader.readRow()) {
-          count = reader.getColumnInt(0);
+        final reader = await stmt.executeReader();
+        try {
+          if (await reader.readRow()) count = reader.getColumnInt(0);
+        } finally {
+          await reader.close();
         }
       } finally {
-        await reader.close();
+        await stmt.close();
       }
 
       await copy.closeDb();

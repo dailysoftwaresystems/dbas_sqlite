@@ -2,6 +2,158 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.4.1 - 2026-05-05
+
+First public pub.dev release under the verified publisher
+[dailysoftwaresystems.com](https://pub.dev/publishers/dailysoftwaresystems.com).
+Functionally identical to 2.4.0 — this release exists to ship the
+build / packaging / governance fixes needed to publish.
+
+### Changed
+
+- **License**: relicensed from proprietary to **Apache 2.0**, matching
+  the sibling `DBAS.SQLite` native lib. The Apache license includes an
+  explicit patent grant, which is appropriate for a plugin that ships
+  prebuilt native binaries via FFI.
+- **README install snippet** updated to the pub.dev syntax
+  (`dbas_sqlite: ^2.4.1`) instead of the git URL.
+
+### Fixed
+
+- **macOS desktop link failure**: the macOS podspec did not declare
+  `s.libraries = 'c++'`, so consumer apps failed to link with
+  `Undefined symbols: std::__1::*, ___cxa_throw,
+  ___gxx_personality_v0`. Added the libc++ link declaration; iOS was
+  already correct.
+- **Windows desktop DLL bundling**: the `<package_name>_bundled_libraries`
+  CMake variable still used the pre-rename name, so Flutter no longer
+  saw the bundle declaration and the runner kept loading a stale DLL
+  that didn't export `GetSqliteVersion`. Renamed to match the new
+  package name.
+- **Android Gradle compile**: replaced the `org.yaml.snakeyaml.Yaml`
+  pubspec parse in `android/build.gradle` with a regex match — newer
+  Gradle versions no longer ship snakeyaml on the default classpath.
+- **AGP 9 forward-compat**: added `android.newDsl=false` to
+  `example/android/gradle.properties`. Flutter apps that depend on
+  plugins are not yet supported on AGP 9
+  ([flutter/flutter#181383](https://github.com/flutter/flutter/issues/181383)) —
+  this flag preserves the old DSL parsing so the build keeps working
+  when AGP 9 lands. Remove it once Flutter completes its AGP 9
+  migration.
+
+### Added
+
+- **`Pipeline` GitHub Actions workflow** (`.github/workflows/ci.yml`):
+  PR runs `flutter analyze` + native tests + web integration tests;
+  push-to-main with a bumped `version:` creates a GitHub release;
+  tag push triggers OIDC publish to pub.dev.
+- **`SECURITY.md`** — disclosure policy pointing security reports to
+  `security@dailysoftwaresystems.com`.
+- **`CODEOWNERS`** — every PR requires review from the DBAS dev team.
+
+### Internal
+
+- Plugin renamed across native folders: `dbas_sqlite_flutter_plugin` C++
+  classes → `dbas_sqlite_plugin`, Kotlin `DbasSqliteFlutterPlugin` →
+  `DbasSqlitePlugin`, Swift `DbasSqliteFlutterPlugin` →
+  `DbasSqlitePlugin`, podspec files renamed, Android namespace
+  `com.dailysoftwaresystems.dbas.sqlite.flutter` →
+  `com.dailysoftwaresystems.dbas.sqlite`. No public Dart API change —
+  the package name was already `dbas_sqlite` in 2.4.0.
+
+## 2.4.0 - 2026-05-05
+
+### Breaking Changes
+
+- **Package renamed from `dbas_sqlite_flutter` to `dbas_sqlite`**: update your imports and pubspec dependency. The library export path stays the same — `package:dbas_sqlite/dbas_sqlite.dart`.
+- **`db.executeSql(...)`, `db.executeReader(...)` and `db.getLastInsertedId()` removed**. Replaced by an explicit `DbasSqliteStatement` returned from `db.prepareQuery(sql)`. The statement owns parameter binding and execution; `getAffectedRows` / `getLastInsertedId` / `getLastError` move from the database to the statement (per-statement, race-free under concurrent inserts).
+- `DbasSqliteReader` column accessors are unchanged from v2.3.x — only the path that produces a reader is new.
+
+### Added
+
+- **`DbasSqliteStatement`**: prepared statement object with fluent positional and named bind methods, `executeSql` / `executeReader` execution modes, per-statement `getAffectedRows` / `getLastInsertedId` / `getLastError`, and `close`. The bind buffer survives a failed execute so the caller can fix one slot and retry.
+- **Multiple statements + readers per database**: the upgraded native lib lets multiple prepared statements live on a single connection; on Dart, two statements with overlapping `executeReader` calls each get their own pool slot and run in parallel.
+- **Multi-isolate FFI worker pool**: replaces the single worker isolate. Worker count auto-floors to `max(workerPoolSize, readerPoolSize + 2)` so blocking pool acquires can never starve concurrent releases. Dead workers are removed from the dispatch rotation; dispatch is prefer-free over round-robin.
+- **`PoolAcquireReaderBlocking` integration**: `executeReader` blocks up to `DbasSqlite.kPoolAcquireTimeoutMs` (default 30 s) for a free pool slot instead of silently falling back to the writer. On timeout, throws `TimeoutException` with a clear message.
+- **New utility methods on `DbasSqlite`**: `getSqliteVersion`, `getTotalChanges`, `getDbFileName`, `setBusyTimeout`, `enableWal`.
+- **Web in-transaction reads** route through `pool.exec` (writer worker, EXCLUSIVE MRSW fence) so reads observe in-flight transactional state.
+- **Web pool dead-state surfacing**: when the JS pool can't return rows for an in-transaction SELECT (current bundled worker), the Dart side throws a clear `UnsupportedError` instead of silently returning empty.
+- **Opaque FFI structs**: `DbasSqliteDbStruct` and `DbasSqlitePoolStruct` are now `Opaque {}`. The native C lib has changed layout across versions; treating the structs as opaque eliminates the silent-misread risk and aligns with the C header's stated ABI policy.
+- **15 new tests** covering: counter cache after reader auto-close, column metadata before first row, bind error rc surfacing, bind buffer preservation on failure, `setBusyTimeout` termination + busy-reader contract, multi-statement concurrency, statement reuse, per-statement state isolation, and forgotten-statement cleanup on `closeDb`.
+
+### Changed
+
+- **`prepareQuery`** at the platform layer now returns `({int handle, int columnCount, List<String> columnNames})` so column metadata is available to the reader BEFORE the first `readRow` call.
+- **Per-stmt counters are read BEFORE finalize** in the reader's onClose closure. Reading them after finalize would always return -1 (stale-handle sentinel).
+- **Bind methods at the platform layer return `Future<int>`**; the FFI variant awaits the worker dispatch so bind errors (SQLITE_RANGE / SQLITE_TOOBIG / SQLITE_NOMEM / stale handle) propagate to the caller instead of being silently swallowed.
+- **`closeDb` cleanup discipline**: tracked statements are closed first, then the pool is force-drained via `ClosePool` (defensive), then on the single-connection path `CloseDb` is called and any returned `SQLITE_BUSY` raises a loud `StateError` instead of silent leak.
+- **`rollback`** now wraps a failed `ROLLBACK` in a `StateError` and rethrows so callers know the C-side autocommit state may be inconsistent — instead of silently clearing `_isInTransaction`.
+- **`dropDb`** now attempts every deletion (`.db`, `-wal`, `-shm`, `-journal`) and aggregates failures into a single `FileSystemException` so partial cleanup is impossible.
+- **`DbasSqliteReader.close()`** caches its close future so concurrent close calls (auto-close on `DONE` + explicit close) all observe the same completion instead of one returning early while cleanup is still mid-flight.
+- **`DbasSqliteReader.readRow()`** error-path reads `getLastStmtError(handle)` (per-stmt) instead of `getLastDbError(conn)` (connection-scoped) — fixes a v2.3.x latent bug where errors from one statement's step could be masked by another's.
+- **Web `enableWal`** now actively verifies via `PRAGMA journal_mode` instead of a silent no-op.
+
+### Removed
+
+- **`setWriteMode` / `beginTransactionLease` / `endTransactionLease`** indirection on `DbasSqliteNativeInterface` and its forwarders. Direct routing through `pool.exec` / `pool.query` makes them obsolete.
+- **`DbasSqliteNativeApp` IO/AOT variant** (`dbas_sqlite_native_app_io.dart`): the conditional export selector always picked the FFI variant on every platform that has `dart.library.ffi`, which is every Flutter target except web. The IO/AOT variant was dead code; removed.
+- **Old `lib/src/native/dbas_sqlite_row_cache.dart`**: relocated to `lib/src/dbas_sqlite_row_cache.dart`. The cache is now an owned-by-reader concern, not a native-internal concern. Per-stmt counter / lastError fields removed from `RowData` since they live on `DbasSqliteStatement`.
+
+### Migration Guide
+
+```dart
+// Before (2.3.x)
+import 'package:dbas_sqlite_flutter/dbas_sqlite.dart';
+
+final affected = await db.executeSql(
+  'INSERT INTO users (name) VALUES (?)',
+  params: ['Alice'],
+);
+final id = db.getLastInsertedId();
+
+final reader = await db.executeReader(
+  'SELECT * FROM users WHERE id > ?', params: [0],
+);
+while (await reader.readRow()) { ... }
+await reader.close();
+
+// After (2.4.0)
+import 'package:dbas_sqlite/dbas_sqlite.dart';
+
+final insertStmt = await db.prepareQuery('INSERT INTO users (name) VALUES (?)');
+try {
+  final affected = await insertStmt.executeSql(params: ['Alice']);
+  final id = insertStmt.getLastInsertedId();
+} finally {
+  await insertStmt.close();
+}
+
+final selectStmt = await db.prepareQuery('SELECT * FROM users WHERE id > ?');
+try {
+  final reader = await selectStmt.executeReader(params: [0]);
+  try {
+    while (await reader.readRow()) { ... }
+  } finally {
+    await reader.close();
+  }
+} finally {
+  await selectStmt.close();
+}
+```
+
+A statement can be reused with different params per execute — the bind buffer is replayed against a fresh native handle on each call:
+
+```dart
+final stmt = await db.prepareQuery('INSERT INTO users (name) VALUES (?)');
+try {
+  for (final name in ['Alice', 'Bob', 'Carol']) {
+    await stmt.executeSql(params: [name]);
+  }
+} finally {
+  await stmt.close();
+}
+```
+
 ## 2.3.0 - 2026-04-13
 
 ### Breaking Changes

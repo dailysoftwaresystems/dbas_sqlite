@@ -1,7 +1,12 @@
 #!/bin/bash
 
-HostName="${1:-MacBook-Pro-de-Rafael}"
-UserName="${2:-rafaelgasperetti}"
+if [ "$#" -lt 2 ]; then
+  echo "Usage: $0 <host> <user>" >&2
+  exit 2
+fi
+
+HostName="$1"
+UserName="$2"
 
 ip=$(ping -c 1 "$HostName" 2>/dev/null | grep -oP '\(\K[^\)]+')
 
