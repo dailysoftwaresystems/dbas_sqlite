@@ -25,23 +25,15 @@ Pod::Spec.new do |s|
     'MACOSX_DEPLOYMENT_TARGET' => '13.0'
   }
   s.user_target_xcconfig = {
-    # `-lc++` is also declared via `s.libraries = 'c++'` below, but
-    # CocoaPods has historically not propagated `s.libraries` to the
-    # consumer target when the pod is a static framework
-    # (`s.static_framework = true`). Stating it here explicitly forces
-    # the Runner's link line to include libc++, which is required for
-    # the static lib's STL symbols (std::__1::*, ___cxa_throw,
-    # ___gxx_personality_v0, etc.) to resolve.
-    'OTHER_LDFLAGS' => '-all_load -lc++',
+    'OTHER_LDFLAGS' => '-all_load',
     'MACOSX_DEPLOYMENT_TARGET' => '13.0'
   }
   s.swift_version = '5.0'
   s.vendored_frameworks = 'macos/dbas_sqlite.xcframework'
-  # The vendored static lib is C++ (uses libc++ STL: std::chrono, hash maps,
-  # std::__throw_bad_array_new_length, __cxa_throw). Without `s.libraries =
-  # 'c++'`, CocoaPods doesn't pass `-lc++` to the linker and Runner fails with
-  # `Undefined symbols for architecture arm64: std::__1::*` / `___cxa_throw`.
-  # iOS podspec already does this — keep both in sync.
+  # The vendored static lib uses libc++ STL — `s.libraries = 'c++'` is what
+  # tells CocoaPods to add `-lc++` to the consumer's linker so symbols like
+  # std::__1::*, ___cxa_throw, ___gxx_personality_v0 resolve. Keep in sync
+  # with the iOS podspec.
   s.libraries = 'c++'
   s.static_framework = true
 
