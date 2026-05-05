@@ -30,6 +30,12 @@ Pod::Spec.new do |s|
   }
   s.swift_version = '5.0'
   s.vendored_frameworks = 'macos/dbas_sqlite.xcframework'
+  # The vendored static lib is C++ (uses libc++ STL: std::chrono, hash maps,
+  # std::__throw_bad_array_new_length, __cxa_throw). Without `s.libraries =
+  # 'c++'`, CocoaPods doesn't pass `-lc++` to the linker and Runner fails with
+  # `Undefined symbols for architecture arm64: std::__1::*` / `___cxa_throw`.
+  # iOS podspec already does this — keep both in sync.
+  s.libraries = 'c++'
   s.static_framework = true
 
   # If your plugin requires a privacy manifest, for example if it collects user

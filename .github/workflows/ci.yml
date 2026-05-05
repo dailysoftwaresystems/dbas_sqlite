@@ -32,6 +32,7 @@ concurrency:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   test:
@@ -78,6 +79,39 @@ jobs:
       - name: Stop ChromeDriver
         if: always()
         run: kill $CHROMEDRIVER_PID || true
+
+  # ─── ci-check: roll-up status reported back to the PR head SHA ───────
+  #
+  # GitHub branch protection can require a single named status — this
+  # job posts `CI / ci-check result` so the rule has one stable target
+  # regardless of how the upstream jobs evolve. `always()` ensures it
+  # runs even when `test` fails or is skipped, so the status is always
+  # published.
+  ci-check:
+    name: ci-check
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    steps:
+      - name: Report status result
+        run: |
+          set -e
+          FAIL=0
+          [ "${{ needs.test.result }}" = "success" ] || FAIL=1
+
+          if [ "$FAIL" = "0" ]; then
+            STATE="success"
+            DESC="CI check passed"
+          else
+            STATE="failure"
+            DESC="CI check failed"
+          fi
+
+          curl -s --fail-with-body -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+            -d "{\"state\":\"$STATE\",\"context\":\"CI / ci-check result\",\"description\":\"$DESC\"}"
 
   # ─── Release: tag + GitHub release on main push when version bumped ──
   #
