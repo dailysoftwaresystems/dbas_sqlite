@@ -55,7 +55,14 @@ class RowData {
   }
 
   void updateFromReadRow(Map result) {
-    columnCount = toIntSafe(result['columnCount']);
+    // Only update columnCount when the worker emitted it. The worker
+    // omits this field on error rcs to avoid poisoning the cache with
+    // the stale-handle sentinel (-1) returned by sqlite3_column_count
+    // on a torn-down statement; on those paths we keep the prepare-
+    // time count.
+    if (result.containsKey('columnCount') && result['columnCount'] != null) {
+      columnCount = toIntSafe(result['columnCount']);
+    }
     if (result['columns'] is List) {
       columns = (result['columns'] as List)
           .map((c) => ColumnData.fromMap(Map<String, dynamic>.from(c as Map)))

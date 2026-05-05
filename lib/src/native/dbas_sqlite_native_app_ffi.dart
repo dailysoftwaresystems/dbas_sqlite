@@ -31,6 +31,13 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   int _nextWorkerIdx = 0;
   String? _resolvedLibPath;
 
+  /// Set to a non-null error once every spawned worker has retired
+  /// without replacement. Once latched, every subsequent [_dispatch]
+  /// surfaces this error instead of the generic "no live worker"
+  /// message — callers see a single, terminal diagnostic identifying
+  /// this `DbasSqlite` instance as unusable.
+  Object? _fatalWorkerPoolError;
+
   DbasSqliteNativeApp(super.dbName);
 
   @override
@@ -87,6 +94,26 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
         'FFI worker isolate retired: $error',
         name: 'dbas_sqlite.DbasSqliteNativeApp',
       );
+      // If every worker has now died with no respawn, latch a fatal
+      // error so subsequent _dispatch calls surface a single
+      // terminal diagnostic instead of the generic "no live worker"
+      // message. This is intentionally a one-shot signal — callers
+      // are expected to closeDb / discard this instance and create a
+      // fresh one.
+      if (_workers.isEmpty && _fatalWorkerPoolError == null) {
+        _fatalWorkerPoolError = StateError(
+          'FFI worker pool exhausted for "$dbName": every worker '
+          'isolate has died and the pool does not auto-respawn. The '
+          'database connection is unusable; close it and reopen a '
+          'fresh DbasSqlite instance. Last error: $error',
+        );
+        developer.log(
+          'FFI worker pool exhausted — DbasSqlite "$dbName" is now '
+          'permanently unusable',
+          name: 'dbas_sqlite.DbasSqliteNativeApp',
+          error: _fatalWorkerPoolError,
+        );
+      }
     }
 
     receivePort.listen(
@@ -120,6 +147,14 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   /// behind a long blocking acquire. Falls back to round-robin
   /// among ties.
   Future<dynamic> _dispatch(String method, [Map<String, dynamic>? args]) {
+    // Surface the latched fatal-pool error first so callers see a
+    // single terminal diagnostic instead of "Worker pool not
+    // initialised" or "No live FFI worker isolate available", which
+    // are misleading when the pool was initialised but every worker
+    // has since died.
+    if (_fatalWorkerPoolError != null) {
+      throw _fatalWorkerPoolError!;
+    }
     if (_workers.isEmpty) {
       throw StateError('Worker pool not initialised');
     }

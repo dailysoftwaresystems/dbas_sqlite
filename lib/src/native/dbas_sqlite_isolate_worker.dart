@@ -374,18 +374,23 @@ Map<String, dynamic> _handleReadRow(_WorkerFfi ffi, int dbPtr, int handle) {
     }
   }
 
-  // columnCount is a property of the prepared statement, not of the
-  // current row, so it's stable across SQLITE_ROW / SQLITE_DONE.
-  // Always read it from the C lib so the cache stays consistent —
-  // returning columns?.length (which is 0 on DONE) would silently
-  // zero out the count after cursor exhaustion.
-  final declaredColumnCount = ffi.getColumnCount(ptr, handle);
-  return {
+  final result = <String, dynamic>{
     'status': status,
-    'columnCount': declaredColumnCount,
     'columnNames': columnNames,
     'columns': columns,
   };
+
+  // columnCount is a property of the prepared statement and is
+  // captured at prepare time. We only refresh it from the live handle
+  // on SQLITE_ROW (matching the non-worker FFI path's behaviour) — on
+  // any other rc the handle may already be in an error state where
+  // getColumnCount returns the stale-handle sentinel (-1) and would
+  // poison the cache. On non-ROW statuses we omit the field so the
+  // Dart-side cache preserves its prepare-time value.
+  if (status == sqliteRow) {
+    result['columnCount'] = ffi.getColumnCount(ptr, handle);
+  }
+  return result;
 }
 
 int _handleBindText(

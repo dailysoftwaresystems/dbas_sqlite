@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'dbas_sqlite_native_interface.dart';
 import 'dbas_sqlite_web_pool.dart';
@@ -55,9 +56,18 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         final first = rows.first.values.first;
         if (first != null) _sqliteVersion = first.toString();
       }
-    } catch (e) {
-      // Best-effort — keep the empty string if the query fails.
+    } catch (e, st) {
+      // Best-effort — keep the empty string if the query fails. But log
+      // loudly so a genuine pool-side failure (worker crashed, OPFS
+      // detached, etc.) doesn't disappear into _lastError where most
+      // callers will never see it.
       _lastError = 'getSqliteVersion via pool.query failed: $e';
+      developer.log(
+        'DbasSqliteNativeWeb._ensureSqliteVersion: pool.query failed for "$dbName"',
+        name: 'dbas_sqlite.DbasSqliteNativeWeb',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -215,13 +225,19 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         if (rows is List) {
           // Future-compatible path: when the JS wrapper supports
           // SELECT-via-exec, the rows arrive here in flat-dict form.
+          // Update the last-write counters since the writer worker
+          // really did process the statement.
+          _lastAffectedRows = toIntSafe(result['affectedRows']);
+          _lastInsertedId = toIntSafe(result['lastInsertId']);
           return WebQueryBuffer(
               rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
         }
         // Current behaviour: no rows came back. Don't pretend the
         // result set is empty — surface the limitation loudly.
-        _lastAffectedRows = toIntSafe(result['affectedRows']);
-        _lastInsertedId = toIntSafe(result['lastInsertId']);
+        // Importantly, do NOT mutate _lastAffectedRows / _lastInsertedId
+        // from the SELECT-shaped exec result: those counters describe
+        // writes, and a SELECT misrouted through pool.exec would
+        // poison the next stmt.getAffectedRows() with bogus values.
         throw UnsupportedError(
           'executeReader inside a transaction is not supported on web '
           '(the bundled JS worker v4.3.6 cannot return SELECT rows '
@@ -292,15 +308,27 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   // The pool path uses executeStatementWrite/Read above. These exist
   // for ABI completeness but throw on call.
 
+  // Helper for the unreachable per-stmt fallbacks below. Throwing
+  // UnsupportedError surfaces a misuse loudly instead of returning a
+  // success sentinel that masks the bug.
+  Never _webStubUnreachable(String method) => throw UnsupportedError(
+      'Web pool path does not use per-stmt $method — use '
+      'executeStatementWrite/Read instead.');
+
   @override
   Future<({int handle, int columnCount, List<String> columnNames})>
-      prepareQuery(int dbPtr, String sql) => throw UnsupportedError(
-          'Web pool path does not use per-stmt prepareQuery — use executeStatementWrite/Read');
+      prepareQuery(int dbPtr, String sql) => _webStubUnreachable('prepareQuery');
   @override
-  Future<int> finalizeStmt(int dbPtr, int handle) async => sqliteOk;
+  Future<int> finalizeStmt(int dbPtr, int handle) =>
+      _webStubUnreachable('finalizeStmt');
   @override
   Future<int> readRowAndCache(int dbPtr, int handle, RowData cache) =>
-      throw UnsupportedError('Web pool path does not use per-stmt readRowAndCache');
+      _webStubUnreachable('readRowAndCache');
+
+  // These three return cached "last-write outcome" state populated by
+  // executeStatementWrite / executeSql — they are intentionally non-
+  // throwing because callers may inspect them through the public stmt
+  // API after a successful write.
   @override
   String? getLastStmtError(int dbPtr, int handle) => _lastError;
   @override
@@ -310,59 +338,89 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   // The web pool path doesn't use per-stmt binds — params are sent
   // as a list/map with the full SQL via pool.exec / pool.query.
-  // These methods are unreachable on the pool path and exist only to
-  // satisfy the abstract interface.
+  // Reaching any of these means a code path mistakenly routed a
+  // prepared-statement bind through the platform interface on web;
+  // surface that loudly rather than returning sqliteOk silently.
   @override
-  Future<int> bindNull(int dbPtr, int handle, int index) async => sqliteOk;
+  Future<int> bindNull(int dbPtr, int handle, int index) =>
+      _webStubUnreachable('bindNull');
   @override
-  Future<int> bindInt(int dbPtr, int handle, int index, int value) async => sqliteOk;
+  Future<int> bindInt(int dbPtr, int handle, int index, int value) =>
+      _webStubUnreachable('bindInt');
   @override
-  Future<int> bindInt64(int dbPtr, int handle, int index, int value) async => sqliteOk;
+  Future<int> bindInt64(int dbPtr, int handle, int index, int value) =>
+      _webStubUnreachable('bindInt64');
   @override
-  Future<int> bindFloat(int dbPtr, int handle, int index, double value) async => sqliteOk;
+  Future<int> bindFloat(int dbPtr, int handle, int index, double value) =>
+      _webStubUnreachable('bindFloat');
   @override
-  Future<int> bindDouble(int dbPtr, int handle, int index, double value) async => sqliteOk;
+  Future<int> bindDouble(int dbPtr, int handle, int index, double value) =>
+      _webStubUnreachable('bindDouble');
   @override
-  Future<int> bindText(int dbPtr, int handle, int index, String value) async => sqliteOk;
+  Future<int> bindText(int dbPtr, int handle, int index, String value) =>
+      _webStubUnreachable('bindText');
   @override
-  Future<int> bindBlob(int dbPtr, int handle, int index, List<int> value) async => sqliteOk;
+  Future<int> bindBlob(int dbPtr, int handle, int index, List<int> value) =>
+      _webStubUnreachable('bindBlob');
   @override
-  Future<int> bindNameNull(int dbPtr, int handle, String name) async => sqliteOk;
+  Future<int> bindNameNull(int dbPtr, int handle, String name) =>
+      _webStubUnreachable('bindNameNull');
   @override
-  Future<int> bindNameInt(int dbPtr, int handle, String name, int value) async => sqliteOk;
+  Future<int> bindNameInt(int dbPtr, int handle, String name, int value) =>
+      _webStubUnreachable('bindNameInt');
   @override
-  Future<int> bindNameInt64(int dbPtr, int handle, String name, int value) async => sqliteOk;
+  Future<int> bindNameInt64(int dbPtr, int handle, String name, int value) =>
+      _webStubUnreachable('bindNameInt64');
   @override
-  Future<int> bindNameFloat(int dbPtr, int handle, String name, double value) async => sqliteOk;
+  Future<int> bindNameFloat(int dbPtr, int handle, String name, double value) =>
+      _webStubUnreachable('bindNameFloat');
   @override
-  Future<int> bindNameDouble(int dbPtr, int handle, String name, double value) async => sqliteOk;
+  Future<int> bindNameDouble(int dbPtr, int handle, String name, double value) =>
+      _webStubUnreachable('bindNameDouble');
   @override
-  Future<int> bindNameText(int dbPtr, int handle, String name, String value) async => sqliteOk;
+  Future<int> bindNameText(int dbPtr, int handle, String name, String value) =>
+      _webStubUnreachable('bindNameText');
   @override
-  Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value) async => sqliteOk;
+  Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value) =>
+      _webStubUnreachable('bindNameBlob');
 
+  // Per-handle column accessors — only reachable via the per-stmt path
+  // which web does not use. The pool buffers the entire row set into a
+  // WebQueryBuffer, and DbasSqliteReader reads through that buffer
+  // directly without going through the platform interface.
   @override
-  bool isNull(int dbPtr, int handle, int colIndex) => false;
+  bool isNull(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('isNull');
   @override
-  String getColumnText(int dbPtr, int handle, int colIndex) => '';
+  String getColumnText(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('getColumnText');
   @override
-  int getColumnInt(int dbPtr, int handle, int colIndex) => 0;
+  int getColumnInt(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('getColumnInt');
   @override
-  int getColumnInt64(int dbPtr, int handle, int colIndex) => 0;
+  int getColumnInt64(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('getColumnInt64');
   @override
-  double getColumnFloat(int dbPtr, int handle, int colIndex) => 0;
+  double getColumnFloat(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('getColumnFloat');
   @override
-  double getColumnDouble(int dbPtr, int handle, int colIndex) => 0;
+  double getColumnDouble(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('getColumnDouble');
   @override
-  List<int> getColumnBlob(int dbPtr, int handle, int columnIndex) => const [];
+  List<int> getColumnBlob(int dbPtr, int handle, int columnIndex) =>
+      _webStubUnreachable('getColumnBlob');
   @override
-  int getColumnBytes(int dbPtr, int handle, int columnIndex) => 0;
+  int getColumnBytes(int dbPtr, int handle, int columnIndex) =>
+      _webStubUnreachable('getColumnBytes');
   @override
-  String getColumnName(int dbPtr, int handle, int columnIndex) => '';
+  String getColumnName(int dbPtr, int handle, int columnIndex) =>
+      _webStubUnreachable('getColumnName');
   @override
-  int getColumnType(int dbPtr, int handle, int colIndex) => 5;
+  int getColumnType(int dbPtr, int handle, int colIndex) =>
+      _webStubUnreachable('getColumnType');
   @override
-  int getColumnCount(int dbPtr, int handle) => 0;
+  int getColumnCount(int dbPtr, int handle) =>
+      _webStubUnreachable('getColumnCount');
 
   // ── Connection Pool ───────────────────────────────────────────────────
 

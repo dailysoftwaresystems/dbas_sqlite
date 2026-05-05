@@ -469,18 +469,14 @@ class DbasSqliteStatement {
       }
       conn = DbasSqliteDb(_db.dbName, readerPtr);
       releaseFn = () async {
-        try {
-          _platform.poolReleaseReader(_db.dbName, _db.poolPtrInternal!, readerPtr);
-        } catch (_) {/* swallow — primary error is in flight */}
+        _platform.poolReleaseReader(_db.dbName, _db.poolPtrInternal!, readerPtr);
       };
     } else {
       // Single-connection fallback: use writer with the writer lock.
       await _db.acquireWriterLockInternal();
       conn = _db.dbInternal!;
       releaseFn = () async {
-        try {
-          _db.releaseWriterLockInternal();
-        } catch (_) {}
+        _db.releaseWriterLockInternal();
       };
     }
 
@@ -507,22 +503,51 @@ class DbasSqliteStatement {
         initialColumnNames: prepared.columnNames,
         onClose: () async {
           // Order is load-bearing: read counters BEFORE finalize, then
-          // release. Each step in its own try/finally so a failure in
-          // one does not leak the others.
+          // release. We track the first error and log subsequent ones
+          // so no failure is silently dropped if multiple steps fail.
+          Object? firstErr;
+          StackTrace? firstStack;
           try {
             _lastAffectedRows = _platform.getStmtAffectedRows(conn, handle);
             _lastInsertedId = _platform.getStmtLastInsertedId(conn, handle);
             _lastError = _platform.getLastStmtError(conn, handle);
-          } finally {
-            try {
-              await _platform.finalizeStmt(conn, handle);
-            } finally {
-              try {
-                await releaseFn();
-              } finally {
-                _activeReader = null;
-              }
-            }
+          } catch (e, st) {
+            firstErr = e;
+            firstStack = st;
+            developer.log(
+              'reader onClose: counter read failed',
+              name: 'dbas_sqlite.DbasSqliteStatement',
+              error: e,
+              stackTrace: st,
+            );
+          }
+          try {
+            await _platform.finalizeStmt(conn, handle);
+          } catch (e, st) {
+            firstErr ??= e;
+            firstStack ??= st;
+            developer.log(
+              'reader onClose: finalizeStmt failed',
+              name: 'dbas_sqlite.DbasSqliteStatement',
+              error: e,
+              stackTrace: st,
+            );
+          }
+          try {
+            await releaseFn();
+          } catch (e, st) {
+            firstErr ??= e;
+            firstStack ??= st;
+            developer.log(
+              'reader onClose: releaseFn failed',
+              name: 'dbas_sqlite.DbasSqliteStatement',
+              error: e,
+              stackTrace: st,
+            );
+          }
+          _activeReader = null;
+          if (firstErr != null) {
+            Error.throwWithStackTrace(firstErr, firstStack!);
           }
         },
       );

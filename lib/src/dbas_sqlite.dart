@@ -247,10 +247,12 @@ class DbasSqlite {
 
     // Close every still-open statement (which closes its active reader
     // if any). List.of() snapshots the set since close() mutates it.
+    int stmtCloseFailures = 0;
     for (final stmt in List.of(_activeStatements)) {
       try {
         await stmt.close();
       } catch (e, st) {
+        stmtCloseFailures++;
         developer.log(
           'closeDb: statement close failed for "$dbName"',
           name: 'dbas_sqlite.DbasSqlite',
@@ -275,12 +277,20 @@ class DbasSqlite {
     } else if (_db != null) {
       // Single-connection fallback. Tracked statements above should
       // have finalised every handle; if CloseDb returns SQLITE_BUSY
-      // it means a handle leaked outside our tracking, which is a
-      // bug — surface it loudly.
+      // it means at least one handle is still live — either tracked
+      // statements that failed to finalise (stmtCloseFailures > 0) or
+      // a handle leaked outside our tracking. Surface the right one.
       final rc = await _platform.closeDb(_db!, checkpoint: false);
       if (rc == sqliteBusy) {
-        final err = _platform.getLastDbError(_db!) ?? 'leaked handles';
+        final err = _platform.getLastDbError(_db!) ?? 'live handles';
         _db = null;
+        if (stmtCloseFailures > 0) {
+          throw StateError(
+            'Cannot close database "$dbName": $err. '
+            '$stmtCloseFailures tracked statement(s) failed to finalize '
+            '(see prior log entries for the underlying errors).',
+          );
+        }
         throw StateError(
           'Cannot close database "$dbName": $err. '
           'A statement handle was leaked outside the tracked set; '
@@ -455,14 +465,16 @@ class DbasSqlite {
     await _acquireWriterLock();
     try {
       if (!isOpened()) {
-        _releaseWriterLock();
         throw StateError('Database was closed while waiting for writer lock.');
       }
-      await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
+      final rc = await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
+      if (rc != sqliteOk) {
+        final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        throw Exception('BEGIN TRANSACTION failed: $err');
+      }
       _isInTransaction = true;
     } catch (_) {
-      if (_isInTransaction) rethrow;
-      _releaseWriterLock();
+      if (!_isInTransaction) _releaseWriterLock();
       rethrow;
     }
   }
@@ -471,7 +483,11 @@ class DbasSqlite {
   Future<void> commit() async {
     if (!_isInTransaction) return;
     try {
-      await _platform.executeSql(_db!, 'COMMIT');
+      final rc = await _platform.executeSql(_db!, 'COMMIT');
+      if (rc != sqliteOk) {
+        final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        throw Exception('COMMIT failed: $err');
+      }
       _isInTransaction = false;
       _releaseWriterLock();
     } catch (_) {
@@ -493,7 +509,12 @@ class DbasSqlite {
     Object? rollbackErr;
     StackTrace? rollbackStack;
     try {
-      await _platform.executeSql(_db!, 'ROLLBACK');
+      final rc = await _platform.executeSql(_db!, 'ROLLBACK');
+      if (rc != sqliteOk) {
+        final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        rollbackErr = Exception('ROLLBACK rc=$rc: $err');
+        rollbackStack = StackTrace.current;
+      }
     } catch (e, st) {
       rollbackErr = e;
       rollbackStack = st;
@@ -551,7 +572,11 @@ class DbasSqlite {
       if (!isOpened()) {
         throw StateError('Database was closed while waiting for writer lock.');
       }
-      await _platform.executeSql(_db!, 'VACUUM');
+      final rc = await _platform.executeSql(_db!, 'VACUUM');
+      if (rc != sqliteOk) {
+        final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        throw Exception('VACUUM failed: $err');
+      }
     } finally {
       _releaseWriterLock();
     }
