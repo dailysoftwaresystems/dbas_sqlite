@@ -1,4 +1,4 @@
-#include "include/dbas_sqlite_flutter/dbas_sqlite_flutter_plugin.h"
+#include "include/dbas_sqlite/dbas_sqlite_plugin.h"
 
 #include <flutter_linux/flutter_linux.h>
 #include <gtk/gtk.h>
@@ -6,21 +6,21 @@
 
 #include <cstring>
 
-#include "dbas_sqlite_flutter_plugin_private.h"
+#include "dbas_sqlite_plugin_private.h"
 
-#define DBAS_SQLITE_FLUTTER_PLUGIN(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj), dbas_sqlite_flutter_plugin_get_type(), \
-                              DbasSqliteFlutterPlugin))
+#define DBAS_SQLITE_PLUGIN(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), dbas_sqlite_plugin_get_type(), \
+                              DbasSqlitePlugin))
 
-struct _DbasSqliteFlutterPlugin {
+struct _DbasSqlitePlugin {
   GObject parent_instance;
 };
 
-G_DEFINE_TYPE(DbasSqliteFlutterPlugin, dbas_sqlite_flutter_plugin, g_object_get_type())
+G_DEFINE_TYPE(DbasSqlitePlugin, dbas_sqlite_plugin, g_object_get_type())
 
 // Called when a method call is received from Flutter.
-static void dbas_sqlite_flutter_plugin_handle_method_call(
-    DbasSqliteFlutterPlugin* self,
+static void dbas_sqlite_plugin_handle_method_call(
+    DbasSqlitePlugin* self,
     FlMethodCall* method_call) {
   g_autoptr(FlMethodResponse) response = nullptr;
 
@@ -43,30 +43,30 @@ FlMethodResponse* get_platform_version() {
   return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
 }
 
-static void dbas_sqlite_flutter_plugin_dispose(GObject* object) {
-  G_OBJECT_CLASS(dbas_sqlite_flutter_plugin_parent_class)->dispose(object);
+static void dbas_sqlite_plugin_dispose(GObject* object) {
+  G_OBJECT_CLASS(dbas_sqlite_plugin_parent_class)->dispose(object);
 }
 
-static void dbas_sqlite_flutter_plugin_class_init(DbasSqliteFlutterPluginClass* klass) {
-  G_OBJECT_CLASS(klass)->dispose = dbas_sqlite_flutter_plugin_dispose;
+static void dbas_sqlite_plugin_class_init(DbasSqlitePluginClass* klass) {
+  G_OBJECT_CLASS(klass)->dispose = dbas_sqlite_plugin_dispose;
 }
 
-static void dbas_sqlite_flutter_plugin_init(DbasSqliteFlutterPlugin* self) {}
+static void dbas_sqlite_plugin_init(DbasSqlitePlugin* self) {}
 
 static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
                            gpointer user_data) {
-  DbasSqliteFlutterPlugin* plugin = DBAS_SQLITE_FLUTTER_PLUGIN(user_data);
-  dbas_sqlite_flutter_plugin_handle_method_call(plugin, method_call);
+  DbasSqlitePlugin* plugin = DBAS_SQLITE_PLUGIN(user_data);
+  dbas_sqlite_plugin_handle_method_call(plugin, method_call);
 }
 
-void dbas_sqlite_flutter_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
-  DbasSqliteFlutterPlugin* plugin = DBAS_SQLITE_FLUTTER_PLUGIN(
-      g_object_new(dbas_sqlite_flutter_plugin_get_type(), nullptr));
+void dbas_sqlite_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
+  DbasSqlitePlugin* plugin = DBAS_SQLITE_PLUGIN(
+      g_object_new(dbas_sqlite_plugin_get_type(), nullptr));
 
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   g_autoptr(FlMethodChannel) channel =
       fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
-                            "dbas_sqlite_flutter",
+                            "dbas_sqlite",
                             FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(channel, method_call_cb,
                                             g_object_ref(plugin),

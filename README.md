@@ -94,7 +94,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite_flutter: git@github.com:dailysoftwaresystems/DBAS.SQLite.Flutter.git
+  dbas_sqlite: git@github.com:dailysoftwaresystems/DBAS.SQLite.Flutter.git
 ```
 
 ## Setup

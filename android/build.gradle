@@ -1,6 +1,6 @@
 def pubspec = new org.yaml.snakeyaml.Yaml().load(new File("$project.projectDir/../pubspec.yaml").text)
 
-group = "com.dailysoftwaresystems.dbas.sqlite.flutter"
+group = "com.dailysoftwaresystems.dbas.sqlite"
 version = pubspec['version']
 
 buildscript {
@@ -27,7 +27,7 @@ apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
 android {
-    namespace = "com.dailysoftwaresystems.dbas.sqlite.flutter"
+    namespace = "com.dailysoftwaresystems.dbas.sqlite"
 
     compileSdk = 35
 

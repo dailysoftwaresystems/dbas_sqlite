@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.14...3.27)
 
 # Project-level configuration.
-set(PROJECT_NAME "dbas_sqlite_flutter")
+set(PROJECT_NAME "dbas_sqlite")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
@@ -13,11 +13,11 @@ cmake_policy(VERSION 3.14...3.27)
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed.
-set(PLUGIN_NAME "dbas_sqlite_flutter_plugin")
+set(PLUGIN_NAME "dbas_sqlite_plugin")
 
 # Any new source files that you add to the plugin should be added here.
 list(APPEND PLUGIN_SOURCES
-  "dbas_sqlite_flutter_plugin.cc"
+  "dbas_sqlite_plugin.cc"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -91,7 +91,7 @@ FetchContent_MakeAvailable(googletest)
 # The plugin's exported API is not very useful for unit testing, so build the
 # sources directly into the test binary rather than using the shared library.
 add_executable(${TEST_RUNNER}
-  test/dbas_sqlite_flutter_plugin_test.cc
+  test/dbas_sqlite_plugin_test.cc
   ${PLUGIN_SOURCES}
 )
 apply_standard_settings(${TEST_RUNNER})

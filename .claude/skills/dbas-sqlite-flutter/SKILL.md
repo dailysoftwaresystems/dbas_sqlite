@@ -17,7 +17,7 @@ reference for the repository structure and conventions.
 
 ## 1. Overview
 
-- **dbas_sqlite_flutter** is a multiplatform Flutter plugin providing direct SQLite access on
+- **dbas_sqlite** is a multiplatform Flutter plugin providing direct SQLite access on
   Android, iOS, macOS, Linux, Windows, and Web.
 - Wraps a native C library (`dbas_sqlite.cpp`) via FFI on native platforms and a JS/WASM wrapper
   (`dbas_sqlite_wrapper.js`) on web.
@@ -222,7 +222,7 @@ Supported types: `null`, `bool`, `int`, `double`, `Decimal`, `String`, `Uint8Lis
 ### Running Tests
 ```bash
 flutter test                                           # All tests
-flutter test test/dbas_sqlite_flutter_test.dart         # Specific test file
+flutter test test/dbas_sqlite_test.dart         # Specific test file
 ```
 
 ### Test Mode

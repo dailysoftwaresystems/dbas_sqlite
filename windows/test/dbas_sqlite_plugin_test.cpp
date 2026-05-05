@@ -8,9 +8,9 @@
 #include <string>
 #include <variant>
 
-#include "dbas_sqlite_flutter_plugin.h"
+#include "dbas_sqlite_plugin.h"
 
-namespace dbas_sqlite_flutter {
+namespace dbas_sqlite {
 namespace test {
 
 namespace {
@@ -22,8 +22,8 @@ using flutter::MethodResultFunctions;
 
 }  // namespace
 
-TEST(DbasSqliteFlutterPlugin, GetPlatformVersion) {
-  DbasSqliteFlutterPlugin plugin;
+TEST(DbasSqlitePlugin, GetPlatformVersion) {
+  DbasSqlitePlugin plugin;
   // Save the reply value from the success callback.
   std::string result_string;
   plugin.HandleMethodCall(
@@ -40,4 +40,4 @@ TEST(DbasSqliteFlutterPlugin, GetPlatformVersion) {
 }
 
 }  // namespace test
-}  // namespace dbas_sqlite_flutter
+}  // namespace dbas_sqlite

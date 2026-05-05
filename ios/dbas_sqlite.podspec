@@ -1,6 +1,6 @@
 #
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
-# Run `pod lib lint dbas_sqlite_flutter.podspec` to validate before publishing.
+# Run `pod lib lint dbas_sqlite.podspec` to validate before publishing.
 #
 require 'yaml'
 pubspec = YAML.load_file(File.join('..', 'pubspec.yaml'))
@@ -35,5 +35,5 @@ Pod::Spec.new do |s|
   # required reason APIs, update the PrivacyInfo.xcprivacy file to describe your
   # plugin's privacy impact, and then uncomment this line. For more information,
   # see https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
-  # s.resource_bundles = {'dbas_sqlite_flutter_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
+  # s.resource_bundles = {'dbas_sqlite_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
 end

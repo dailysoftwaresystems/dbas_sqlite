@@ -1,4 +1,4 @@
-#include "dbas_sqlite_flutter_plugin.h"
+#include "dbas_sqlite_plugin.h"
 
 // This must be included before many other Windows headers.
 #include <windows.h>
@@ -13,17 +13,17 @@
 #include <memory>
 #include <sstream>
 
-namespace dbas_sqlite_flutter {
+namespace dbas_sqlite {
 
 // static
-void DbasSqliteFlutterPlugin::RegisterWithRegistrar(
+void DbasSqlitePlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
   auto channel =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          registrar->messenger(), "dbas_sqlite_flutter",
+          registrar->messenger(), "dbas_sqlite",
           &flutter::StandardMethodCodec::GetInstance());
 
-  auto plugin = std::make_unique<DbasSqliteFlutterPlugin>();
+  auto plugin = std::make_unique<DbasSqlitePlugin>();
 
   channel->SetMethodCallHandler(
       [plugin_pointer = plugin.get()](const auto &call, auto result) {
@@ -33,11 +33,11 @@ void DbasSqliteFlutterPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-DbasSqliteFlutterPlugin::DbasSqliteFlutterPlugin() {}
+DbasSqlitePlugin::DbasSqlitePlugin() {}
 
-DbasSqliteFlutterPlugin::~DbasSqliteFlutterPlugin() {}
+DbasSqlitePlugin::~DbasSqlitePlugin() {}
 
-void DbasSqliteFlutterPlugin::HandleMethodCall(
+void DbasSqlitePlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   if (method_call.method_name().compare("getPlatformVersion") == 0) {
@@ -56,4 +56,4 @@ void DbasSqliteFlutterPlugin::HandleMethodCall(
   }
 }
 
-}  // namespace dbas_sqlite_flutter
+}  // namespace dbas_sqlite
