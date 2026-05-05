@@ -1,9 +1,21 @@
 #!/bin/bash
 set -e
 
-# Check defined Github token
+# Verify GitHub CLI is installed
+if ! command -v gh &> /dev/null; then
+  echo "❌ GitHub CLI (gh) is not installed. Install from https://cli.github.com/"
+  exit 1
+fi
+
+# Verify the user is authenticated
+if ! gh auth status &> /dev/null; then
+  echo "❌ Not authenticated with GitHub. Run 'gh auth login' first."
+  exit 1
+fi
+
+GITHUB_TOKEN="$(gh auth token)"
 if [[ -z "$GITHUB_TOKEN" ]]; then
-  echo "❌ Environment variable GITHUB_TOKEN is not defined."
+  echo "❌ Failed to retrieve GitHub token from gh CLI."
   exit 1
 fi
 
