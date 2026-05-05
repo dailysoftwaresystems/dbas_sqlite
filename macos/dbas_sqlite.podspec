@@ -25,7 +25,14 @@ Pod::Spec.new do |s|
     'MACOSX_DEPLOYMENT_TARGET' => '13.0'
   }
   s.user_target_xcconfig = {
-    'OTHER_LDFLAGS' => '-all_load',
+    # `-lc++` is also declared via `s.libraries = 'c++'` below, but
+    # CocoaPods has historically not propagated `s.libraries` to the
+    # consumer target when the pod is a static framework
+    # (`s.static_framework = true`). Stating it here explicitly forces
+    # the Runner's link line to include libc++, which is required for
+    # the static lib's STL symbols (std::__1::*, ___cxa_throw,
+    # ___gxx_personality_v0, etc.) to resolve.
+    'OTHER_LDFLAGS' => '-all_load -lc++',
     'MACOSX_DEPLOYMENT_TARGET' => '13.0'
   }
   s.swift_version = '5.0'
