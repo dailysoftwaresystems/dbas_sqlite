@@ -48,7 +48,9 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
 # external build triggered from this build file.
-set(dbas_sqlite_flutter_bundled_libraries
+# Flutter looks up bundled libraries via `<package_name>_bundled_libraries`
+# in the parent scope — keep this name in sync with `name:` in pubspec.yaml.
+set(dbas_sqlite_bundled_libraries
   "${CMAKE_CURRENT_SOURCE_DIR}/libs/dbas_sqlite.so"
   PARENT_SCOPE
 )

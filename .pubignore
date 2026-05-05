@@ -1,0 +1,57 @@
+# `.pubignore` controls what `flutter pub publish` includes.
+#
+# When this file exists it OVERRIDES `.gitignore` for publishing —
+# anything not excluded here is included regardless of `.gitignore`.
+# pub.dev enforces a 100 MB UNCOMPRESSED tar limit, so this list
+# must be careful to drop everything that isn't needed at consume
+# time — most importantly the `native_libs/` staging tree (which
+# duplicates the platform-folder runtime binaries) and the build
+# output directories.
+
+# ── Build artifacts (huge — `build/` alone is hundreds of MB) ─────────
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/generated_plugin_registrant.dart
+.pub-preload-cache/
+.pub/
+.packages
+.packages.generated
+
+# ── IDE / editor artifacts ───────────────────────────────────────────
+.idea/
+.vscode/
+.history
+
+# ── Native staging tree (duplicates platform-folder binaries) ────────
+# `native_libs/` is the build-output landing zone before binaries are
+# copied into `ios/dbas_sqlite.xcframework/`, `macos/libs/`,
+# `linux/libs/`, `windows/libs/`, and `android/src/main/jniLibs/`.
+# Consumers only need the platform-folder copies; this is pure
+# duplication (and includes a 24 MB ASan test binary).
+native_libs/
+
+# ── Plans and design notes ───────────────────────────────────────────
+.plans/
+
+# ── CI / dev tooling not needed at consume time ──────────────────────
+.claude/
+.github/
+scripts/
+
+# ── Tests (consumers don't run the package's own test suite) ─────────
+test/
+
+# ── Misc dev / OS artifacts ──────────────────────────────────────────
+.DS_Store
+*.DS_Store
+*.log
+*.swp
+*.pyc
+.buildlog/
+analysis_benchmark.json
+flutter_*.png
+linked_*.ds
+unlinked.ds
+**/doc/api/

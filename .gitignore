@@ -22,6 +22,7 @@
 test/db
 *.DS_Store
 .plans/
+.claude/settings.local.json
 
 # Flutter repo-specific
 /bin/cache/

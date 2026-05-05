@@ -1,6 +1,6 @@
 param(
-    [string]$HostName = "MacBook-Pro-de-Rafael.local",
-    [string]$UserName = "rafaelgasperetti"
+    [Parameter(Mandatory = $true)][string]$HostName,
+    [Parameter(Mandatory = $true)][string]$UserName
 )
 
 $ip = (Test-Connection $HostName -Count 1 -ErrorAction SilentlyContinue | Select-Object -First 1).IPv4Address.IPAddressToString

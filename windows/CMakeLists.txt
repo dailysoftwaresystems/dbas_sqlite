@@ -69,7 +69,9 @@ add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
 )
 
 # List of absolute paths to libraries that should be bundled with the plugin.
-set(dbas_sqlite_flutter_bundled_libraries
+# Flutter looks up bundled libraries via `<package_name>_bundled_libraries`
+# in the parent scope — keep this name in sync with `name:` in pubspec.yaml.
+set(dbas_sqlite_bundled_libraries
   "${CMAKE_CURRENT_SOURCE_DIR}/libs/${ARCH}/dbas_sqlite.dll"
   PARENT_SCOPE
 )
