@@ -25,7 +25,7 @@ class SetupTab extends StatelessWidget {
       final instance = await DbasSqlite.getInstance(dbName: 'example.db');
       await instance.openDb();
 
-      await instance.executeSql('''
+      final createStmt = await instance.prepareQuery('''
         CREATE TABLE IF NOT EXISTS products (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
@@ -34,6 +34,11 @@ class SetupTab extends StatelessWidget {
           created_at TEXT NOT NULL
         )
       ''');
+      try {
+        await createStmt.executeSql();
+      } finally {
+        await createStmt.close();
+      }
 
       onDbChanged(instance);
 

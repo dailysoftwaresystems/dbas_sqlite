@@ -24,11 +24,32 @@ void main() {
   testWidgets('basic CRUD operations', (tester) async {
     final db = await createWebDb('web_crud.db');
 
-    await db.executeSql('CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)');
-    await db.executeSql("INSERT INTO items (id, name) VALUES (1, 'hello')");
-    await db.executeSql('INSERT INTO items (id, name) VALUES (?, ?)', params: [2, 'world']);
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO items (id, name) VALUES (1, 'hello')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery('INSERT INTO items (id, name) VALUES (?, ?)');
+      try {
+        await stmt.executeSql(params: [2, 'world']);
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT name FROM items ORDER BY id');
+    final reader = await (await db.prepareQuery('SELECT name FROM items ORDER BY id')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'hello');
     expect(await reader.readRow(), isTrue);
@@ -43,8 +64,22 @@ void main() {
 
   testWidgets('attachDb from bytes then query', (tester) async {
     final src = await createWebDb('attach_src.db');
-    await src.executeSql('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)');
-    await src.executeSql("INSERT INTO products (id, name) VALUES (1, 'widget')");
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await src.prepareQuery("INSERT INTO products (id, name) VALUES (1, 'widget')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     // Close to flush WAL, then export content
     await src.closeDb();
@@ -55,7 +90,7 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'attached_web.db');
     final attached = await carrier.attachDb(bytes);
 
-    final reader = await attached.executeReader('SELECT COUNT(*) FROM products');
+    final reader = await (await attached.prepareQuery('SELECT COUNT(*) FROM products')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 1);
     await reader.close();
@@ -68,8 +103,22 @@ void main() {
 
   testWidgets('attachDb twice does not crash', (tester) async {
     final src = await createWebDb('attach2x_src.db');
-    await src.executeSql('CREATE TABLE items (id INTEGER PRIMARY KEY, val TEXT)');
-    await src.executeSql("INSERT INTO items (id, val) VALUES (1, 'first')");
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE items (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await src.prepareQuery("INSERT INTO items (id, val) VALUES (1, 'first')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     await src.closeDb();
     final exp = await DbasSqlite.getInstance(dbName: 'attach2x_src.db');
@@ -85,7 +134,7 @@ void main() {
     final c2 = await DbasSqlite.getInstance(dbName: 'attach2x.db');
     final a2 = await c2.attachDb(bytes);
 
-    final reader = await a2.executeReader('SELECT val FROM items WHERE id = 1');
+    final reader = await (await a2.prepareQuery('SELECT val FROM items WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'first');
     await reader.close();
@@ -100,8 +149,22 @@ void main() {
 
   testWidgets('attachStreamDb from byte stream then query', (tester) async {
     final src = await createWebDb('stream_src.db');
-    await src.executeSql('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)');
-    await src.executeSql("INSERT INTO products (id, name) VALUES (1, 'streamed')");
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await src.prepareQuery("INSERT INTO products (id, name) VALUES (1, 'streamed')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     await src.closeDb();
     final exp = await DbasSqlite.getInstance(dbName: 'stream_src.db');
@@ -112,7 +175,7 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'streamed_web.db');
     final streamed = await carrier.attachStreamDb(stream);
 
-    final reader = await streamed.executeReader('SELECT name FROM products WHERE id = 1');
+    final reader = await (await streamed.prepareQuery('SELECT name FROM products WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'streamed');
     await reader.close();
@@ -125,8 +188,22 @@ void main() {
 
   testWidgets('attachStreamDb twice does not crash', (tester) async {
     final src = await createWebDb('stream2x_src.db');
-    await src.executeSql('CREATE TABLE items (id INTEGER PRIMARY KEY)');
-    await src.executeSql('INSERT INTO items (id) VALUES (1)');
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE items (id INTEGER PRIMARY KEY)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await src.prepareQuery('INSERT INTO items (id) VALUES (1)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     await src.closeDb();
     final exp = await DbasSqlite.getInstance(dbName: 'stream2x_src.db');
@@ -142,7 +219,7 @@ void main() {
     final c2 = await DbasSqlite.getInstance(dbName: 'stream2x.db');
     final s2 = await c2.attachStreamDb(Stream<List<int>>.value(bytes));
 
-    final reader = await s2.executeReader('SELECT COUNT(*) FROM items');
+    final reader = await (await s2.prepareQuery('SELECT COUNT(*) FROM items')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 1);
     await reader.close();
@@ -157,8 +234,22 @@ void main() {
 
   testWidgets('streamCopyDb then vacuum does not crash', (tester) async {
     final db = await createWebDb('copy_vac_src.db');
-    await db.executeSql('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)');
-    await db.executeSql("INSERT INTO products (id, name) VALUES (1, 'original')");
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO products (id, name) VALUES (1, 'original')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     // Close/reopen to flush WAL
     await db.closeDb();
@@ -172,7 +263,7 @@ void main() {
     final copy = await DbasSqlite.getInstance(dbName: 'copy_vac_dest.db');
     await copy.openDb();
 
-    final reader = await copy.executeReader('SELECT COUNT(*) FROM products');
+    final reader = await (await copy.prepareQuery('SELECT COUNT(*) FROM products')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 1);
     await reader.close();
@@ -190,15 +281,36 @@ void main() {
 
   testWidgets('vacuum works after insert and delete', (tester) async {
     final db = await createWebDb('vacuum_web.db');
-    await db.executeSql('CREATE TABLE big_tbl (id INTEGER PRIMARY KEY, data TEXT)');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE big_tbl (id INTEGER PRIMARY KEY, data TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     for (int i = 1; i <= 20; i++) {
-      await db.executeSql('INSERT INTO big_tbl (id, data) VALUES (?, ?)', params: [i, 'x' * 100]);
+      {
+        final stmt = await db.prepareQuery('INSERT INTO big_tbl (id, data) VALUES (?, ?)');
+        try {
+          await stmt.executeSql(params: [i, 'x' * 100]);
+        } finally {
+          await stmt.close();
+        }
+      }
     }
-    await db.executeSql('DELETE FROM big_tbl WHERE id > 5');
+    {
+      final stmt = await db.prepareQuery('DELETE FROM big_tbl WHERE id > 5');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
     await db.vacuum();
 
-    final reader = await db.executeReader('SELECT COUNT(*) FROM big_tbl');
+    final reader = await (await db.prepareQuery('SELECT COUNT(*) FROM big_tbl')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 5);
     await reader.close();
@@ -211,17 +323,38 @@ void main() {
 
   testWidgets('transaction commit and rollback', (tester) async {
     final db = await createWebDb('txn_web.db');
-    await db.executeSql('CREATE TABLE txn_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE txn_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     await db.beginTransaction();
-    await db.executeSql("INSERT INTO txn_tbl (id, val) VALUES (1, 'committed')");
+    {
+      final stmt = await db.prepareQuery("INSERT INTO txn_tbl (id, val) VALUES (1, 'committed')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
     await db.commit();
 
     await db.beginTransaction();
-    await db.executeSql("INSERT INTO txn_tbl (id, val) VALUES (2, 'rolled_back')");
+    {
+      final stmt = await db.prepareQuery("INSERT INTO txn_tbl (id, val) VALUES (2, 'rolled_back')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
     await db.rollback();
 
-    final reader = await db.executeReader('SELECT COUNT(*) FROM txn_tbl');
+    final reader = await (await db.prepareQuery('SELECT COUNT(*) FROM txn_tbl')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 1);
     await reader.close();
@@ -232,21 +365,49 @@ void main() {
 
   testWidgets('transaction() helper auto-commits and auto-rollbacks', (tester) async {
     final db = await createWebDb('txn_helper_web.db');
-    await db.executeSql('CREATE TABLE th_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE th_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     await db.transaction((db) async {
-      await db.executeSql("INSERT INTO th_tbl (id, val) VALUES (1, 'a')");
-      await db.executeSql("INSERT INTO th_tbl (id, val) VALUES (2, 'b')");
+      {
+        final stmt = await db.prepareQuery("INSERT INTO th_tbl (id, val) VALUES (1, 'a')");
+        try {
+          await stmt.executeSql();
+        } finally {
+          await stmt.close();
+        }
+      }
+      {
+        final stmt = await db.prepareQuery("INSERT INTO th_tbl (id, val) VALUES (2, 'b')");
+        try {
+          await stmt.executeSql();
+        } finally {
+          await stmt.close();
+        }
+      }
     });
 
     try {
       await db.transaction((db) async {
-        await db.executeSql("INSERT INTO th_tbl (id, val) VALUES (3, 'c')");
+        {
+          final stmt = await db.prepareQuery("INSERT INTO th_tbl (id, val) VALUES (3, 'c')");
+          try {
+            await stmt.executeSql();
+          } finally {
+            await stmt.close();
+          }
+        }
         throw Exception('force rollback');
       });
     } catch (_) {}
 
-    final reader = await db.executeReader('SELECT COUNT(*) FROM th_tbl');
+    final reader = await (await db.prepareQuery('SELECT COUNT(*) FROM th_tbl')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 2);
     await reader.close();
@@ -261,20 +422,38 @@ void main() {
     final db1 = await createWebDb('conc_a.db');
     final db2 = await createWebDb('conc_b.db');
 
-    await db1.executeSql('CREATE TABLE tbl_a (id INTEGER PRIMARY KEY, val TEXT)');
-    await db2.executeSql('CREATE TABLE tbl_b (id INTEGER PRIMARY KEY, val TEXT)');
+    {
+      final stmt = await db1.prepareQuery('CREATE TABLE tbl_a (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db2.prepareQuery('CREATE TABLE tbl_b (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
+    Future<int> runWrite(DbasSqlite d, String sql) async {
+      final s = await d.prepareQuery(sql);
+      try { return await s.executeSql(); } finally { await s.close(); }
+    }
     await Future.wait([
-      db1.executeSql("INSERT INTO tbl_a (id, val) VALUES (1, 'a')"),
-      db2.executeSql("INSERT INTO tbl_b (id, val) VALUES (1, 'b')"),
+      runWrite(db1, "INSERT INTO tbl_a (id, val) VALUES (1, 'a')"),
+      runWrite(db2, "INSERT INTO tbl_b (id, val) VALUES (1, 'b')"),
     ]);
 
-    final reader = await db1.executeReader('SELECT val FROM tbl_a WHERE id = 1');
+    final reader = await (await db1.prepareQuery('SELECT val FROM tbl_a WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'a');
     await reader.close();
 
-    final reader2 = await db2.executeReader('SELECT val FROM tbl_b WHERE id = 1');
+    final reader2 = await (await db2.prepareQuery('SELECT val FROM tbl_b WHERE id = 1')).executeReader();
     expect(await reader2.readRow(), isTrue);
     expect(reader2.getColumnText(0), 'b');
     await reader2.close();
@@ -289,15 +468,26 @@ void main() {
 
   testWidgets('concurrent writes on same DB are serialized', (tester) async {
     final db = await createWebDb('conc_writes.db');
-    await db.executeSql('CREATE TABLE cw_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE cw_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
+    Future<int> runWrite(String sql) async {
+      final s = await db.prepareQuery(sql);
+      try { return await s.executeSql(); } finally { await s.close(); }
+    }
     await Future.wait([
-      db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (1, 'a')"),
-      db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (2, 'b')"),
-      db.executeSql("INSERT INTO cw_tbl (id, val) VALUES (3, 'c')"),
+      runWrite("INSERT INTO cw_tbl (id, val) VALUES (1, 'a')"),
+      runWrite("INSERT INTO cw_tbl (id, val) VALUES (2, 'b')"),
+      runWrite("INSERT INTO cw_tbl (id, val) VALUES (3, 'c')"),
     ]);
 
-    final reader = await db.executeReader('SELECT COUNT(*) FROM cw_tbl');
+    final reader = await (await db.prepareQuery('SELECT COUNT(*) FROM cw_tbl')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 3);
     await reader.close();
@@ -310,10 +500,23 @@ void main() {
 
   testWidgets('getLastInsertedId works after executeSql', (tester) async {
     final db = await createWebDb('last_id_web.db');
-    await db.executeSql('CREATE TABLE li_tbl (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)');
-    await db.executeSql("INSERT INTO li_tbl (val) VALUES ('test')");
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE li_tbl (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    final insertStmt = await db.prepareQuery("INSERT INTO li_tbl (val) VALUES ('test')");
+    int lastId;
+    try {
+      await insertStmt.executeSql();
+      lastId = insertStmt.getLastInsertedId();
+    } finally {
+      await insertStmt.close();
+    }
 
-    final lastId = db.getLastInsertedId();
     expect(lastId, greaterThan(0));
 
     await db.closeDb();
@@ -324,14 +527,28 @@ void main() {
 
   testWidgets('close and reopen DB preserves data', (tester) async {
     final db = await createWebDb('reopen_web.db');
-    await db.executeSql('CREATE TABLE ro_tbl (id INTEGER PRIMARY KEY, val TEXT)');
-    await db.executeSql("INSERT INTO ro_tbl (id, val) VALUES (1, 'persisted')");
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE ro_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO ro_tbl (id, val) VALUES (1, 'persisted')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
     await db.closeDb();
 
     final reopened = await DbasSqlite.getInstance(dbName: 'reopen_web.db');
     await reopened.openDb();
 
-    final reader = await reopened.executeReader('SELECT val FROM ro_tbl WHERE id = 1');
+    final reader = await (await reopened.prepareQuery('SELECT val FROM ro_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'persisted');
     await reader.close();
@@ -344,10 +561,24 @@ void main() {
 
   testWidgets('getColumnDecimal throws on non-numeric text', (tester) async {
     final db = await createWebDb('decimal_err_web.db');
-    await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
-    await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, 'not_a_number')");
+    {
+      final stmt = await db.prepareQuery("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO d_tbl (id, val) VALUES (1, 'not_a_number')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    final reader = await (await db.prepareQuery('SELECT val FROM d_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(() => reader.getColumnDecimal(0), throwsFormatException);
     await reader.close();
@@ -358,10 +589,24 @@ void main() {
 
   testWidgets('getColumnTime throws on garbage input', (tester) async {
     final db = await createWebDb('time_err_web.db');
-    await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
-    await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, 'garbage')");
+    {
+      final stmt = await db.prepareQuery("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO t_tbl (id, val) VALUES (1, 'garbage')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    final reader = await (await db.prepareQuery('SELECT val FROM t_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(() => reader.getColumnTime(0), throwsFormatException);
     await reader.close();
@@ -372,10 +617,24 @@ void main() {
 
   testWidgets('getColumnDecimal works with valid Decimal', (tester) async {
     final db = await createWebDb('decimal_ok_web.db');
-    await db.executeSql("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
-    await db.executeSql("INSERT INTO d_tbl (id, val) VALUES (1, '123.456')");
+    {
+      final stmt = await db.prepareQuery("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO d_tbl (id, val) VALUES (1, '123.456')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT val FROM d_tbl WHERE id = 1');
+    final reader = await (await db.prepareQuery('SELECT val FROM d_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     final d = reader.getColumnDecimal(0);
     expect(d.toString(), '123.456');
@@ -387,10 +646,24 @@ void main() {
 
   testWidgets('getColumnTime works with valid HH:MM:SS.mmm', (tester) async {
     final db = await createWebDb('time_ok_web.db');
-    await db.executeSql("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
-    await db.executeSql("INSERT INTO t_tbl (id, val) VALUES (1, '02:30:45.500')");
+    {
+      final stmt = await db.prepareQuery("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await db.prepareQuery("INSERT INTO t_tbl (id, val) VALUES (1, '02:30:45.500')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT val FROM t_tbl WHERE id = 1');
+    final reader = await (await db.prepareQuery('SELECT val FROM t_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     final d = reader.getColumnTime(0);
     expect(d.inHours, 2);
@@ -405,14 +678,25 @@ void main() {
 
   testWidgets('named params with positional and named binds', (tester) async {
     final db = await createWebDb('named_web.db');
-    await db.executeSql('CREATE TABLE n_tbl (id INTEGER PRIMARY KEY, name TEXT, val REAL)');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE n_tbl (id INTEGER PRIMARY KEY, name TEXT, val REAL)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    await db.executeSql(
-      'INSERT INTO n_tbl (id, name, val) VALUES (:id, :name, :val)',
-      nameParams: {'id': 1, 'name': 'test', 'val': 3.14},
-    );
+    {
+      final stmt = await db.prepareQuery('INSERT INTO n_tbl (id, name, val) VALUES (:id, :name, :val)');
+      try {
+        await stmt.executeSql(nameParams: {'id': 1, 'name': 'test', 'val': 3.14},);
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT name, val FROM n_tbl WHERE id = :id', nameParams: {'id': 1});
+    final reader = await (await db.prepareQuery('SELECT name, val FROM n_tbl WHERE id = :id')).executeReader(nameParams: {'id': 1});
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'test');
     expect(reader.getColumnDouble(1), closeTo(3.14, 0.001));
@@ -424,12 +708,26 @@ void main() {
 
   testWidgets('blob round-trip works on web', (tester) async {
     final db = await createWebDb('blob_web.db');
-    await db.executeSql('CREATE TABLE b_tbl (id INTEGER PRIMARY KEY, data BLOB)');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE b_tbl (id INTEGER PRIMARY KEY, data BLOB)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     final bytes = List<int>.generate(256, (i) => i);
-    await db.executeSql('INSERT INTO b_tbl (id, data) VALUES (?, ?)', params: [1, bytes]);
+    {
+      final stmt = await db.prepareQuery('INSERT INTO b_tbl (id, data) VALUES (?, ?)');
+      try {
+        await stmt.executeSql(params: [1, bytes]);
+      } finally {
+        await stmt.close();
+      }
+    }
 
-    final reader = await db.executeReader('SELECT data FROM b_tbl WHERE id = 1');
+    final reader = await (await db.prepareQuery('SELECT data FROM b_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     final result = reader.getColumnBlob(0);
     expect(result.length, 256);
@@ -452,8 +750,22 @@ void main() {
 
   testWidgets('full export-import-vacuum lifecycle', (tester) async {
     final src = await createWebDb('lifecycle_src.db');
-    await src.executeSql('CREATE TABLE lc_tbl (id INTEGER PRIMARY KEY, val TEXT)');
-    await src.executeSql("INSERT INTO lc_tbl (id, val) VALUES (1, 'lifecycle')");
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE lc_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+    {
+      final stmt = await src.prepareQuery("INSERT INTO lc_tbl (id, val) VALUES (1, 'lifecycle')");
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
 
     // Close to flush WAL, export content
     await src.closeDb();
@@ -466,7 +778,7 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'lifecycle_dest.db');
     final imported = await carrier.attachDb(bytes);
 
-    final reader = await imported.executeReader('SELECT val FROM lc_tbl WHERE id = 1');
+    final reader = await (await imported.prepareQuery('SELECT val FROM lc_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnText(0), 'lifecycle');
     await reader.close();
@@ -486,12 +798,23 @@ void main() {
   testWidgets('attachStreamDb with multiple chunks preserves data', (tester) async {
     // Create source DB with enough data to produce multi-chunk export
     final src = await createWebDb('multi_chunk_src.db');
-    await src.executeSql('CREATE TABLE mc_tbl (id INTEGER PRIMARY KEY, data TEXT)');
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE mc_tbl (id INTEGER PRIMARY KEY, data TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
     for (int i = 1; i <= 50; i++) {
-      await src.executeSql(
-        'INSERT INTO mc_tbl (id, data) VALUES (?, ?)',
-        params: [i, 'row_$i${'x' * 200}'],
-      );
+      {
+        final stmt = await src.prepareQuery('INSERT INTO mc_tbl (id, data) VALUES (?, ?)');
+        try {
+          await stmt.executeSql(params: [i, 'row_$i${'x' * 200}'],);
+        } finally {
+          await stmt.close();
+        }
+      }
     }
 
     // Export, then stream-attach as multiple smaller chunks
@@ -514,13 +837,13 @@ void main() {
     final carrier = await DbasSqlite.getInstance(dbName: 'multi_chunk_dest.db');
     final dest = await carrier.attachStreamDb(stream);
 
-    final reader = await dest.executeReader('SELECT COUNT(*) FROM mc_tbl');
+    final reader = await (await dest.prepareQuery('SELECT COUNT(*) FROM mc_tbl')).executeReader();
     expect(await reader.readRow(), isTrue);
     expect(reader.getColumnInt(0), 50);
     await reader.close();
 
     // Verify specific row
-    final reader2 = await dest.executeReader('SELECT data FROM mc_tbl WHERE id = 25');
+    final reader2 = await (await dest.prepareQuery('SELECT data FROM mc_tbl WHERE id = 25')).executeReader();
     expect(await reader2.readRow(), isTrue);
     expect(reader2.getColumnText(0), startsWith('row_25'));
     await reader2.close();
@@ -535,9 +858,23 @@ void main() {
 
   testWidgets('getContent and attachDb produce identical data', (tester) async {
     final src = await createWebDb('export_rt_src.db');
-    await src.executeSql('CREATE TABLE rt_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+    {
+      final stmt = await src.prepareQuery('CREATE TABLE rt_tbl (id INTEGER PRIMARY KEY, val TEXT)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
     for (int i = 1; i <= 10; i++) {
-      await src.executeSql("INSERT INTO rt_tbl (id, val) VALUES (?, ?)", params: [i, 'val_$i']);
+      {
+        final stmt = await src.prepareQuery("INSERT INTO rt_tbl (id, val) VALUES (?, ?)");
+        try {
+          await stmt.executeSql(params: [i, 'val_$i']);
+        } finally {
+          await stmt.close();
+        }
+      }
     }
 
     // Export
@@ -552,7 +889,7 @@ void main() {
     final dest = await carrier.attachDb(bytes);
 
     // Verify all 10 rows
-    final reader = await dest.executeReader('SELECT id, val FROM rt_tbl ORDER BY id');
+    final reader = await (await dest.prepareQuery('SELECT id, val FROM rt_tbl ORDER BY id')).executeReader();
     for (int i = 1; i <= 10; i++) {
       expect(await reader.readRow(), isTrue);
       expect(reader.getColumnInt(0), i);

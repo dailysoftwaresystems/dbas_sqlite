@@ -2,26 +2,25 @@ import 'dart:async';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'dbas_sqlite_native_interface.dart';
 import 'dbas_sqlite_web_pool.dart';
-import 'dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
 
-/// Web implementation backed by a single Web Worker running the DBAS.SQLite
-/// WASM module with an in-process WAL connection pool.
+/// Web implementation backed by the JS pool wrapper
+/// (`web/libs/dbas_sqlite.js` + `dbas_sqlite_worker.js`). The Dart side
+/// dispatches `pool.exec` for writes and `pool.query` for reads via the
+/// new `executeStatementWrite` / `executeStatementRead` entry points
+/// (called from `DbasSqliteStatement`). Per-stmt ABI calls (prepare /
+/// bind / readRow / finalize) are not used on the pool path — the JS
+/// pool runs SQL atomically per `pool.exec` / `pool.query` round-trip.
 ///
-/// The cursor-based Dart API is adapted by buffering SQL + params during
-/// `prepareQuery`/`bindXxx`, then issuing a single `exec` or `query` on the
-/// first `readRow` call and caching all results.
+/// The single-connection fallback path (when the JS pool fails to
+/// initialise) is not implemented in v2.4.0; consumers requiring it
+/// will get an `UnsupportedError` from the per-stmt entry points.
 class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   DbasSqliteWebPool? _pool;
   bool _initialized = false;
   bool _dbOpened = false;
-
-  String? _pendingSql;
-  final List<dynamic> _pendingPositionalParams = [];
-  final Map<String, dynamic> _pendingNamedParams = {};
-  bool _isWriteQuery = false;
-  bool _nextPrepareIsWrite = false;
-  WebQueryBuffer? _queryBuffer;
-
+  String _sqliteVersion = '';
+  final int _abiVersion = 0;
   int _lastAffectedRows = 0;
   int _lastInsertedId = 0;
   String? _lastError;
@@ -39,6 +38,30 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   @override
+  String getSqliteVersion() => _sqliteVersion;
+  @override
+  int getAbiVersion() => _abiVersion;
+
+  /// Populates [_sqliteVersion] from the JS pool by issuing
+  /// `SELECT sqlite_version()`. Called from [_ensurePool] after the
+  /// pool boots so that the synchronous [getSqliteVersion] accessor
+  /// has a real value to return on web. No-op if already populated.
+  Future<void> _ensureSqliteVersion() async {
+    if (_sqliteVersion.isNotEmpty) return;
+    if (_pool == null) return;
+    try {
+      final rows = await _pool!.query('SELECT sqlite_version()');
+      if (rows.isNotEmpty) {
+        final first = rows.first.values.first;
+        if (first != null) _sqliteVersion = first.toString();
+      }
+    } catch (e) {
+      // Best-effort — keep the empty string if the query fails.
+      _lastError = 'getSqliteVersion via pool.query failed: $e';
+    }
+  }
+
+  @override
   Future<int> openDb(String path) async {
     _dbOpened = true;
     return 1;
@@ -46,9 +69,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<bool> databaseExists(String fileName) async {
-    // Initialize a pool worker to check — init opens the DB via OPFS.
-    // Infrastructure failures (worker load, OPFS unavailable) propagate
-    // to the caller rather than being masked as "database not found".
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
     final result = await pool.send('exists');
     return result == true;
@@ -58,31 +78,28 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   bool isOpened(int dbPtr) => _dbOpened;
 
   @override
-  Future<void> closeDb(int dbPtr) async {
+  Future<int> closeDb(int dbPtr, {bool checkpoint = false}) async {
     await _pool?.close();
     _pool = null;
     DbasSqliteWebPool.removePool(dbName);
     _dbOpened = false;
+    return sqliteOk;
   }
 
   // ── File operations (via worker protocol) ─────────────────────────────
 
   @override
   Future attachDb(String fileName, List<int> content) async {
-    // Close existing pool — OPFS handles must be released first
     if (_pool != null) {
       await _pool!.close();
       _pool = null;
       DbasSqliteWebPool.removePool(dbName);
     }
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
-    // Use the chunked protocol (begin/chunk/end) — the worker closes
-    // the DB before writing and reopens after.
     await pool.attachStreamChunked(
       Stream.fromIterable([content]),
       totalSize: content.length,
     );
-    // Close and re-create so the next openDb starts fresh
     await pool.close();
     DbasSqliteWebPool.removePool(dbName);
   }
@@ -95,9 +112,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       DbasSqliteWebPool.removePool(dbName);
     }
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
-    // True streaming — chunks flow from the Dart stream to the worker
-    // one at a time via attachStreamBegin/Chunk/End. The full database
-    // is never buffered in Dart memory.
     await pool.attachStreamChunked(stream);
     await pool.close();
     DbasSqliteWebPool.removePool(dbName);
@@ -105,7 +119,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<List<int>> getContent(String fileName) async {
-    // Close pool to release OPFS handles, export via worker
     if (_pool != null) {
       await _pool!.close();
       _pool = null;
@@ -113,8 +126,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _dbOpened = false;
     }
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
-    // Streaming export — handles both Transferable Streams (Chrome/Firefox)
-    // and chunked postMessage fallback (Safari) automatically.
     final bytes = await pool.exportContentStream();
     await pool.close();
     DbasSqliteWebPool.removePool(dbName);
@@ -136,7 +147,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _pool = null;
       DbasSqliteWebPool.removePool(dbName);
     }
-    // Create a temporary worker to drop the DB files
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
     await pool.drop();
     await pool.close();
@@ -144,139 +154,96 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     _dbOpened = false;
   }
 
-  // ── SQL execution (direct, for BEGIN/COMMIT/ROLLBACK/PRAGMA) ──────────
+  // ── SQL execution (one-shot, used by transaction primitives) ──────────
 
   @override
   Future<int> executeSql(int dbPtr, String sql) async {
     await _ensurePool();
-    final result = await _pool!.exec(sql);
-    _lastAffectedRows = toIntSafe(result['affectedRows']);
-    _lastInsertedId = toIntSafe(result['lastInsertId'] ?? result['lastInsertedId']);
-    _lastError = null;
-    return 0;
-  }
-
-  // ── Cursor-based query ────────────────────────────────────────────────
-
-  @override
-  Future<int> prepareQuery(int dbPtr, String sql) async {
-    _isWriteQuery = _nextPrepareIsWrite;
-    _nextPrepareIsWrite = false;
-    _pendingSql = sql;
-    _pendingPositionalParams.clear();
-    _pendingNamedParams.clear();
-    _queryBuffer = null;
-    _lastError = null;
-    return 0;
-  }
-
-  // ── Parameter binding (buffered until readRow) ────────────────────────
-
-  @override
-  int bindNull(int dbPtr, int index) { _ensureSlots(index); _pendingPositionalParams[index - 1] = null; return 0; }
-  @override
-  int bindInt(int dbPtr, int index, int value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
-  @override
-  int bindFloat(int dbPtr, int index, double value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
-  @override
-  int bindDouble(int dbPtr, int index, double value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
-  @override
-  int bindText(int dbPtr, int index, String value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
-  @override
-  int bindBlob(int dbPtr, int index, List<int> value) { _ensureSlots(index); _pendingPositionalParams[index - 1] = value; return 0; }
-
-  @override
-  int bindNameNull(int dbPtr, String name) { _pendingNamedParams[name] = null; return 0; }
-  @override
-  int bindNameInt(int dbPtr, String name, int value) { _pendingNamedParams[name] = value; return 0; }
-  @override
-  int bindNameFloat(int dbPtr, String name, double value) { _pendingNamedParams[name] = value; return 0; }
-  @override
-  int bindNameDouble(int dbPtr, String name, double value) { _pendingNamedParams[name] = value; return 0; }
-  @override
-  int bindNameText(int dbPtr, String name, String value) { _pendingNamedParams[name] = value; return 0; }
-  @override
-  int bindNameBlob(int dbPtr, String name, List<int> value) { _pendingNamedParams[name] = value; return 0; }
-
-  void _ensureSlots(int index) {
-    while (_pendingPositionalParams.length < index) {
-      _pendingPositionalParams.add(null);
-    }
-  }
-
-  // ── Row reading ───────────────────────────────────────────────────────
-
-  @override
-  Future<int> readRow(int dbPtr) async {
-    await _ensurePool();
-    const sqliteRow = 100;
-    const sqliteDone = 101;
-
-    if (_queryBuffer != null) {
-      return _queryBuffer!.moveNext() ? sqliteRow : sqliteDone;
-    }
-
-    if (_pendingSql == null) return sqliteDone;
-    final sql = _pendingSql!;
-    final params = _buildParams();
-
     try {
-      if (_isWriteQuery) {
-        final result = await _pool!.exec(sql, params);
-        _lastAffectedRows = toIntSafe(result['affectedRows']);
-        _lastInsertedId = toIntSafe(result['lastInsertId'] ?? result['lastInsertedId']);
-        _lastError = null;
-        _queryBuffer = WebQueryBuffer([]);
-        return sqliteDone;
-      } else {
-        final rows = await _pool!.query(sql, params);
-        _queryBuffer = WebQueryBuffer(rows);
-        return _queryBuffer!.moveNext() ? sqliteRow : sqliteDone;
-      }
+      final result = await _pool!.exec(sql);
+      _lastAffectedRows = toIntSafe(result['affectedRows']);
+      _lastInsertedId = toIntSafe(result['lastInsertId']);
+      _lastError = null;
+      return sqliteOk;
     } catch (e) {
       _lastError = e.toString();
-      _queryBuffer = WebQueryBuffer([]);
-      return -1;
+      rethrow;
     }
   }
 
-  dynamic _buildParams() {
-    if (_pendingPositionalParams.isNotEmpty) return _pendingPositionalParams;
-    if (_pendingNamedParams.isNotEmpty) return _pendingNamedParams;
-    return null;
+  // ── New statement-mediation entry points ─────────────────────────────
+
+  /// Used by `DbasSqliteStatement.executeSql` on web.
+  /// Always routes through the writer worker via `pool.exec`.
+  Future<({int affectedRows, int lastInsertedId})> executeStatementWrite(
+      String sql, dynamic params) async {
+    await _ensurePool();
+    try {
+      final result = await _pool!.exec(sql, params);
+      final ar = toIntSafe(result['affectedRows']);
+      final lid = toIntSafe(result['lastInsertId']);
+      _lastAffectedRows = ar;
+      _lastInsertedId = lid;
+      _lastError = null;
+      return (affectedRows: ar, lastInsertedId: lid);
+    } catch (e) {
+      _lastError = e.toString();
+      rethrow;
+    }
   }
 
-  // ── Column accessors ──────────────────────────────────────────────────
-
-  @override
-  bool isNull(int dbPtr, int colIndex) => _queryBuffer?.getColumnData(colIndex).isNull ?? true;
-  @override
-  String getColumnText(int dbPtr, int colIndex) => _queryBuffer?.getColumnData(colIndex).value?.toString() ?? '';
-  @override
-  int getColumnInt(int dbPtr, int colIndex) => toIntSafe(_queryBuffer?.getColumnData(colIndex).value);
-  @override
-  double getColumnFloat(int dbPtr, int colIndex) => toDoubleSafe(_queryBuffer?.getColumnData(colIndex).value);
-  @override
-  double getColumnDouble(int dbPtr, int colIndex) => toDoubleSafe(_queryBuffer?.getColumnData(colIndex).value);
-  @override
-  List<int> getColumnBlob(int dbPtr, int columnIndex) {
-    final value = _queryBuffer?.getColumnData(columnIndex).value;
-    if (value is List) return value.cast<num>().map((e) => e.toInt()).toList();
-    return [];
+  /// Used by `DbasSqliteStatement.executeReader` on web.
+  ///
+  /// Outside a transaction: routes through `pool.query` (reader
+  /// worker pool, SHARED MRSW fence) — works for any SELECT.
+  ///
+  /// Inside a transaction: tries `pool.exec` (writer worker,
+  /// EXCLUSIVE MRSW fence) — necessary for read-your-own-writes
+  /// because reader workers run on separate connections that don't
+  /// see the writer's BEGIN-bracketed state. The current bundled JS
+  /// (`dbas_sqlite_worker.js` v4.3.6) does NOT return rows for SELECT
+  /// through `pool.exec`. When the rows aren't returned this path
+  /// throws [UnsupportedError] with a clear migration message — never
+  /// returns silently-empty.
+  Future<WebQueryBuffer> executeStatementRead(
+      String sql, dynamic params, {required bool inTransaction}) async {
+    await _ensurePool();
+    try {
+      if (inTransaction) {
+        final result = await _pool!.exec(sql, params);
+        final rows = result['rows'];
+        if (rows is List) {
+          // Future-compatible path: when the JS wrapper supports
+          // SELECT-via-exec, the rows arrive here in flat-dict form.
+          return WebQueryBuffer(
+              rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
+        }
+        // Current behaviour: no rows came back. Don't pretend the
+        // result set is empty — surface the limitation loudly.
+        _lastAffectedRows = toIntSafe(result['affectedRows']);
+        _lastInsertedId = toIntSafe(result['lastInsertId']);
+        throw UnsupportedError(
+          'executeReader inside a transaction is not supported on web '
+          '(the bundled JS worker v4.3.6 cannot return SELECT rows '
+          'through pool.exec, which is the only path that observes '
+          'in-flight transactional state). Run the SELECT outside the '
+          'transaction, or restructure the code to read first.',
+        );
+      } else {
+        final rows = await _pool!.query(sql, params);
+        return WebQueryBuffer(rows);
+      }
+    } catch (e) {
+      // Don't capture UnsupportedError into _lastError — it's a
+      // structural limitation, not a SQL error.
+      if (e is! UnsupportedError) {
+        _lastError = e.toString();
+      }
+      rethrow;
+    }
   }
-  @override
-  int getColumnBytes(int dbPtr, int columnIndex) => getColumnBlob(dbPtr, columnIndex).length;
-  @override
-  String getColumnName(int dbPtr, int colIndex) {
-    if (_queryBuffer == null || colIndex >= _queryBuffer!.columnNames.length) return '';
-    return _queryBuffer!.columnNames[colIndex];
-  }
-  @override
-  int getColumnType(int dbPtr, int colIndex) => _queryBuffer?.getColumnData(colIndex).type ?? 5;
-  @override
-  int getColumnCount(int dbPtr) => _queryBuffer?.columnCount ?? 0;
 
-  // ── State accessors ───────────────────────────────────────────────────
+  // ── State accessors (last-write outcome from executeSql/Statement) ────
 
   @override
   String? getLastDbError(int dbPtr) => _lastError;
@@ -284,16 +251,118 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int getAffectedRows(int dbPtr) => _lastAffectedRows;
   @override
   int getLastInsertedId(int dbPtr) => _lastInsertedId;
-
-  // ── Reader management ─────────────────────────────────────────────────
+  @override
+  int getTotalChanges(int dbPtr) => 0; // not exposed by JS pool today
+  @override
+  String? getDbFileName(int dbPtr) => dbName;
 
   @override
-  Future closeReader(int dbPtr) async {
-    _queryBuffer = null;
-    _pendingSql = null;
-    _pendingPositionalParams.clear();
-    _pendingNamedParams.clear();
+  Future<int> setBusyTimeout(int dbPtr, int ms) async {
+    // No-op on web — the JS pool has its own internal busy handling.
+    return sqliteOk;
   }
+
+  @override
+  Future<int> enableWal(int dbPtr) async {
+    // The JS pool always opens with WAL via the writer worker, but
+    // verify the readback so a pool that silently failed to set WAL
+    // (rare — SAB unavailable in some browsers, etc.) surfaces as a
+    // non-OK rc instead of a silent success.
+    await _ensurePool();
+    try {
+      final rows = await _pool!.query('PRAGMA journal_mode');
+      if (rows.isEmpty) {
+        _lastError = 'enableWal: PRAGMA journal_mode returned no rows';
+        return 1; // SQLITE_ERROR
+      }
+      final mode = rows.first.values.first?.toString().toLowerCase() ?? '';
+      if (mode != 'wal') {
+        _lastError =
+            'enableWal: web pool reports journal_mode="$mode", expected "wal"';
+        return 1; // SQLITE_ERROR
+      }
+      return sqliteOk;
+    } catch (e) {
+      _lastError = 'enableWal: $e';
+      return 1; // SQLITE_ERROR
+    }
+  }
+
+  // ── Per-stmt ABI (single-connection fallback path — not used) ─────────
+  // The pool path uses executeStatementWrite/Read above. These exist
+  // for ABI completeness but throw on call.
+
+  @override
+  Future<({int handle, int columnCount, List<String> columnNames})>
+      prepareQuery(int dbPtr, String sql) => throw UnsupportedError(
+          'Web pool path does not use per-stmt prepareQuery — use executeStatementWrite/Read');
+  @override
+  Future<int> finalizeStmt(int dbPtr, int handle) async => sqliteOk;
+  @override
+  Future<int> readRowAndCache(int dbPtr, int handle, RowData cache) =>
+      throw UnsupportedError('Web pool path does not use per-stmt readRowAndCache');
+  @override
+  String? getLastStmtError(int dbPtr, int handle) => _lastError;
+  @override
+  int getStmtAffectedRows(int dbPtr, int handle) => _lastAffectedRows;
+  @override
+  int getStmtLastInsertedId(int dbPtr, int handle) => _lastInsertedId;
+
+  // The web pool path doesn't use per-stmt binds — params are sent
+  // as a list/map with the full SQL via pool.exec / pool.query.
+  // These methods are unreachable on the pool path and exist only to
+  // satisfy the abstract interface.
+  @override
+  Future<int> bindNull(int dbPtr, int handle, int index) async => sqliteOk;
+  @override
+  Future<int> bindInt(int dbPtr, int handle, int index, int value) async => sqliteOk;
+  @override
+  Future<int> bindInt64(int dbPtr, int handle, int index, int value) async => sqliteOk;
+  @override
+  Future<int> bindFloat(int dbPtr, int handle, int index, double value) async => sqliteOk;
+  @override
+  Future<int> bindDouble(int dbPtr, int handle, int index, double value) async => sqliteOk;
+  @override
+  Future<int> bindText(int dbPtr, int handle, int index, String value) async => sqliteOk;
+  @override
+  Future<int> bindBlob(int dbPtr, int handle, int index, List<int> value) async => sqliteOk;
+  @override
+  Future<int> bindNameNull(int dbPtr, int handle, String name) async => sqliteOk;
+  @override
+  Future<int> bindNameInt(int dbPtr, int handle, String name, int value) async => sqliteOk;
+  @override
+  Future<int> bindNameInt64(int dbPtr, int handle, String name, int value) async => sqliteOk;
+  @override
+  Future<int> bindNameFloat(int dbPtr, int handle, String name, double value) async => sqliteOk;
+  @override
+  Future<int> bindNameDouble(int dbPtr, int handle, String name, double value) async => sqliteOk;
+  @override
+  Future<int> bindNameText(int dbPtr, int handle, String name, String value) async => sqliteOk;
+  @override
+  Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value) async => sqliteOk;
+
+  @override
+  bool isNull(int dbPtr, int handle, int colIndex) => false;
+  @override
+  String getColumnText(int dbPtr, int handle, int colIndex) => '';
+  @override
+  int getColumnInt(int dbPtr, int handle, int colIndex) => 0;
+  @override
+  int getColumnInt64(int dbPtr, int handle, int colIndex) => 0;
+  @override
+  double getColumnFloat(int dbPtr, int handle, int colIndex) => 0;
+  @override
+  double getColumnDouble(int dbPtr, int handle, int colIndex) => 0;
+  @override
+  List<int> getColumnBlob(int dbPtr, int handle, int columnIndex) => const [];
+  @override
+  int getColumnBytes(int dbPtr, int handle, int columnIndex) => 0;
+  @override
+  String getColumnName(int dbPtr, int handle, int columnIndex) => '';
+  @override
+  int getColumnType(int dbPtr, int handle, int colIndex) => 5;
+  @override
+  int getColumnCount(int dbPtr, int handle) => 0;
 
   // ── Connection Pool ───────────────────────────────────────────────────
 
@@ -301,6 +370,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   Future<int> createPool(String path, int readerCount) async {
     _pool = await DbasSqliteWebPool.create(dbName: dbName, readerCount: readerCount);
     _dbOpened = true;
+    await _ensureSqliteVersion();
     return 1;
   }
 
@@ -308,6 +378,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int poolGetWriter(int poolPtr) => 1;
   @override
   int poolAcquireReader(int poolPtr) => 0;
+  @override
+  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async => 0;
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) {}
 
@@ -319,21 +391,19 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     _dbOpened = false;
   }
 
-  // ── Transaction lease (no-op: single worker serializes naturally) ─────
-
-  @override
-  Future<void> beginTransactionLease() async {}
-  @override
-  Future<void> endTransactionLease() async {}
-  @override
-  void setWriteMode() { _nextPrepareIsWrite = true; }
-
   // ── Helpers ───────────────────────────────────────────────────────────
 
   Future<void> _ensurePool() async {
-    _pool ??= await DbasSqliteWebPool.create(
-      dbName: dbName,
-      readerCount: DbasSqliteNativeInterface.workerPoolSize,
-    );
+    if (_pool == null) {
+      _pool = await DbasSqliteWebPool.create(
+        dbName: dbName,
+        readerCount: DbasSqliteNativeInterface.workerPoolSize,
+      );
+      await _ensureSqliteVersion();
+    }
   }
 }
+
+// ── SQLite return-code constants (re-exported from dbas_sqlite_db) ─────
+
+const int sqliteOk = 0;

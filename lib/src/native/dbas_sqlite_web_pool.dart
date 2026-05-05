@@ -3,7 +3,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
-import 'dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite_flutter/src/dbas_sqlite_row_cache.dart';
 
 const _workerUrl = 'assets/packages/dbas_sqlite_flutter/web/libs/dbas_sqlite_worker.js';
 // Relative to the worker script location (same directory), not the page root.
@@ -176,10 +176,20 @@ class DbasSqliteWebPool {
       final resultProp = jsData['result'];
       if (resultProp != null && !resultProp.isUndefinedOrNull) {
         final jsResult = resultProp as _JSObj;
-        completer.complete(<String, dynamic>{
+        final out = <String, dynamic>{
           'affectedRows': _jsToInt(jsResult['affectedRows']),
           'lastInsertId': _jsToInt(jsResult['lastInsertId']),
-        });
+        };
+        // Propagate `rows` if the JS worker included it (current
+        // bundled `dbas_sqlite_worker.js` v4.3.6 doesn't, but a
+        // future build that supports SELECT through pool.exec will,
+        // and the in-transaction read path on web depends on it).
+        final rowsProp = jsResult['rows'];
+        if (rowsProp != null && !rowsProp.isUndefinedOrNull) {
+          final dartified = (rowsProp as JSObject).dartify();
+          if (dartified is List) out['rows'] = dartified;
+        }
+        completer.complete(out);
       } else {
         completer.complete({'affectedRows': 0, 'lastInsertId': 0});
       }

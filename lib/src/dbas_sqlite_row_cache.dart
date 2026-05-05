@@ -1,5 +1,9 @@
-// Shared row/column cache model used by both the web pool and the native
-// isolate proxy. Pure Dart — no platform-specific imports.
+// Per-row column cache populated by `readRowAndCache` after each
+// successful step of a prepared statement. Owned by `DbasSqliteReader`
+// (one cache per active reader).
+//
+// Pure Dart — no platform-specific imports. The same model is used by
+// both the native FFI path and the web pool path.
 
 int toIntSafe(dynamic v) {
   if (v is int) return v;
@@ -30,28 +34,28 @@ class ColumnData {
   }
 }
 
-/// Cached row data from the last readRow/prepareQuery/executeSql response.
+/// Cached row data for one prepared statement's current step.
+///
+/// Per-stmt counters (`affectedRows`, `lastInsertedId`) and per-stmt
+/// `lastError` are NOT stored here in v2.4.0 — they live on
+/// `DbasSqliteStatement`, populated from the C lib's
+/// `GetStmtAffectedRows` / `GetStmtLastInsertedId` / `GetLastStmtError`
+/// at execute / reader-close time. Keeping them off the row cache
+/// avoids confusion about which "affectedRows" is current when
+/// multiple concurrent statements are stepping on the same connection.
 class RowData {
   List<ColumnData>? columns;
   int columnCount = 0;
   List<String> columnNames = [];
-  int affectedRows = 0;
-  int lastInsertedId = 0;
-  String? lastError;
 
   void updateFromPrepare(Map result) {
     columns = null;
     columnCount = toIntSafe(result['columnCount']);
     columnNames = (result['columnNames'] as List?)?.cast<String>() ?? [];
-    lastError = _parseError(result['lastError']);
   }
 
   void updateFromReadRow(Map result) {
     columnCount = toIntSafe(result['columnCount']);
-    affectedRows = toIntSafe(result['affectedRows']);
-    lastInsertedId = toIntSafe(result['lastInsertedId']);
-    lastError = _parseError(result['lastError']);
-
     if (result['columns'] is List) {
       columns = (result['columns'] as List)
           .map((c) => ColumnData.fromMap(Map<String, dynamic>.from(c as Map)))
@@ -61,25 +65,9 @@ class RowData {
     }
   }
 
-  void updateFromExecuteSql(Map result) {
-    affectedRows = toIntSafe(result['affectedRows']);
-    lastInsertedId = toIntSafe(result['lastInsertedId']);
-    lastError = _parseError(result['lastError']);
-  }
-
   void clear() {
     columns = null;
     columnCount = 0;
     columnNames = [];
-    affectedRows = 0;
-    lastInsertedId = 0;
-    lastError = null;
-  }
-
-  static String? _parseError(dynamic value) {
-    if (value == null) return null;
-    final str = value.toString();
-    if (str == 'null' || str.isEmpty) return null;
-    return str;
   }
 }

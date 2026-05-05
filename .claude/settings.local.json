@@ -34,7 +34,12 @@
       "Bash(tasklist)",
       "Bash(dart:*)",
       "Bash(ls *.md *.yaml)",
-      "Bash(ls pubspec.* README* CHANGELOG*)"
+      "Bash(ls pubspec.* README* CHANGELOG*)",
+      "Bash(python scripts/codemod_v2_4_0.py example/integration_test/dbas_sqlite_web_test.dart)",
+      "Bash(py --version)",
+      "Bash(py scripts/codemod_v2_4_0.py example/integration_test/dbas_sqlite_web_test.dart)",
+      "Bash(py scripts/codemod_v2_4_0.py test/dbas_sqlite_flutter_test.dart)",
+      "Bash(git restore *)"
     ]
   }
 }
