@@ -2,11 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## 2.4.3 - 2026-05-05
+## 2.4.4 - 2026-05-05
 
-Re-publish of 2.4.1. Earlier release-pipeline runs (2.4.1, 2.4.2) were
-blocked by GitHub App configuration and pub.dev OIDC integration issues,
-so the tag and pub.dev publish never landed. Package contents are
+Re-publish of 2.4.1. Earlier release-pipeline runs (2.4.1 – 2.4.3) were
+blocked by GitHub App configuration, pub.dev OIDC wiring, and a tag-pattern
+mismatch on pub.dev's automated-publishing config. Package contents are
 identical to what 2.4.1 was meant to ship.
 
 ## 2.4.1 - 2026-05-05
