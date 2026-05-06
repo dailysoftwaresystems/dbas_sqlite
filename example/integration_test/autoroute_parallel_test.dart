@@ -230,6 +230,76 @@ void main() {
     await db.dropDb();
   });
 
+  // ── In-tx write then multiple parallel multi-row readers ─────────────
+  //
+  // The existing post-write test above uses `executeScalar` for the
+  // parallel readers. This one uses `executeReader` so each reader
+  // streams several rows (exercising the chunked-read path on web,
+  // the per-step FFI path on native), and every reader must observe
+  // the in-flight UPDATE — read-your-writes through the writer route
+  // must hold under fan-out.
+
+  testWidgets(
+      'in-tx write then 8 parallel executeReader runs all see the write',
+      (tester) async {
+    final db = await newDb('autoroute_int_par_postwrite_reader.db',
+        readerPoolSize: 10);
+    await runSql(db,
+        'CREATE TABLE t (group_id INTEGER, id INTEGER PRIMARY KEY, val INTEGER)');
+    // 8 groups × 5 rows = 40 rows. Each reader scans one group's rows.
+    int rowId = 1;
+    for (int g = 1; g <= 8; g++) {
+      for (int i = 1; i <= 5; i++) {
+        await runSql(db, 'INSERT INTO t VALUES (?, ?, ?)',
+            params: [g, rowId++, i]);
+      }
+    }
+
+    await db.beginTransaction();
+    // Bump every val by 1000 in-flight; the readers must see val+1000.
+    await runSql(db, 'UPDATE t SET val = val + 1000');
+
+    final results = await Future.wait(
+      List.generate(8, (g) async {
+        final reader = await (await db.prepareQuery(
+                'SELECT val FROM t WHERE group_id = ? ORDER BY id'))
+            .executeReader(params: [g + 1]);
+        try {
+          final got = <int>[];
+          while (await reader.readRow()) {
+            got.add(reader.getColumnInt(0));
+          }
+          return got;
+        } finally {
+          if (!reader.isClosed) await reader.close();
+        }
+      }),
+    ).timeout(
+      const Duration(seconds: 60),
+      onTimeout: () => fail(
+          '8 parallel post-write in-tx executeReader runs timed out '
+          '(writer path)'),
+    );
+
+    for (int g = 0; g < 8; g++) {
+      // Each group's rows were [1, 2, 3, 4, 5]; in-flight UPDATE
+      // bumped them by 1000.
+      expect(results[g], [1001, 1002, 1003, 1004, 1005],
+          reason: 'group ${g + 1} did not observe the in-flight UPDATE');
+    }
+
+    // Roll back: post-rollback reads must see the original values
+    // (reset for the in-tx write flag is also exercised here).
+    await db.rollback();
+    final after =
+        await (await db.prepareQuery('SELECT val FROM t WHERE id = 1'))
+            .executeScalar();
+    expect(after, 1, reason: 'rollback must restore the original value');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   // ── executeScalar smoke (return shapes that the unit tests cover, but
   // re-run on the real device to confirm cross-platform parity).
 

@@ -37,13 +37,17 @@ import 'web/dbas_sqlite_web_pool.dart';
 ///      50-row chunk so a 10k-row scan is ~200 round-trips instead of
 ///      ~10000. Rows are dequeued from the cache one per call so the
 ///      reader API is unchanged.
-///   4. When the step path observes `SQLITE_DONE` on a write-shape
-///      statement (`columnCount == 0`), the per-stmt counters are
-///      eagerly fetched via `getStmtAffectedRows` /
-///      `getStmtLastInsertedId` so the synchronous platform getters can
-///      return cached values without a round-trip.
-///   5. [finalizeStmt] sends `finalizeStmt` to the worker and drops the
-///      Dart-side state.
+///   4. On every `SQLITE_DONE` (regardless of column count), the
+///      per-stmt counters are eagerly fetched via
+///      `getStmtAffectedRows` / `getStmtLastInsertedId` so the
+///      synchronous platform getters can return cached values without
+///      a round-trip. Capturing unconditionally covers
+///      `INSERT … RETURNING` (which has `columnCount > 0` but still
+///      mutates rows) as well as plain DML.
+///   5. [finalizeStmt] sends `finalizeStmt` to the worker and drops
+///      the Dart-side state. Worker failures propagate as a non-OK rc
+///      so the reader's `onClose` cleanup block in
+///      `DbasSqliteStatement` captures and rethrows them.
 ///
 /// The no-params [executeSql] platform method (used for
 /// `BEGIN`/`COMMIT`/`ROLLBACK`/`VACUUM`/`PRAGMA`) stays mapped to
@@ -216,10 +220,12 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   }
 
   // ── No-params SQL (BEGIN/COMMIT/ROLLBACK/VACUUM/PRAGMA) ──────────────
-  // Mirrors native's `nativeExecuteSql`: single-statement system SQL with
-  // no bindings. Goes through `pool.exec` because the worker's `exec`
-  // action can run multi-statement input via sqlite3_exec; it's also a
-  // single round-trip versus the prepare/bind/step/finalize fan-out.
+  // Used for system SQL with no bindings. Goes through `pool.exec` —
+  // the worker's `exec` action wraps `sqlite3_exec`, so it accepts
+  // multi-statement input and runs in a single worker round-trip.
+  // Statement-level writes with bindings (`Statement.executeSql`) go
+  // through the per-stmt prepare/bind/step/finalize chain instead, so
+  // the same Dart code path runs on native and web.
 
   @override
   Future<int> executeSql(int dbPtr, String sql) async {
@@ -307,6 +313,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     if (state == null) return sqliteOk; // already finalized / unknown
     try {
       await _pool!.finalizeStmt(state.rawHandle);
+      return sqliteOk;
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb.finalizeStmt: pool.finalizeStmt failed',
@@ -314,11 +321,15 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         error: e,
         stackTrace: st,
       );
-      // Idempotent at the worker side; we already dropped state. Don't
-      // surface — finalize is part of cleanup and shouldn't mask the
-      // primary error.
+      // Surface the failure rc so the reader's `onClose` 3-stage
+      // cleanup captures it (statement.dart populates `firstErr` from
+      // each non-OK finalize and rethrows after the release step).
+      // Native FFI's `finalizeStmt` returns the C-level rc directly;
+      // the previous "always sqliteOk" lie hid worker-side leaks the
+      // caller could otherwise have surfaced through `getLastDbError`.
+      _lastError = 'finalizeStmt failed: $e';
+      return 1; // SQLITE_ERROR
     }
-    return sqliteOk;
   }
 
   @override
@@ -331,16 +342,32 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     // Flush buffered binds on the first call. Subsequent calls reuse
     // the already-bound parameters on the worker stmt — the worker
     // doesn't auto-reset between `readRow`/`readRows` calls.
+    //
+    // Statements that mix `?N` (positional) and `:name` (named)
+    // markers need TWO `bindParams` round-trips because the worker's
+    // wrapper accepts either an array or an object per call, not
+    // both. SQLite bind slots are independent so the two calls
+    // accumulate; this matches native FFI's per-slot bind semantics
+    // for the same statement shape.
     if (!state.bindsFlushed) {
-      final params = state.mergedParams();
-      if (params != null) {
-        try {
-          await _pool!.bindParams(state.rawHandle, params);
-        } catch (e) {
-          state.lastError = e.toString();
-          cache.columns = null;
-          return 1; // SQLITE_ERROR — caller propagates
+      // Set the flag in a finally so a partial bind failure (one
+      // shape succeeded, the other threw) doesn't cause a retry on
+      // the next `readRowAndCache` — the worker handle is in an
+      // ambiguous bind state and the caller must finalize and
+      // re-prepare to recover.
+      try {
+        final params = state.mergedParams();
+        if (params.positional != null) {
+          await _pool!.bindParams(state.rawHandle, params.positional);
         }
+        if (params.named != null) {
+          await _pool!.bindParams(state.rawHandle, params.named);
+        }
+      } catch (e) {
+        state.lastError = e.toString();
+        state.bindsFlushed = true;
+        cache.columns = null;
+        return 1; // SQLITE_ERROR — caller propagates
       }
       state.bindsFlushed = true;
     }
@@ -431,6 +458,11 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         error: e,
         stackTrace: st,
       );
+      // Populate lastError so the caller's `getLastStmtError` (read by
+      // the reader's `onClose` block) can distinguish "counter probe
+      // failed" from "stmt was never stepped" (both default values
+      // are -1 otherwise).
+      state.lastError ??= 'getStmtAffectedRows failed at SQLITE_DONE: $e';
     }
     try {
       state.lastInsertedId =
@@ -442,6 +474,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         error: e,
         stackTrace: st,
       );
+      state.lastError ??=
+          'getStmtLastInsertedId failed at SQLITE_DONE: $e';
     }
   }
 
@@ -670,21 +704,35 @@ class _WebStmtState {
     _named[name] = value;
   }
 
-  /// Build the parameter payload for `bindParams`, in the same shape
-  /// the worker's `runBinds` accepts (a List for positional, a Map
-  /// for named). Returns `null` when nothing has been bound — the
-  /// caller skips the round-trip in that case.
-  dynamic mergedParams() {
+  /// Build the parameter payloads for `bindParams`. Returns whichever
+  /// of the two shapes the worker's `bindParams` accepts (positional
+  /// list, named map) are non-empty.
+  ///
+  /// The worker's wrapper splits on `Array.isArray(params)` and
+  /// dispatches each entry to `bindParam(dbPtr, h, key, value)` —
+  /// arrays bind by index, objects bind by name. SQLite's
+  /// `sqlite3_bind_*` slots are independent, so calling `bindParams`
+  /// twice on the same handle (once per shape) accumulates the binds
+  /// rather than overwriting them, matching native FFI's per-slot
+  /// bind semantics for statements that mix `?N` and `:name` markers.
+  ({List<Object?>? positional, Map<String, dynamic>? named})
+      mergedParams() {
+    List<Object?>? positional;
     if (_positional.isNotEmpty) {
-      // Build a dense list indexed by 1-based position.
+      // Build a dense list indexed by 1-based position. Sparse binds
+      // (e.g. only slot 1 and 3 set) leave intermediate entries as
+      // `null`, which binds SQLite NULL to those slots — matching
+      // native FFI's behaviour where unbound slots are NULL by
+      // default.
       final maxIndex =
           _positional.keys.fold<int>(0, (a, b) => a > b ? a : b);
       final list = List<Object?>.filled(maxIndex, null);
       for (final entry in _positional.entries) {
         list[entry.key - 1] = _jsifyBindValue(entry.value);
       }
-      return list;
+      positional = list;
     }
+    Map<String, dynamic>? named;
     if (_named.isNotEmpty) {
       final out = <String, dynamic>{};
       for (final e in _named.entries) {
@@ -696,9 +744,9 @@ class _WebStmtState {
         }
         out[name] = _jsifyBindValue(e.value);
       }
-      return out;
+      named = out;
     }
-    return null;
+    return (positional: positional, named: named);
   }
 
   /// Adapt a Dart bind value into the JS shape the worker's

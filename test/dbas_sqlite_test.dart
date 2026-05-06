@@ -4748,6 +4748,70 @@ void main() async {
     await db.dropDb();
   });
 
+  test(
+      'streaming: in-tx write then parallel executeReader runs all see the write',
+      () async {
+    // The existing autoroute tests cover post-write parallel reads
+    // via executeScalar (single-row scalar). This unit pins down the
+    // multi-row case: every parallel executeReader inside a tx (after
+    // a write) streams its rows from the writer connection and
+    // observes the in-flight UPDATE — the read-your-writes contract
+    // must hold under reader fan-out.
+    final db = await _createTestDb('stream_inttx_par_reader.db',
+        readerPoolSize: 8, workerPoolSize: 12);
+    await _runSql(db,
+        'CREATE TABLE t (group_id INTEGER, id INTEGER PRIMARY KEY, val INTEGER)');
+    int rowId = 1;
+    for (int g = 1; g <= 6; g++) {
+      for (int i = 1; i <= 4; i++) {
+        await _runSql(db, 'INSERT INTO t VALUES (?, ?, ?)',
+            params: [g, rowId++, i]);
+      }
+    }
+
+    await db.beginTransaction();
+    await _runSql(db, 'UPDATE t SET val = val + 100');
+
+    final results = await Future.wait(
+      List.generate(6, (g) async {
+        final reader = await (await db.prepareQuery(
+                'SELECT val FROM t WHERE group_id = ? ORDER BY id'))
+            .executeReader(params: [g + 1]);
+        try {
+          final got = <int>[];
+          while (await reader.readRow()) {
+            got.add(reader.getColumnInt(0));
+          }
+          return got;
+        } finally {
+          if (!reader.isClosed) await reader.close();
+        }
+      }),
+    ).timeout(
+      const Duration(seconds: 60),
+      onTimeout: () => fail(
+          '6 parallel post-write in-tx executeReader runs timed out '
+          '(writer-serialised path)'),
+    );
+
+    for (int g = 0; g < 6; g++) {
+      // Group g+1's val column was originally [1, 2, 3, 4]; the
+      // in-flight UPDATE bumped each by 100. Every parallel reader
+      // must observe the bumped values.
+      expect(results[g], [101, 102, 103, 104],
+          reason: 'group ${g + 1} did not observe the in-flight UPDATE');
+    }
+
+    await db.rollback();
+    final after = await (await db
+            .prepareQuery('SELECT val FROM t WHERE id = 1'))
+        .executeScalar();
+    expect(after, 1, reason: 'rollback must restore the original value');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   test('streaming: row payload preserves int / double / text / blob / null',
       () async {
     final db = await _createTestDb('stream_mixed_types.db');

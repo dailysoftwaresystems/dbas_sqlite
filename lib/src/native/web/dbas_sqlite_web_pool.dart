@@ -199,10 +199,14 @@ class DbasSqliteWebPool {
           'affectedRows': _jsToInt(jsResult['affectedRows']),
           'lastInsertId': _jsToInt(jsResult['lastInsertId']),
         };
-        // Propagate `rows` if the JS worker included it (current
-        // bundled `dbas_sqlite_worker.js` v4.3.6 doesn't, but a
-        // future build that supports SELECT through pool.exec will,
-        // and the in-transaction read path on web depends on it).
+        // Propagate `rows` if a future worker action shape includes
+        // them. The current bundle's `exec` action returns counters
+        // only; SELECTs go through the per-stmt streaming path
+        // (`prepareQueryStream` / `bindParams` / `readRows` /
+        // `finalizeStmt`) instead, which is how `Statement.executeReader`
+        // operates on every platform after the v2.5.0 unification. This
+        // branch is kept defensively so a worker upgrade that adds
+        // rows here would not silently lose data.
         final rowsProp = jsResult['rows'];
         if (rowsProp != null && !rowsProp.isUndefinedOrNull) {
           final dartified = (rowsProp as JSObject).dartify();
@@ -232,11 +236,17 @@ class DbasSqliteWebPool {
 
   /// Execute a read query. Returns all rows.
   ///
-  /// **Eager**. Prefer [prepareQueryStream] + [readRow] for SELECTs that
-  /// might return many rows — it streams one row per worker round-trip
-  /// and matches the native FFI `executeReader` behaviour exactly. This
-  /// path is kept only for callers that genuinely want the full
-  /// materialised list (e.g. internal `PRAGMA` probes inside this file).
+  /// **Eager**. Used internally for short PRAGMA / version probes
+  /// where the result set is known to be tiny (e.g.
+  /// `SELECT sqlite_version()`, `PRAGMA journal_mode`). User-facing
+  /// SELECTs go through the per-stmt streaming path
+  /// ([prepareQueryStream] + [bindParams] + [readRow] for the first
+  /// step + [readRows] for subsequent chunks + [finalizeStmt]) which
+  /// is what `DbasSqliteStatement.executeReader` and
+  /// `DbasSqliteStatement.executeScalar` drive on every platform
+  /// after the v2.5.0 unification. That path matches native FFI
+  /// `executeReader` behaviour exactly: rows arrive incrementally,
+  /// `executeScalar` issues exactly one `readRow` and then closes.
   Future<List<Map<String, dynamic>>> query(String sql, [dynamic params]) async {
     final payload = <String, dynamic>{'sql': sql};
     if (params != null) payload['params'] = params;
@@ -251,8 +261,8 @@ class DbasSqliteWebPool {
   // ── Streaming SELECT (1:1 mirror of native FFI prepare/step/finalize) ──
   //
   // These primitives expose the worker's per-statement streaming
-  // protocol (worker bundle v4.4.2: prepareQuery / bindParams /
-  // readRows (chunked) / finalizeStmt + getStmtAffectedRows /
+  // protocol (worker bundle v4.5.0: prepareQuery / bindParams /
+  // readRow / readRows (chunked) / finalizeStmt + getStmtAffectedRows /
   // getStmtLastInsertedId). They are the web-side counterpart of the
   // native FFI `prepareQuery` / `bindParams` / `readRowAndCache` /
   // `finalizeStmt` calls.
@@ -378,9 +388,10 @@ class DbasSqliteWebPool {
   /// rc. The caller is responsible for [finalizeStmt] in both cases —
   /// the worker does not auto-finalize on `SQLITE_DONE`.
   ///
-  /// Prefer [readRows] for bulk iteration; this single-row action is
-  /// retained for the `executeScalar` fast-path (one step + close, no
-  /// extra rows fetched).
+  /// Used by `DbasSqliteNativeWeb.readRowAndCache` for the **first**
+  /// step of every prepared SELECT — so `executeScalar` issues
+  /// exactly one round-trip and exits without fetching additional
+  /// rows. Subsequent steps use [readRows] to bulk-fetch chunks.
   Future<({int rc, List<ColumnData>? columns})> readRow(
       JSAny rawHandle, List<String> columnNames) {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
@@ -556,9 +567,9 @@ class DbasSqliteWebPool {
 
   /// Returns `sqlite3_changes()` for the connection scoped to the
   /// prepared [rawHandle]. The worker throws `STMT_NEVER_STEPPED` if
-  /// the handle has never been successfully stepped via
-  /// [readRows] / `readRow`, so callers must read counters only after
-  /// at least one [readRows] call.
+  /// the handle has never been successfully stepped via [readRow] or
+  /// [readRows], so callers must read counters only after at least
+  /// one successful step.
   Future<int> getStmtAffectedRows(JSAny rawHandle) async {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
@@ -991,12 +1002,14 @@ class DbasSqliteWebPool {
     _requests.clear();
 
     // Stream handlers own their completers inside their closures (see
-    // `prepareQueryStream`, `readRow`, `exec`, `attachStreamChunked`,
+    // `prepareQueryStream`, `readRow`, `readRows`, `getStmtAffectedRows`,
+    // `getStmtLastInsertedId`, `exec`, `attachStreamChunked`,
     // `exportContentStream`). Synthesise an `error`-shaped JS object
     // and dispatch it to each handler — they're already structured to
     // unwrap the error and reject their captured completer. Without
-    // this, in-flight stream-RPC callers (e.g. `WebRowStream.moveNext`
-    // mid-iteration) would hang forever after a graceful close.
+    // this, an in-flight stream-RPC caller (e.g. a `readRows` chunk
+    // fetch driving `DbasSqliteReader.readRow` mid-iteration) would
+    // hang forever after a graceful close.
     final handlersSnapshot = Map.of(_streamHandlers);
     _streamHandlers.clear();
     for (final entry in handlersSnapshot.entries) {

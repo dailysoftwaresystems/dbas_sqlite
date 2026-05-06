@@ -368,18 +368,20 @@ class DbasSqliteStatement {
   /// Routing is automatic and consistent across native and web. On
   /// both platforms each row is fetched lazily — native uses the
   /// FFI prepare/step/finalize lifecycle, web uses the worker's
-  /// `prepareQuery` / `bindParams` / `readRow` / `finalizeStmt` RPC.
-  /// `executeScalar` therefore issues exactly one `step`/`readRow`
-  /// regardless of how many rows the SQL would otherwise produce.
+  /// `prepareQuery` / `bindParams` / `readRow` / `readRows` /
+  /// `finalizeStmt` RPC chain. `executeScalar` therefore issues
+  /// exactly one `step` / `readRow` regardless of how many rows the
+  /// SQL would otherwise produce.
   ///
-  ///   - **Outside a transaction**: native uses a pool reader; web
-  ///     uses the writer worker (the web pool fronts a single worker
-  ///     that holds the writer connection — there is no separate
-  ///     reader worker on web).
+  ///   - **Outside a transaction**: native uses a pool reader. Web's
+  ///     pool returns the same single worker connection for any
+  ///     reader-acquire (the web pool fronts one worker, no separate
+  ///     reader workers), so the same routing logic resolves to that
+  ///     connection.
   ///   - **Inside a transaction, before any `executeSql` runs**: same
-  ///     as outside — pool reader on native, writer worker on web.
-  ///     Parallel `Future.wait([executeReader, ...])` issued before
-  ///     the first write runs concurrently on native against
+  ///     as outside — pool reader on native, the writer worker on
+  ///     web. Parallel `Future.wait([executeReader, ...])` issued
+  ///     before the first write runs concurrently on native against
   ///     independent pool connections; on web the worker serialises
   ///     them through its single connection.
   ///   - **Inside a transaction, after any `executeSql` runs**: routes

@@ -59,11 +59,16 @@ All notable changes to this project will be documented in this file.
     so `executeScalar` issues exactly one row's worth of work and no
     waste; subsequent fetches use the chunked `readRows` action with a
     50-row chunk so a 10k-row scan is ~200 round-trips instead of the
-    ~10000 a per-row pipeline would require (worker bundle v4.4.2).
+    ~10000 a per-row pipeline would require (worker bundle v4.5.0).
   - Per-stmt counters (`getStmtAffectedRows` / `getStmtLastInsertedId`)
-    are eagerly captured on `SQLITE_DONE` for write-shape statements,
-    so the synchronous platform getters return correct values without
-    extra round-trips at read time.
+    are eagerly captured on every `SQLITE_DONE` step (covering plain
+    DML, `INSERT … RETURNING`, and SELECT readers alike), so the
+    synchronous platform getters return correct values without extra
+    round-trips at read time.
+  - Statements that mix `?N` (positional) and `:name` (named) markers
+    are bound via two `bindParams` worker calls (one per shape);
+    SQLite's bind slots are independent so the calls accumulate,
+    matching native FFI's per-slot bind semantics.
 
   Internally, the `WebQueryBuffer` / `WebRowStream` shims, the
   `executeStatementWrite` / `executeStatementRead` entry points, and
