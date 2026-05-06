@@ -704,11 +704,6 @@ class DbasSqliteWebPool {
         type: 3, isNull: false, value: 'unsupported:${raw.runtimeType}');
   }
 
-  /// Execute a batch of statements.
-  Future<void> batch(List<Map<String, dynamic>> statements) async {
-    await send('batch', {'statements': statements});
-  }
-
   /// Drop the database (removes all OPFS files).
   Future<void> drop() async {
     await send('drop');
@@ -813,6 +808,13 @@ class DbasSqliteWebPool {
   // ── Streaming export ────────────────────────────────────────────────────
 
   /// Export the database content as bytes using the streaming protocol.
+  ///
+  /// **Eager output**: chunks stream from the worker to Dart, but
+  /// they're aggregated into a single `List<int>` here before the
+  /// future completes — the entire DB sits in Dart memory at the
+  /// peak. This is the default `getContent` path. Memory-friendly
+  /// alternatives exist at the application layer (`streamCopyDb` for
+  /// file-to-file copy without ever entering Dart memory).
   ///
   /// Handles both the Transferable Streams path (Chrome/Firefox — the worker
   /// sends a [ReadableStream]) and the chunked postMessage fallback (Safari —

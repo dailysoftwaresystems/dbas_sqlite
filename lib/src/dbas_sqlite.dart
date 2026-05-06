@@ -163,6 +163,11 @@ class DbasSqlite {
   }
 
   /// Attaches a database from bytes and optionally opens it.
+  ///
+  /// **Eager input**: the caller passes the full database content as
+  /// a single in-memory buffer. For multi-hundred-MB imports prefer
+  /// [attachStreamDb], which writes chunks incrementally without
+  /// holding the whole file in memory.
   Future<DbasSqlite> attachDb(List<int> bytes, {bool openDb = true}) async {
     if (_instance.containsKey(dbName)) {
       if (_instance[dbName]!.isOpened()) {
@@ -179,6 +184,13 @@ class DbasSqlite {
   }
 
   /// Attaches a database from a byte stream and optionally opens it.
+  ///
+  /// **Streaming input**: chunks are written incrementally as they
+  /// arrive from [stream]. Native pipes them through
+  /// `File.openWrite()`; web sends each chunk via the worker's
+  /// chunked-attach protocol with per-chunk ACK backpressure, so the
+  /// worker holds at most one chunk at a time. Use this for imports
+  /// large enough that the in-memory [attachDb] would be wasteful.
   Future<DbasSqlite> attachStreamDb(Stream<List<int>> stream,
       {bool openDb = true}) async {
     if (_instance.containsKey(dbName)) {
@@ -204,6 +216,13 @@ class DbasSqlite {
   }
 
   /// Returns the raw bytes of the database file.
+  ///
+  /// **Eager**: the full database content is materialised in Dart
+  /// memory before this future completes. For large databases (more
+  /// than a few hundred MB) prefer [streamCopyDb] to copy the file
+  /// into another OPFS / filesystem location without round-tripping
+  /// the bytes through the Dart heap, or feed [attachStreamDb] from
+  /// a real source stream when re-importing.
   Future<List<int>> getContent() async {
     final fileName = await getAppDatabasePath(dbName: dbName);
     return await _platform.getContent(fileName);

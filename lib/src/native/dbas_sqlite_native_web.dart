@@ -161,6 +161,10 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       DbasSqliteWebPool.removePool(dbName);
     }
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
+    // Eager input: the caller already has the full buffer in memory,
+    // so the chunked-attach protocol receives it as a single chunk.
+    // Memory-friendly attach should use `attachStreamDb` with a real
+    // source stream instead.
     await pool.attachStreamChunked(
       Stream.fromIterable([content]),
       totalSize: content.length,
