@@ -204,57 +204,21 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   /// Used by `DbasSqliteStatement.executeReader` on web.
   ///
-  /// Outside a transaction: routes through `pool.query` (reader
-  /// worker pool, SHARED MRSW fence) — works for any SELECT.
-  ///
-  /// Inside a transaction: tries `pool.exec` (writer worker,
-  /// EXCLUSIVE MRSW fence) — necessary for read-your-own-writes
-  /// because reader workers run on separate connections that don't
-  /// see the writer's BEGIN-bracketed state. The current bundled JS
-  /// (`dbas_sqlite_worker.js` v4.3.6) does NOT return rows for SELECT
-  /// through `pool.exec`. When the rows aren't returned this path
-  /// throws [UnsupportedError] with a clear migration message — never
-  /// returns silently-empty.
+  /// Always routes through `pool.query`, which dispatches to the
+  /// writer worker (the web pool spawns exactly one worker, role
+  /// `writer`, that owns the only SQLite connection). The worker's
+  /// `query` handler runs `runQuery` against that connection, so a
+  /// SELECT issued mid-transaction observes the in-flight
+  /// uncommitted writes — read-your-writes works automatically with
+  /// no routing flag from the caller.
   Future<WebQueryBuffer> executeStatementRead(
-      String sql, dynamic params, {required bool inTransaction}) async {
+      String sql, dynamic params) async {
     await _ensurePool();
     try {
-      if (inTransaction) {
-        final result = await _pool!.exec(sql, params);
-        final rows = result['rows'];
-        if (rows is List) {
-          // Future-compatible path: when the JS wrapper supports
-          // SELECT-via-exec, the rows arrive here in flat-dict form.
-          // Update the last-write counters since the writer worker
-          // really did process the statement.
-          _lastAffectedRows = toIntSafe(result['affectedRows']);
-          _lastInsertedId = toIntSafe(result['lastInsertId']);
-          return WebQueryBuffer(
-              rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
-        }
-        // Current behaviour: no rows came back. Don't pretend the
-        // result set is empty — surface the limitation loudly.
-        // Importantly, do NOT mutate _lastAffectedRows / _lastInsertedId
-        // from the SELECT-shaped exec result: those counters describe
-        // writes, and a SELECT misrouted through pool.exec would
-        // poison the next stmt.getAffectedRows() with bogus values.
-        throw UnsupportedError(
-          'executeReader inside a transaction is not supported on web '
-          '(the bundled JS worker v4.3.6 cannot return SELECT rows '
-          'through pool.exec, which is the only path that observes '
-          'in-flight transactional state). Run the SELECT outside the '
-          'transaction, or restructure the code to read first.',
-        );
-      } else {
-        final rows = await _pool!.query(sql, params);
-        return WebQueryBuffer(rows);
-      }
+      final rows = await _pool!.query(sql, params);
+      return WebQueryBuffer(rows);
     } catch (e) {
-      // Don't capture UnsupportedError into _lastError — it's a
-      // structural limitation, not a SQL error.
-      if (e is! UnsupportedError) {
-        _lastError = e.toString();
-      }
+      _lastError = e.toString();
       rethrow;
     }
   }

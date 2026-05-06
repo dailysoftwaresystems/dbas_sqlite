@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.5.0 - 2026-05-05
+
+### Added
+
+- **`DbasSqliteStatement.executeScalar({params, nameParams})`** — runs the
+  prepared statement as a SELECT and returns the first column of the first
+  row as a `dynamic` (typed by SQLite column kind: `int`, `double`,
+  `String`, `Uint8List`). Returns `null` when the query produces no rows
+  or the first column is SQL NULL. Closes both the reader and the
+  statement before returning, so the statement becomes single-use. Same
+  input parameters and connection routing as `executeReader`.
+
+### Changed
+
+- **In-transaction read routing is now automatic.** `executeReader` and
+  `executeScalar` route through a pool reader (native) or `pool.query`
+  (web) until the first `executeSql` runs in the current transaction;
+  after that, subsequent in-tx reads switch to the writer connection so
+  they observe the transaction's uncommitted writes (read-your-writes).
+  Previously, in-tx reads always used the writer connection on native,
+  serialising parallel pre-write validation behind the single writer.
+  Now `Future.wait([executeReader, executeReader, ...])` issued before
+  any write in a transaction runs concurrently against the pool. After
+  any `executeSql`, the routing flips automatically; on `commit` /
+  `rollback` it resets. No caller-side flag needed.
+
+- **Web in-transaction reads no longer throw.** Previously, calling
+  `executeReader` inside a transaction on web threw `UnsupportedError`
+  because the bundled JS worker can't return SELECT rows through the
+  writer-only `pool.exec` channel. The library now routes web reads
+  through `pool.query` regardless of transaction state — the web pool
+  fronts a single worker holding the writer connection, so `pool.query`
+  observes in-flight transactional state automatically.
+
 ## 2.4.4 - 2026-05-05
 
 Re-publish of 2.4.1. Earlier release-pipeline runs (2.4.1 – 2.4.3) were
