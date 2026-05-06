@@ -201,9 +201,6 @@ class DbasSqliteStatement {
     if (nameParams != null) _namedBinds = Map.of(nameParams);
 
     try {
-      if (kIsWeb) {
-        return await _executeSqlWeb();
-      }
       return await _executeSqlNative();
     } catch (_) {
       _positionalBinds = positionalSnapshot;
@@ -233,7 +230,7 @@ class DbasSqliteStatement {
       }
 
       try {
-        await _replayBindsNative(conn, handle);
+        await _replayBinds(conn, handle);
 
         final cache = RowData();
         final rc = await _platform.readRowAndCache(conn, handle, cache);
@@ -269,17 +266,7 @@ class DbasSqliteStatement {
     }
   }
 
-  Future<int> _executeSqlWeb() async {
-    // Symmetric with the native path — see `_executeSqlNative`.
-    _db.markTransactionWriteInternal();
-    final delegate = _platform.delegate(_db.dbName) as dynamic;
-    final result = await delegate.executeStatementWrite(_sql, _mergedParams());
-    _lastAffectedRows = result.affectedRows as int;
-    _lastInsertedId = result.lastInsertedId as int;
-    return _lastAffectedRows;
-  }
-
-  Future<void> _replayBindsNative(DbasSqliteDb conn, int handle) async {
+  Future<void> _replayBinds(DbasSqliteDb conn, int handle) async {
     for (int i = 0; i < _positionalBinds.length; i++) {
       final index = i + 1;
       final value = _positionalBinds[i];
@@ -373,43 +360,6 @@ class DbasSqliteStatement {
     throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
   }
 
-  /// Web-only: merge positional + named into a single payload that
-  /// the JS pool's exec/query understand. Positional wins if both are
-  /// set; if only named is set, we send a JS object with auto-prefixed
-  /// keys.
-  dynamic _mergedParams() {
-    if (_positionalBinds.isNotEmpty) {
-      return _positionalBinds.map(_jsifyBindValue).toList();
-    }
-    if (_namedBinds.isNotEmpty) {
-      final out = <String, dynamic>{};
-      for (final e in _namedBinds.entries) {
-        String name = e.key;
-        if (!name.startsWith(':') && !name.startsWith('@') && !name.startsWith(r'$')) {
-          name = ':$name';
-        }
-        out[name] = _jsifyBindValue(e.value);
-      }
-      return out;
-    }
-    return null;
-  }
-
-  Object? _jsifyBindValue(Object? value) {
-    if (value == null) return null;
-    if (value is bool) return value ? 1 : 0;
-    if (value is Decimal) return value.toString();
-    if (value is Enum) return value.index;
-    // Blobs MUST cross the postMessage boundary as a typed-array so
-    // the JS wrapper's bindParams recognises them via
-    // `instanceof Uint8Array` and routes through bindBlob. A raw
-    // `List<int>` jsifies to a regular JS Array and gets stringified
-    // by the bindText fallback, silently corrupting the bytes.
-    if (value is Uint8List) return value;
-    if (value is List<int>) return Uint8List.fromList(value);
-    return value;
-  }
-
   // ── Execution: reader ────────────────────────────────────────────────
 
   /// Executes the prepared statement as a SELECT and returns a
@@ -458,9 +408,6 @@ class DbasSqliteStatement {
     if (nameParams != null) _namedBinds = Map.of(nameParams);
 
     try {
-      if (kIsWeb) {
-        return await _executeReaderWeb();
-      }
       return await _executeReaderNative();
     } catch (_) {
       _positionalBinds = positionalSnapshot;
@@ -519,7 +466,7 @@ class DbasSqliteStatement {
         throw Exception('It was not possible to prepare the query: $err');
       }
 
-      await _replayBindsNative(conn, handle);
+      await _replayBinds(conn, handle);
 
       final reader = DbasSqliteReader.internal(
         conn: conn,
@@ -613,54 +560,6 @@ class DbasSqliteStatement {
         }
       }
     }
-  }
-
-  Future<DbasSqliteReader> _executeReaderWeb() async {
-    final delegate = _platform.delegate(_db.dbName) as dynamic;
-    // The web pool fronts a single worker initialised with role
-    // `writer`; that worker holds the only SQLite connection. So
-    // `executeStatementRead` always runs against the writer
-    // connection and automatically observes any in-flight transaction
-    // state when the caller is inside a transaction. No routing flag
-    // needed.
-    //
-    // The returned `WebRowStream` is a per-statement streaming cursor
-    // (worker-resident handle + Dart-side per-row cache). Closing the
-    // reader disposes the stream, which sends `finalizeStmt` to the
-    // worker to release the handle and the worker's SHARED reader
-    // fence.
-    final dynamic stream = await delegate.executeStatementRead(
-      _sql,
-      _mergedParams(),
-    );
-    final reader = DbasSqliteReader.internal(
-      conn: _db.dbInternal!,
-      handle: sqliteInvalidStmtHandle, // unused on web pool path
-      platform: _platform,
-      // Pre-populate the reader's column metadata from the prepare-
-      // time response so `getColumnCount` / `getColumnName` return
-      // correct values for empty result sets (the previous eager-
-      // materialisation path could only recover names from row 0,
-      // so empty results returned `columnCount == 0`).
-      initialColumnCount: stream.columnCount as int,
-      initialColumnNames: List<String>.from(stream.columnNames as List),
-      webBuffer: stream,
-      onClose: () async {
-        try {
-          await (stream.dispose() as Future<void>);
-        } catch (e, st) {
-          developer.log(
-            'reader onClose: WebRowStream dispose failed',
-            name: 'dbas_sqlite.DbasSqliteStatement',
-            error: e,
-            stackTrace: st,
-          );
-        }
-        _activeReader = null;
-      },
-    );
-    _activeReader = reader;
-    return reader;
   }
 
   // ── Execution: scalar ────────────────────────────────────────────────

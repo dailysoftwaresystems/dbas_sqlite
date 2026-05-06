@@ -28,9 +28,10 @@ final class DbasSqlitePlatform {
 
   Future<void> initialize(String name) async => await _delegate[name]!.initialize();
 
-  /// Direct access to the underlying delegate (for the web statement
-  /// path that needs to call `executeStatementWrite` /
-  /// `executeStatementRead` — not on the abstract interface).
+  /// Direct access to the underlying delegate. Reserved for code
+  /// paths that need access to platform-specific helpers not exposed
+  /// on the abstract interface; the per-stmt prepare/bind/step/finalize
+  /// flow uses the abstract interface methods directly.
   DbasSqliteNativeInterface delegate(String dbName) => _delegate[dbName]!;
 
   // ── Library-scoped ───────────────────────────────────────────────────

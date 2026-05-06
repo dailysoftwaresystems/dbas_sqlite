@@ -39,15 +39,36 @@ All notable changes to this project will be documented in this file.
 
 - **Web SELECT path is now streaming.** `executeReader` / `executeScalar`
   on web no longer materialise the entire result set in the worker
-  before the first row reaches Dart. The platform layer now uses the
-  worker bundle's per-statement RPC (`prepareQuery` / `bindParams` /
-  `readRow` / `finalizeStmt`, available since native lib v4.4.1) so each
-  `readRow()` call streams exactly one row across the worker boundary —
-  matching the native FFI behaviour exactly. `executeScalar` over a
-  10k-row table now issues a single `readRow` round-trip instead of
-  fetching all 10k rows. Internally, the eager `WebQueryBuffer` is
-  replaced by a `WebRowStream` cursor; `DbasSqliteReader` and
-  `DbasSqliteStatement` are unchanged at the public-API boundary.
+  before the first row reaches Dart. The platform layer uses the
+  worker bundle's per-statement RPC so reads stream one chunk at a
+  time across the worker boundary — matching the native FFI behaviour
+  exactly. `executeScalar` over a 10k-row table now issues a single
+  `readRow` round-trip instead of fetching all 10k rows.
+
+- **Web platform implementation unified with native.** Web now
+  implements the full per-stmt platform interface (`prepareQuery` /
+  `bind*` / `readRowAndCache` / `finalizeStmt` / `getStmt*`).
+  `DbasSqliteStatement` and `DbasSqliteReader` no longer have any
+  `kIsWeb` branches — both platforms run the exact same Dart code
+  path; only the platform-delegate implementation differs.
+
+  - On web, `bind*` calls buffer Dart-side and flush via one
+    `bindParams` round-trip on the first step, matching the worker's
+    batch-bind shape.
+  - The first row fetch uses the worker's single-row `readRow` action
+    so `executeScalar` issues exactly one row's worth of work and no
+    waste; subsequent fetches use the chunked `readRows` action with a
+    50-row chunk so a 10k-row scan is ~200 round-trips instead of the
+    ~10000 a per-row pipeline would require (worker bundle v4.4.2).
+  - Per-stmt counters (`getStmtAffectedRows` / `getStmtLastInsertedId`)
+    are eagerly captured on `SQLITE_DONE` for write-shape statements,
+    so the synchronous platform getters return correct values without
+    extra round-trips at read time.
+
+  Internally, the `WebQueryBuffer` / `WebRowStream` shims, the
+  `executeStatementWrite` / `executeStatementRead` entry points, and
+  the `_executeSqlWeb` / `_executeReaderWeb` branches in
+  `DbasSqliteStatement` are all gone. Public API surface is unchanged.
 
 ### Fixed
 

@@ -223,11 +223,11 @@ abstract class DbasSqliteNativeInterface {
   Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value);
 
   // ── Column accessors ────────────────────────────────────────────────
-  // These exist on the interface so single-connection web fallback can
-  // implement them; the pool path on web streams rows through
-  // `WebRowStream` (one `readRow` worker round-trip per row) and
-  // `DbasSqliteReader` reads `ColumnData` from the stream's per-row
-  // cache directly.
+  // These exist on the interface for the native FFI implementation,
+  // which calls them per-column inside `readRowAndCache` to populate
+  // the per-reader [RowData] cache. Web's `readRowAndCache` populates
+  // the cache directly from the worker's row payload, so these
+  // methods are unreachable on web (the implementation throws).
   bool isNull(int dbPtr, int handle, int colIndex);
   String getColumnText(int dbPtr, int handle, int colIndex);
   int getColumnInt(int dbPtr, int handle, int colIndex);
