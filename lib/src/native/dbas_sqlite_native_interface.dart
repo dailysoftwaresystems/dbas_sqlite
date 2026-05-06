@@ -224,8 +224,10 @@ abstract class DbasSqliteNativeInterface {
 
   // ── Column accessors ────────────────────────────────────────────────
   // These exist on the interface so single-connection web fallback can
-  // implement them; the pool path on web reads from the pre-buffered
-  // WebQueryBuffer directly via `executeStatementRead`.
+  // implement them; the pool path on web streams rows through
+  // `WebRowStream` (one `readRow` worker round-trip per row) and
+  // `DbasSqliteReader` reads `ColumnData` from the stream's per-row
+  // cache directly.
   bool isNull(int dbPtr, int handle, int colIndex);
   String getColumnText(int dbPtr, int handle, int colIndex);
   int getColumnInt(int dbPtr, int handle, int colIndex);

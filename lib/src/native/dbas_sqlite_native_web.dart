@@ -6,16 +6,25 @@ import 'dbas_sqlite_web_pool.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 
 /// Web implementation backed by the JS pool wrapper
-/// (`web/libs/dbas_sqlite.js` + `dbas_sqlite_worker.js`). The Dart side
-/// dispatches `pool.exec` for writes and `pool.query` for reads via the
-/// new `executeStatementWrite` / `executeStatementRead` entry points
-/// (called from `DbasSqliteStatement`). Per-stmt ABI calls (prepare /
-/// bind / readRow / finalize) are not used on the pool path — the JS
-/// pool runs SQL atomically per `pool.exec` / `pool.query` round-trip.
+/// (`web/libs/dbas_sqlite.js` + `dbas_sqlite_worker.js`).
+///
+/// Writes go through `pool.exec` via [executeStatementWrite] (one
+/// round-trip per statement, atomic on the worker side).
+///
+/// Reads go through the worker's per-statement streaming RPC
+/// (`prepareQuery` / `bindParams` / `readRow` / `finalizeStmt`,
+/// available since worker bundle v4.4.1) via [executeStatementRead].
+/// Each `readRow()` call streams exactly one row across the worker
+/// boundary — matching the native FFI behaviour. The wrapper-level
+/// per-stmt ABI methods on [DbasSqliteNativeInterface] (`prepareQuery`,
+/// `bindNull`, `getColumnText`, etc.) are **not** used on web; the
+/// pool's [DbasSqliteWebPool.prepareQueryStream] / `bindParams` /
+/// `readRow` / `finalizeStmt` primitives drive the streaming reader
+/// directly.
 ///
 /// The single-connection fallback path (when the JS pool fails to
-/// initialise) is not implemented in v2.4.0; consumers requiring it
-/// will get an `UnsupportedError` from the per-stmt entry points.
+/// initialise) is not implemented; consumers requiring it will get
+/// an `UnsupportedError` from the per-stmt ABI stubs below.
 class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   DbasSqliteWebPool? _pool;
   bool _initialized = false;
@@ -204,23 +213,60 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   /// Used by `DbasSqliteStatement.executeReader` on web.
   ///
-  /// Always routes through `pool.query`, which dispatches to the
-  /// writer worker (the web pool spawns exactly one worker, role
-  /// `writer`, that owns the only SQLite connection). The worker's
-  /// `query` handler runs `runQuery` against that connection, so a
-  /// SELECT issued mid-transaction observes the in-flight
-  /// uncommitted writes — read-your-writes works automatically with
-  /// no routing flag from the caller.
-  Future<WebQueryBuffer> executeStatementRead(
+  /// Routes through the worker's per-statement streaming RPC
+  /// (`prepareQuery` / `bindParams` / `readRow` / `finalizeStmt`) so
+  /// the result set is consumed one row at a time — matching the
+  /// native FFI `executeReader` behaviour. No materialisation: a
+  /// 10k-row SELECT issues 10k `readRow` round-trips, and a
+  /// `LIMIT 1` SELECT (driven by `executeScalar`) issues exactly one.
+  ///
+  /// The web pool spawns a single writer worker that owns the only
+  /// SQLite connection, so a SELECT issued mid-transaction observes
+  /// the in-flight uncommitted writes — read-your-writes works
+  /// automatically with no routing flag from the caller.
+  ///
+  /// On bind failure the orphan handle is finalised here; the caller
+  /// never sees a [WebRowStream] in that path.
+  Future<WebRowStream> executeStatementRead(
       String sql, dynamic params) async {
     await _ensurePool();
+    final ({WebStmtHandle handle, int columnCount, List<String> columnNames})
+        prep;
     try {
-      final rows = await _pool!.query(sql, params);
-      return WebQueryBuffer(rows);
+      prep = await _pool!.prepareQueryStream(sql);
     } catch (e) {
       _lastError = e.toString();
       rethrow;
     }
+
+    if (params != null) {
+      try {
+        await _pool!.bindParams(prep.handle, params);
+      } catch (e) {
+        // Bind failure: caller never gets the handle, so we own the
+        // cleanup. The worker's `finalizeStmt` is idempotent and
+        // tolerant of unknown handles — safe to call unconditionally.
+        try {
+          await _pool!.finalizeStmt(prep.handle);
+        } catch (e2, st2) {
+          developer.log(
+            'executeStatementRead: cleanup finalize after bind failure failed',
+            name: 'dbas_sqlite.DbasSqliteNativeWeb',
+            error: e2,
+            stackTrace: st2,
+          );
+        }
+        _lastError = e.toString();
+        rethrow;
+      }
+    }
+
+    return WebRowStream(
+      pool: _pool!,
+      handle: prep.handle,
+      columnCount: prep.columnCount,
+      columnNames: prep.columnNames,
+    );
   }
 
   // ── State accessors (last-write outcome from executeSql/Statement) ────
@@ -349,9 +395,10 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _webStubUnreachable('bindNameBlob');
 
   // Per-handle column accessors — only reachable via the per-stmt path
-  // which web does not use. The pool buffers the entire row set into a
-  // WebQueryBuffer, and DbasSqliteReader reads through that buffer
-  // directly without going through the platform interface.
+  // which web does not use. Web reads stream through `WebRowStream`
+  // (one `readRow` worker round-trip per row), and `DbasSqliteReader`
+  // reads `ColumnData` from the stream's per-row cache directly
+  // without going through the platform interface.
   @override
   bool isNull(int dbPtr, int handle, int colIndex) =>
       _webStubUnreachable('isNull');

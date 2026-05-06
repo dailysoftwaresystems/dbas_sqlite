@@ -415,16 +415,23 @@ class DbasSqliteStatement {
   /// Executes the prepared statement as a SELECT and returns a
   /// [DbasSqliteReader] for row-by-row iteration.
   ///
-  /// Routing is automatic and consistent across native and web:
+  /// Routing is automatic and consistent across native and web. On
+  /// both platforms each row is fetched lazily — native uses the
+  /// FFI prepare/step/finalize lifecycle, web uses the worker's
+  /// `prepareQuery` / `bindParams` / `readRow` / `finalizeStmt` RPC.
+  /// `executeScalar` therefore issues exactly one `step`/`readRow`
+  /// regardless of how many rows the SQL would otherwise produce.
+  ///
   ///   - **Outside a transaction**: native uses a pool reader; web
-  ///     dispatches through the writer worker via `pool.query` (the
-  ///     web pool fronts a single worker that holds the writer
-  ///     connection — there is no separate reader worker on web).
+  ///     uses the writer worker (the web pool fronts a single worker
+  ///     that holds the writer connection — there is no separate
+  ///     reader worker on web).
   ///   - **Inside a transaction, before any `executeSql` runs**: same
-  ///     as outside — pool reader on native, `pool.query` on web. Any
-  ///     parallel `Future.wait([executeReader, ...])` issued before
-  ///     the first write therefore runs concurrently on native
-  ///     against independent pool connections.
+  ///     as outside — pool reader on native, writer worker on web.
+  ///     Parallel `Future.wait([executeReader, ...])` issued before
+  ///     the first write runs concurrently on native against
+  ///     independent pool connections; on web the worker serialises
+  ///     them through its single connection.
   ///   - **Inside a transaction, after any `executeSql` runs**: routes
   ///     through the writer connection (native) or the writer worker
   ///     (web), so the read observes the in-flight transaction's
@@ -612,10 +619,17 @@ class DbasSqliteStatement {
     final delegate = _platform.delegate(_db.dbName) as dynamic;
     // The web pool fronts a single worker initialised with role
     // `writer`; that worker holds the only SQLite connection. So
-    // `pool.query` always runs against the writer connection and
-    // automatically observes any in-flight transactional state when
-    // the caller is inside a transaction. No routing flag needed.
-    final buffer = await delegate.executeStatementRead(
+    // `executeStatementRead` always runs against the writer
+    // connection and automatically observes any in-flight transaction
+    // state when the caller is inside a transaction. No routing flag
+    // needed.
+    //
+    // The returned `WebRowStream` is a per-statement streaming cursor
+    // (worker-resident handle + Dart-side per-row cache). Closing the
+    // reader disposes the stream, which sends `finalizeStmt` to the
+    // worker to release the handle and the worker's SHARED reader
+    // fence.
+    final dynamic stream = await delegate.executeStatementRead(
       _sql,
       _mergedParams(),
     );
@@ -623,8 +637,25 @@ class DbasSqliteStatement {
       conn: _db.dbInternal!,
       handle: sqliteInvalidStmtHandle, // unused on web pool path
       platform: _platform,
-      webBuffer: buffer,
+      // Pre-populate the reader's column metadata from the prepare-
+      // time response so `getColumnCount` / `getColumnName` return
+      // correct values for empty result sets (the previous eager-
+      // materialisation path could only recover names from row 0,
+      // so empty results returned `columnCount == 0`).
+      initialColumnCount: stream.columnCount as int,
+      initialColumnNames: List<String>.from(stream.columnNames as List),
+      webBuffer: stream,
       onClose: () async {
+        try {
+          await (stream.dispose() as Future<void>);
+        } catch (e, st) {
+          developer.log(
+            'reader onClose: WebRowStream dispose failed',
+            name: 'dbas_sqlite.DbasSqliteStatement',
+            error: e,
+            stackTrace: st,
+          );
+        }
         _activeReader = null;
       },
     );

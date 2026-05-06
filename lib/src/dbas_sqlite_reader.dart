@@ -34,10 +34,11 @@ class DbasSqliteReader {
   final Future<void> Function() _onClose;
   final RowData _rowCache = RowData();
 
-  /// On web, `readRowAndCache` is not used — the entire result set is
-  /// pre-buffered into [_webBuffer] at execute time. The cursor walks
-  /// it via [_webBuffer.moveNext()].
-  final dynamic _webBuffer; // WebQueryBuffer when on web, null otherwise
+  /// On web, `readRowAndCache` is not used — the cursor walks a
+  /// worker-resident prepared statement one row at a time via
+  /// `_webBuffer.moveNext()`, which sends a `readRow` to the worker
+  /// and stores its [ColumnData] payload locally. `null` on native.
+  final dynamic _webBuffer; // WebRowStream when on web, null otherwise
 
   bool _closed = false;
   Future<void>? _closeFuture;
@@ -49,8 +50,8 @@ class DbasSqliteReader {
   /// reader [RowData] cache with metadata captured at prepare time.
   /// This makes [getColumnCount] / [getColumnName] return correct
   /// values BEFORE the first [readRow] call. Both default to empty
-  /// when not provided (e.g. on the web pool path, which uses a
-  /// pre-buffered [WebQueryBuffer] instead).
+  /// when not provided (e.g. on the web pool path, where the cursor
+  /// reads metadata directly from its `WebRowStream` instead).
   DbasSqliteReader.internal({
     required DbasSqliteDb conn,
     required int handle,
@@ -82,8 +83,9 @@ class DbasSqliteReader {
     if (_closed) return false;
 
     if (_webBuffer != null) {
-      // Web pool path — pre-buffered result set.
-      final hasRow = (_webBuffer as dynamic).moveNext() as bool;
+      // Web pool path — streams one row per worker round-trip.
+      final hasRow =
+          await ((_webBuffer as dynamic).moveNext() as Future<bool>);
       if (!hasRow) await close();
       return hasRow;
     }

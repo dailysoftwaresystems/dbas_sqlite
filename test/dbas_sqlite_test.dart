@@ -4641,4 +4641,137 @@ void main() async {
     await db.closeDb();
     await db.dropDb();
   });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Streaming-SELECT regression coverage (v2.5.0)
+  //
+  // The web side of v2.5.0 replaced the eager `pool.query` materialisation
+  // with a per-row streaming pipeline (`prepareQuery` / `bindParams` /
+  // `readRow` / `finalizeStmt`) so it matches the native FFI behaviour.
+  // Native has always streamed; these tests pin down the cross-platform
+  // contract so a regression on either side surfaces.
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('streaming: empty result set still exposes column count and names',
+      () async {
+    // Native has always populated column metadata at prepare time. The
+    // test is the regression net so the native contract doesn't drift
+    // away from what the web side now also guarantees.
+    final db = await _createTestDb('stream_empty_meta.db');
+    await _runSql(db, 'CREATE TABLE t (a INTEGER, b TEXT, c REAL)');
+
+    final stmt = await db.prepareQuery('SELECT a, b, c FROM t WHERE a > 1000');
+    final reader = await stmt.executeReader();
+    expect(reader.getColumnCount(), 3,
+        reason: 'columnCount must be available before first readRow');
+    expect(reader.getColumnName(0), 'a');
+    expect(reader.getColumnName(1), 'b');
+    expect(reader.getColumnName(2), 'c');
+    expect(await reader.readRow(), isFalse);
+    expect(reader.isClosed, isTrue);
+    await stmt.close();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('streaming: SQLite INTEGER values around int32 boundaries round-trip',
+      () async {
+    final db = await _createTestDb('stream_int_boundaries.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, big INTEGER)');
+
+    // Each value: positive small, max int32, just past max int32, max
+    // safe integer in Dart-on-web (also valid on native), and
+    // corresponding negatives. Native int is 64-bit so these all fit
+    // exactly; the test is shaped this way so the same input set works
+    // on web (53-bit) when this same test is run via integration_test.
+    const cases = <int>[
+      0,
+      42,
+      2147483647, // INT32_MAX
+      2147483648, // just past — worker emits BigInt on web
+      9007199254740991, // 2^53 - 1
+      -2147483648, // INT32_MIN
+      -2147483649, // just past
+      -9007199254740991,
+    ];
+    for (int i = 0; i < cases.length; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)',
+          params: [i, cases[i]]);
+    }
+    for (int i = 0; i < cases.length; i++) {
+      final v = await (await db.prepareQuery(
+              'SELECT big FROM t WHERE id = ?'))
+          .executeScalar(params: [i]);
+      expect(v, cases[i], reason: 'value at id=$i did not round-trip');
+      expect(v, isA<int>(),
+          reason: 'value at id=$i must surface as Dart int, not BigInt/text');
+    }
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('streaming: closing a reader before exhaustion releases the stmt',
+      () async {
+    final db = await _createTestDb('stream_abandoned.db', readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)');
+    for (int i = 1; i <= 1000; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)', params: [i, i]);
+    }
+
+    {
+      final stmt =
+          await db.prepareQuery('SELECT id FROM t ORDER BY id');
+      final reader = await stmt.executeReader();
+      for (int i = 0; i < 5; i++) {
+        expect(await reader.readRow(), isTrue);
+      }
+      await reader.close();
+      await stmt.close();
+    }
+
+    // Fresh full scan after the partial read — if the previous handle
+    // had leaked, this would either fail outright or starve the pool.
+    {
+      final stmt =
+          await db.prepareQuery('SELECT id FROM t ORDER BY id');
+      final reader = await stmt.executeReader();
+      int seen = 0;
+      while (await reader.readRow()) {
+        seen++;
+        expect(reader.getColumnInt(0), seen);
+      }
+      expect(seen, 1000);
+      await stmt.close();
+    }
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('streaming: row payload preserves int / double / text / blob / null',
+      () async {
+    final db = await _createTestDb('stream_mixed_types.db');
+    await _runSql(db,
+        'CREATE TABLE t (i INTEGER, d REAL, s TEXT, b BLOB, n INTEGER)');
+    final blob = Uint8List.fromList([1, 2, 3, 4, 255]);
+    final stmt =
+        await db.prepareQuery('INSERT INTO t VALUES (?, ?, ?, ?, ?)');
+    await stmt.executeSql(params: [42, 3.14, 'hello', blob, null]);
+    await stmt.close();
+
+    final reader =
+        await (await db.prepareQuery('SELECT i, d, s, b, n FROM t'))
+            .executeReader();
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 42);
+    expect(reader.getColumnDouble(1), closeTo(3.14, 1e-9));
+    expect(reader.getColumnText(2), 'hello');
+    expect(reader.getColumnBlob(3), blob);
+    expect(reader.isColumnNull(4), isTrue);
+    expect(reader.getColumnNullableInt(4), isNull);
+    expect(await reader.readRow(), isFalse);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
 }

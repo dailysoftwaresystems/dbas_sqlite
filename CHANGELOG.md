@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 2.5.0 - 2026-05-05
+## 2.5.0 - 2026-05-06
 
 ### Added
 
@@ -17,24 +17,55 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - **In-transaction read routing is now automatic.** `executeReader` and
-  `executeScalar` route through a pool reader (native) or `pool.query`
-  (web) until the first `executeSql` runs in the current transaction;
-  after that, subsequent in-tx reads switch to the writer connection so
-  they observe the transaction's uncommitted writes (read-your-writes).
-  Previously, in-tx reads always used the writer connection on native,
-  serialising parallel pre-write validation behind the single writer.
-  Now `Future.wait([executeReader, executeReader, ...])` issued before
-  any write in a transaction runs concurrently against the pool. After
-  any `executeSql`, the routing flips automatically; on `commit` /
-  `rollback` it resets. No caller-side flag needed.
+  `executeScalar` route through a pool reader (native) or the writer
+  worker (web) until the first `executeSql` runs in the current
+  transaction; after that, subsequent in-tx reads switch to the writer
+  connection so they observe the transaction's uncommitted writes
+  (read-your-writes). Previously, in-tx reads always used the writer
+  connection on native, serialising parallel pre-write validation behind
+  the single writer. Now `Future.wait([executeReader, executeReader,
+  ...])` issued before any write in a transaction runs concurrently
+  against the pool. After any `executeSql`, the routing flips
+  automatically; on `commit` / `rollback` it resets. No caller-side flag
+  needed.
 
 - **Web in-transaction reads no longer throw.** Previously, calling
   `executeReader` inside a transaction on web threw `UnsupportedError`
   because the bundled JS worker can't return SELECT rows through the
   writer-only `pool.exec` channel. The library now routes web reads
-  through `pool.query` regardless of transaction state — the web pool
-  fronts a single worker holding the writer connection, so `pool.query`
-  observes in-flight transactional state automatically.
+  through the writer worker regardless of transaction state — the web
+  pool fronts a single worker holding the writer connection, so SELECTs
+  observe in-flight transactional state automatically.
+
+- **Web SELECT path is now streaming.** `executeReader` / `executeScalar`
+  on web no longer materialise the entire result set in the worker
+  before the first row reaches Dart. The platform layer now uses the
+  worker bundle's per-statement RPC (`prepareQuery` / `bindParams` /
+  `readRow` / `finalizeStmt`, available since native lib v4.4.1) so each
+  `readRow()` call streams exactly one row across the worker boundary —
+  matching the native FFI behaviour exactly. `executeScalar` over a
+  10k-row table now issues a single `readRow` round-trip instead of
+  fetching all 10k rows. Internally, the eager `WebQueryBuffer` is
+  replaced by a `WebRowStream` cursor; `DbasSqliteReader` and
+  `DbasSqliteStatement` are unchanged at the public-API boundary.
+
+### Fixed
+
+- **Empty SELECT result sets now expose column metadata on web.** The
+  pre-2.5.0 web path could only recover column names from row 0, so
+  `getColumnCount()` / `getColumnName(i)` returned `0` / `''` for an
+  empty result. The streaming path captures column metadata from
+  `prepareQuery`, so the metadata is populated before the first
+  `readRow()` step regardless of whether any rows match.
+
+- **Large SQLite `INTEGER` values on web round-trip as Dart `int`.**
+  Values outside the int32 range (which the worker emits as JS BigInt)
+  are now classified as `INTEGER` (type 1) and materialised through JS
+  `Number(bigint)` into a Dart `int`, matching `getColumnInt(idx)` on
+  native. Previously these would surface as TEXT (type 3) because the
+  Dart-side type-detection branch fell through. Values within the
+  53-bit Dart-on-web safe integer range are exact; values beyond that
+  are truncated, which matches Dart's own `int` precision on web.
 
 ## 2.4.4 - 2026-05-05
 

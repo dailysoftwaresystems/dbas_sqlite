@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
+    show sqliteRow, sqliteDone;
 
 const _workerUrl = 'assets/packages/dbas_sqlite/web/libs/dbas_sqlite_worker.js';
 // Relative to the worker script location (same directory), not the page root.
@@ -229,6 +231,12 @@ class DbasSqliteWebPool {
   }
 
   /// Execute a read query. Returns all rows.
+  ///
+  /// **Eager**. Prefer [prepareQueryStream] + [readRow] for SELECTs that
+  /// might return many rows — it streams one row per worker round-trip
+  /// and matches the native FFI `executeReader` behaviour exactly. This
+  /// path is kept only for callers that genuinely want the full
+  /// materialised list (e.g. internal `PRAGMA` probes inside this file).
   Future<List<Map<String, dynamic>>> query(String sql, [dynamic params]) async {
     final payload = <String, dynamic>{'sql': sql};
     if (params != null) payload['params'] = params;
@@ -238,6 +246,290 @@ class DbasSqliteWebPool {
     }
     if (result == null) return [];
     throw StateError('Unexpected query result type: ${result.runtimeType}');
+  }
+
+  // ── Streaming SELECT (1:1 mirror of native FFI prepare/step/finalize) ──
+  //
+  // These primitives expose the worker's per-statement streaming
+  // protocol (added in worker bundle v4.4.1). They are the web-side
+  // counterpart of the native FFI `prepareQuery` / `bindParams` /
+  // `readRowAndCache` / `finalizeStmt` calls. Together they let the
+  // web reader fetch rows one at a time instead of materialising the
+  // full result set up-front.
+  //
+  // Statement handles cross postMessage as JS BigInts (the worker
+  // stores them in a JS `Map` keyed by BigInt; sending them back as
+  // `Number` would miss the lookup and produce `UNKNOWN_HANDLE`). We
+  // keep the handle as a raw `JSAny` ([WebStmtHandle]) so it
+  // round-trips back to the worker via `postMessage` without going
+  // through Dart `BigInt` — the Dart SDK shipped with this Flutter
+  // version (3.11.4) does not have the `BigInt.toJS` / `JSBigInt.toDart`
+  // extensions yet, and a raw passthrough is more efficient anyway.
+
+  /// Prepares a SQL statement on the worker and returns the new handle
+  /// plus column metadata captured at prepare time. The worker holds
+  /// the SHARED reader fence across the statement's lifetime; it is
+  /// released by [finalizeStmt].
+  Future<
+      ({
+        WebStmtHandle handle,
+        int columnCount,
+        List<String> columnNames
+      })> prepareQueryStream(String sql) {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+    final id = _nextId++;
+    final completer = Completer<
+        ({
+          WebStmtHandle handle,
+          int columnCount,
+          List<String> columnNames
+        })>();
+
+    _streamHandlers[id] = (_JSObj jsData) {
+      _streamHandlers.remove(id);
+      final errorProp = jsData['error'];
+      if (errorProp != null && !errorProp.isUndefinedOrNull) {
+        final err = (errorProp as JSObject).dartify();
+        final msg =
+            err is Map ? (err['message'] ?? err.toString()) : err.toString();
+        completer.completeError(Exception(msg.toString()));
+        return;
+      }
+      final resultProp = jsData['result'];
+      if (resultProp == null || resultProp.isUndefinedOrNull) {
+        completer.completeError(
+            Exception('prepareQuery: worker returned no result for "$sql"'));
+        return;
+      }
+      final result = resultProp as _JSObj;
+      final handleRaw = result['handle'];
+      if (handleRaw == null || handleRaw.isUndefinedOrNull) {
+        completer.completeError(
+            Exception('prepareQuery: response missing handle for "$sql"'));
+        return;
+      }
+      final cc =
+          ((result['columnCount'] as JSNumber).toDartDouble).toInt();
+      final namesRaw = result['columnNames'];
+      final names = <String>[];
+      if (namesRaw != null && !namesRaw.isUndefinedOrNull) {
+        final arr = (namesRaw as JSArray<JSAny?>).toDart;
+        for (final n in arr) {
+          if (n != null && !n.isUndefinedOrNull) {
+            names.add((n as JSString).toDart);
+          } else {
+            names.add('');
+          }
+        }
+      }
+      completer.complete((
+        handle: WebStmtHandle._(handleRaw),
+        columnCount: cc,
+        columnNames: names,
+      ));
+    };
+
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'prepareQuery',
+        'payload': <String, dynamic>{'sql': sql},
+      }.jsify());
+    } catch (e) {
+      _streamHandlers.remove(id);
+      completer.completeError(e);
+    }
+    return completer.future;
+  }
+
+  /// Binds [params] (positional list or named map, same shape used by
+  /// [exec] / [query]) onto the prepared [handle].
+  ///
+  /// On bind failure the worker does **not** auto-finalize — matching
+  /// native FFI semantics. The caller is responsible for calling
+  /// [finalizeStmt] to release the handle.
+  Future<void> bindParams(WebStmtHandle handle, dynamic params) {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+    final id = _nextId++;
+    final completer = Completer<void>();
+    _requests[id] = completer;
+
+    final payload = <String, dynamic>{'handle': handle._raw};
+    if (params != null) payload['params'] = params;
+
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'bindParams',
+        'payload': payload,
+      }.jsify());
+    } catch (e) {
+      _requests.remove(id);
+      completer.completeError(e);
+    }
+    return completer.future;
+  }
+
+  /// Steps the prepared [handle] one row.
+  ///
+  /// Returns `(rc: 100, columns: [...])` on `SQLITE_ROW` (with one
+  /// [ColumnData] per column in [columnNames] order), or
+  /// `(rc: 101, columns: null)` on `SQLITE_DONE`. Throws on any other
+  /// rc. The caller is responsible for [finalizeStmt] in both cases —
+  /// the worker does not auto-finalize on `SQLITE_DONE`.
+  Future<({int rc, List<ColumnData>? columns})> readRow(
+      WebStmtHandle handle, List<String> columnNames) {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+    final id = _nextId++;
+    final completer =
+        Completer<({int rc, List<ColumnData>? columns})>();
+
+    _streamHandlers[id] = (_JSObj jsData) {
+      _streamHandlers.remove(id);
+      final errorProp = jsData['error'];
+      if (errorProp != null && !errorProp.isUndefinedOrNull) {
+        final err = (errorProp as JSObject).dartify();
+        final msg =
+            err is Map ? (err['message'] ?? err.toString()) : err.toString();
+        completer.completeError(Exception(msg.toString()));
+        return;
+      }
+      final resultProp = jsData['result'];
+      if (resultProp == null || resultProp.isUndefinedOrNull) {
+        completer.completeError(Exception('readRow: empty result'));
+        return;
+      }
+      final result = resultProp as _JSObj;
+      final rcRaw = result['rc'];
+      final rc = (rcRaw as JSNumber).toDartDouble.toInt();
+      if (rc == sqliteDone) {
+        completer.complete((rc: rc, columns: null));
+        return;
+      }
+      if (rc != sqliteRow) {
+        // Defensive — the worker turns any non-100/101 rc into a
+        // thrown error that lands in the `error` branch above, so this
+        // is unreachable in practice.
+        completer.completeError(
+            Exception('readRow: unexpected rc=$rc from worker'));
+        return;
+      }
+      final rowProp = result['row'];
+      if (rowProp == null || rowProp.isUndefinedOrNull) {
+        completer.completeError(
+            Exception('readRow: rc=100 but no row payload'));
+        return;
+      }
+      final rowObj = rowProp as _JSObj;
+      // Inspect each column's raw JS value directly. Going through
+      // `dartify()` would lose precision for SQLite INTEGER values
+      // outside int32 range (the worker emits a JS BigInt for those,
+      // which dartify converts to a Dart String in some Dart-on-web
+      // build configurations — see the legacy comment in
+      // `dbas_sqlite_row_cache.dart`). Reading the JS object directly
+      // and classifying via `typeofEquals` / `isA<>` keeps the type
+      // and the bit-pattern intact end-to-end.
+      final cols = <ColumnData>[];
+      for (final name in columnNames) {
+        cols.add(_classifyJsColumnValue(rowObj[name]));
+      }
+      completer.complete((rc: rc, columns: cols));
+    };
+
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'readRow',
+        'payload': <String, dynamic>{'handle': handle._raw},
+      }.jsify());
+    } catch (e) {
+      _streamHandlers.remove(id);
+      completer.completeError(e);
+    }
+    return completer.future;
+  }
+
+  /// Finalises the prepared [handle] on the worker. Idempotent and
+  /// tolerant of unknown handles, so it is safe to call after a
+  /// successful `SQLITE_DONE` step or after a bind failure.
+  Future<void> finalizeStmt(WebStmtHandle handle) {
+    if (_closed) {
+      // Worker is gone; the handle is implicitly finalized.
+      return Future.value();
+    }
+    final id = _nextId++;
+    final completer = Completer<void>();
+    _requests[id] = completer;
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'finalizeStmt',
+        'payload': <String, dynamic>{'handle': handle._raw},
+      }.jsify());
+    } catch (e) {
+      _requests.remove(id);
+      completer.completeError(e);
+    }
+    return completer.future;
+  }
+
+  /// Inspect a raw JS value pulled out of a `readRow` row payload and
+  /// produce a typed [ColumnData]. The classification mirrors what the
+  /// native FFI `readRowAndCache` produces:
+  ///
+  ///   - `bigint` JS values (SQLite INTEGER outside int32 range) →
+  ///     INTEGER, materialised via `BigInt.toInt()` (clamped to the
+  ///     53-bit Dart-on-web int range).
+  ///   - `number` JS values: integral and within the safe int range →
+  ///     INTEGER; otherwise → FLOAT. SQLite FLOAT columns whose value
+  ///     happens to be exactly integral collapse to INTEGER on this
+  ///     side — this is a JS-side precision loss that the worker can't
+  ///     avoid without an extra getColumnType round-trip.
+  ///   - `string` → TEXT.
+  ///   - `Uint8Array` / `ArrayBuffer` → BLOB.
+  ///   - `null` / `undefined` → NULL.
+  static ColumnData _classifyJsColumnValue(JSAny? raw) {
+    if (raw == null || raw.isUndefinedOrNull) {
+      return ColumnData(type: 5, isNull: true);
+    }
+    if (raw.typeofEquals('bigint')) {
+      // Convert via JS `Number(bigint)` — exact within the 53-bit safe
+      // integer range (which is also Dart-on-web's `int` range), and
+      // truncates beyond that. Equivalent to `BigInt.toInt()` on the
+      // web Dart runtime; we use the JS path because the
+      // `JSBigInt.toDart` extension isn't available in the Dart SDK
+      // shipped with this Flutter version (3.11.4).
+      final n = _jsToNumber(raw).toDartDouble;
+      return ColumnData(type: 1, isNull: false, value: n.toInt());
+    }
+    if (raw.typeofEquals('number')) {
+      final n = (raw as JSNumber).toDartDouble;
+      if (n.isFinite &&
+          n.truncateToDouble() == n &&
+          n.abs() <= 9007199254740992.0 /* 2^53 — Dart-on-web safe int */) {
+        return ColumnData(type: 1, isNull: false, value: n.toInt());
+      }
+      return ColumnData(type: 2, isNull: false, value: n);
+    }
+    if (raw.typeofEquals('string')) {
+      return ColumnData(
+          type: 3, isNull: false, value: (raw as JSString).toDart);
+    }
+    if (raw.isA<JSUint8Array>()) {
+      return ColumnData(
+          type: 4, isNull: false, value: (raw as JSUint8Array).toDart);
+    }
+    if (raw.isA<JSArrayBuffer>()) {
+      return ColumnData(
+          type: 4,
+          isNull: false,
+          value: (raw as JSArrayBuffer).toDart.asUint8List());
+    }
+    // Defensive — the worker only emits the typed forms above. If a
+    // future worker version adds another type, surface it as TEXT
+    // rather than NULL so the caller can at least see the value.
+    return ColumnData(
+        type: 3, isNull: false, value: 'unsupported:${raw.runtimeType}');
   }
 
   /// Execute a batch of statements.
@@ -536,7 +828,36 @@ class DbasSqliteWebPool {
       if (!c.isCompleted) c.completeError(closedErr);
     }
     _requests.clear();
+
+    // Stream handlers own their completers inside their closures (see
+    // `prepareQueryStream`, `readRow`, `exec`, `attachStreamChunked`,
+    // `exportContentStream`). Synthesise an `error`-shaped JS object
+    // and dispatch it to each handler — they're already structured to
+    // unwrap the error and reject their captured completer. Without
+    // this, in-flight stream-RPC callers (e.g. `WebRowStream.moveNext`
+    // mid-iteration) would hang forever after a graceful close.
+    final handlersSnapshot = Map.of(_streamHandlers);
     _streamHandlers.clear();
+    for (final entry in handlersSnapshot.entries) {
+      try {
+        final errMsg = <String, dynamic>{
+          'id': entry.key,
+          'error': {
+            'code': 'POOL_CLOSED',
+            'message': 'Pool closed for "$dbName"',
+          },
+        }.jsify() as _JSObj;
+        entry.value(errMsg);
+      } catch (e, st) {
+        developer.log(
+          'DbasSqliteWebPool: failed to wake stream handler ${entry.key} '
+          'during close',
+          name: 'dbas_sqlite.DbasSqliteWebPool',
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
   }
 
   static void removePool(String dbName) {
@@ -544,50 +865,118 @@ class DbasSqliteWebPool {
   }
 }
 
-// ── WebQueryBuffer ─────────────────────────────────────────────────────
+// ── WebStmtHandle ──────────────────────────────────────────────────────
 
-/// Buffered row data for cursor-based reading from query results.
+/// Opaque wrapper around a worker-resident prepared-statement handle.
 ///
-/// Column metadata caveat: the bundled `dbas_sqlite.js` (`runQuery`)
-/// returns rows as flat dicts only — column names are recoverable from
-/// `rows.first.keys` when at least one row is present, but an empty
-/// result set yields zero column names (and so `getColumnCount() == 0`,
-/// `getColumnName(i) == ''`). Callers that need column metadata for
-/// empty result sets must either: (a) supply [explicitColumnNames] from
-/// out-of-band knowledge of the SELECT shape, or (b) wait until the
-/// underlying JS protocol grows column-metadata support.
-class WebQueryBuffer {
-  final List<Map<String, dynamic>> rows;
+/// The worker's `prepareQuery` returns an Emscripten `long long` (a JS
+/// `BigInt`) and stores it as the key of an internal `Map`. JS `Map`
+/// uses strict equality, so `123n !== 123` — sending the handle back
+/// as a `Number` (or as a Dart `int` after a lossy round-trip) would
+/// silently miss the lookup and produce `UNKNOWN_HANDLE`. We keep the
+/// raw JS value untouched on the Dart side and feed it straight back
+/// into the `postMessage` payload so the BigInt round-trips intact.
+class WebStmtHandle {
+  /// Raw JS BigInt — never inspected on the Dart side, only echoed
+  /// back to the worker.
+  final JSAny _raw;
+
+  const WebStmtHandle._(this._raw);
+}
+
+// ── WebRowStream ───────────────────────────────────────────────────────
+
+/// Streaming cursor over a worker-resident prepared statement.
+///
+/// One [WebRowStream] wraps one prepared-statement handle on the worker:
+///   - `prepareQueryStream` allocated the handle and captured column
+///     metadata.
+///   - Each [moveNext] sends a `readRow` to the worker and stores the
+///     resulting row's column data. SQLITE_ROW (rc=100) → `true` and
+///     [getColumnData] is populated; SQLITE_DONE (rc=101) → `false` and
+///     subsequent reads return `false` without further round-trips.
+///   - [dispose] sends `finalizeStmt` to release the handle and the
+///     worker's SHARED reader fence. Idempotent and called
+///     automatically by [DbasSqliteReader.close].
+///
+/// This is the web-side counterpart of native FFI's
+/// `readRowAndCache` / `finalizeStmt` pair — both produce the same
+/// per-row [ColumnData] shape so the rest of [DbasSqliteReader] is
+/// platform-agnostic.
+class WebRowStream {
+  final DbasSqliteWebPool _pool;
+  final WebStmtHandle _handle;
+  final int columnCount;
   final List<String> columnNames;
-  int currentRowIndex = -1;
 
-  WebQueryBuffer(this.rows, {List<String>? explicitColumnNames})
-      : columnNames = explicitColumnNames ??
-            (rows.isNotEmpty ? rows.first.keys.toList() : const []);
+  List<ColumnData>? _currentColumns;
+  bool _exhausted = false;
+  bool _disposed = false;
+  Future<void>? _disposeFuture;
 
-  bool moveNext() {
-    currentRowIndex++;
-    return currentRowIndex < rows.length;
+  WebRowStream({
+    required DbasSqliteWebPool pool,
+    required WebStmtHandle handle,
+    required this.columnCount,
+    required this.columnNames,
+  })  : _pool = pool,
+        _handle = handle;
+
+  /// Steps to the next row. Returns `true` on SQLITE_ROW, `false` on
+  /// SQLITE_DONE or after [dispose]. Throws on SQLite error.
+  Future<bool> moveNext() async {
+    if (_disposed || _exhausted) {
+      _currentColumns = null;
+      return false;
+    }
+    final result = await _pool.readRow(_handle, columnNames);
+    if (result.rc == sqliteRow) {
+      _currentColumns = result.columns;
+      return true;
+    }
+    // SQLITE_DONE — mark exhausted so a subsequent moveNext after the
+    // reader auto-closes can't accidentally re-query (the handle has
+    // been released by then).
+    _exhausted = true;
+    _currentColumns = null;
+    return false;
   }
 
-  Map<String, dynamic>? get currentRow =>
-      currentRowIndex >= 0 && currentRowIndex < rows.length
-          ? rows[currentRowIndex]
-          : null;
-
-  int get columnCount => columnNames.length;
-
-  ColumnData getColumnData(int index) {
-    if (currentRow == null || index >= columnNames.length) {
+  /// Column data at [idx] for the most recent row, or a NULL/empty
+  /// [ColumnData] when no row is current or [idx] is out of range.
+  ColumnData getColumnData(int idx) {
+    final cols = _currentColumns;
+    if (cols == null || idx < 0 || idx >= cols.length) {
       return ColumnData(type: 5, isNull: true);
     }
-    final name = columnNames[index];
-    final value = currentRow![name];
-    if (value == null) return ColumnData(type: 5, isNull: true, value: null);
-    if (value is int) return ColumnData(type: 1, isNull: false, value: value);
-    if (value is double) return ColumnData(type: 2, isNull: false, value: value);
-    if (value is String) return ColumnData(type: 3, isNull: false, value: value);
-    if (value is List) return ColumnData(type: 4, isNull: false, value: value);
-    return ColumnData(type: 3, isNull: false, value: value.toString());
+    return cols[idx];
+  }
+
+  /// Idempotent — releases the prepared-statement handle on the
+  /// worker. Safe to call after [moveNext] returned `false`; the
+  /// worker tolerates already-finalised handles.
+  Future<void> dispose() {
+    return _disposeFuture ??= _doDispose();
+  }
+
+  Future<void> _doDispose() async {
+    _disposed = true;
+    _currentColumns = null;
+    try {
+      await _pool.finalizeStmt(_handle);
+    } catch (e, st) {
+      // The worker's finalizeStmt is idempotent and tolerant of
+      // unknown handles, so the only realistic failures here are
+      // worker-crash / pool-closed scenarios. Either way the handle
+      // is gone — log and swallow so dispose() stays infallible from
+      // the caller's perspective.
+      developer.log(
+        'WebRowStream: finalizeStmt failed during dispose '
+        '(handle already released?)',
+        name: 'dbas_sqlite.WebRowStream',
+        error: e,
+        stackTrace: st,
+      );
+    }
   }
 }
