@@ -169,6 +169,16 @@ extern "C" {
      * the connection — do not free. */
     DLL_EXPORT const char* GetLastDbError(SQLiteDb* inst);
 
+    /* Extended SQLite return code on the connection
+     * (`sqlite3_extended_errcode`). Distinguishes e.g.
+     * SQLITE_IOERR_READ (266) from SQLITE_IOERR_SHORT_READ (522) —
+     * both are extended forms of SQLITE_IOERR (10). Returns -1 on a
+     * NULL or unopened connection (cannot be a legitimate SQLite rc,
+     * so no overlap). The primary rc returned by ReadRow / ExecuteSql
+     * / bind APIs is sufficient for most callers; extendedRc is for
+     * targeted recovery / diagnostic logging. */
+    DLL_EXPORT int GetExtendedErrorCode(SQLiteDb* inst);
+
     /* File name used to open the connection. NULL after CloseDb. Buffer
      * is owned by the connection — do not free. */
     DLL_EXPORT const char* GetDbFileName(SQLiteDb* inst);
