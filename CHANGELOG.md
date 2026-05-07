@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.5.3 - 2026-05-07
+
+### Fixed
+
+- **CI: pub.dev publish job triggered Node.js 20 deprecation warning.**
+  The reusable workflow `dart-lang/setup-dart/.github/workflows/publish.yml@v1`
+  internally pinned an older `setup-dart` SHA still running on Node.js 20,
+  which GitHub will force off on June 2, 2026. Pinned the reusable
+  workflow past the `@v1` tag to commit `cb71272` (2026-04-01), which
+  bumps the inner pin to `setup-dart` v1.7.2 (Node.js 24). No release
+  behavior change; clears the deprecation warning and avoids breakage
+  when Node.js 20 is removed from runners.
+
 ## 2.5.2 - 2026-05-07
 
 ### Fixed
