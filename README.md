@@ -68,6 +68,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 
 ### Data Retrieval (`DbasSqliteReader`)
 - `readRow()` - Advance to next row (`true` if available, `false` and auto-closes when done)
+- `readRows([amount = 50])` - Read up to `amount` rows in one call. Returns a record `({rows, hasMore})` where `rows` is `List<Map<String, ColumnData>>` (column name → typed `ColumnData`) and `hasMore` is the result of the last `readRow` (`true` = more rows may follow, `false` = result set exhausted)
 - `close()` - Manually close the reader and release its connection
 - **Column Access** (with nullable variants)
   - `getColumnText(index)` / `getColumnNullableText(index)` - Get string value
@@ -94,7 +95,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite: ^2.5.3
+  dbas_sqlite: ^2.6.0
 ```
 
 Or install with the Dart CLI:

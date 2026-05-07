@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.6.0 - 2026-05-07
+
+### Added
+
+- **`DbasSqliteReader.readRows([int amount = 50])`** — batch row reader
+  that advances up to `amount` rows in a single call and returns a
+  record `({List<Map<String, ColumnData>> rows, bool hasMore})`. Each
+  row is a column-name → `ColumnData` map, preserving the SQLite
+  type, raw value, and null flag for downstream typed access. The
+  `hasMore` flag carries the boolean result of the last `readRow`
+  call, so callers can drive paginated reads without an extra step
+  to probe for end-of-set:
+
+  ```dart
+  final reader = await stmt.executeReader();
+  while (true) {
+    final (:rows, :hasMore) = await reader.readRows();
+    for (final row in rows) {
+      final col = row['name']!;
+      // col.value, col.isNull, SqliteColumnType.fromInt(col.type)
+    }
+    if (!hasMore) break;
+  }
+  ```
+
+  Returns an empty list with `hasMore: false` immediately when
+  `amount <= 0`. Pure Dart wrapper over `readRow` — no native
+  interface, platform, or stub changes. Snapshots each row from the
+  per-reader `RowData` cache before the next step overwrites it, so
+  intermediate rows are preserved even though the cache itself is
+  not retained.
+
+- **`ColumnData` exported from the public barrel** (`lib/dbas_sqlite.dart`)
+  so consumers of `readRows` can reference the row-cell type
+  directly. Previously internal-only.
+
 ## 2.5.3 - 2026-05-07
 
 ### Fixed
