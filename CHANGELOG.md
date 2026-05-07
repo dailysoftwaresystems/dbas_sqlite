@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.5.1 - 2026-05-07
+
+### Fixed
+
+- **Worker-pool / reader-pool deadlock under fan-out parallel reads.**
+  A `Future.wait` of N `executeReader` calls (where N exceeded the
+  reader-pool size) could deadlock the entire pool until the 30 s
+  C-side timeout fired. Each `executeReader` dispatched
+  `pool_acquire_reader_blocking` to a worker isolate; once every
+  worker was parked inside the C blocking acquire, no worker remained
+  to process `prepareQuery` / `finalizeStmt` for the in-flight reads,
+  so no read could finish, no reader could be released, and every
+  acquire timed out together. Reproduces with the default
+  `readerPoolSize: 4` and any caller that fans out 6+ pre-write reads
+  in parallel (e.g. an FK-graph dependency walker).
+
+  Fix: gate entry to `poolAcquireReaderBlocking` through a Dart-level
+  FIFO semaphore sized to the reader pool. Excess callers wait in
+  Dart microtasks instead of occupying a worker isolate, so at least
+  two workers (the auto-bumped `readerPoolSize + 2` headroom) remain
+  free for the non-blocking read steps. Once a reader is released,
+  the C handle is returned to the C pool BEFORE the Dart slot is
+  signalled — so the next semaphore-granted caller's C-side acquire
+  finds a free reader immediately. The C-side timeout becomes a
+  safety net rather than the primary contention bound.
+
+  No public API change; behaviour is automatic. Single-connection
+  mode (`readerPoolSize: 0`) is unaffected — it goes through the
+  writer lock, not the pool.
+
+- **pub.dev Web platform-support and WASM compatibility scoring.**
+  The public API chain (`dbas_sqlite.dart` → `DbasSqliteStatement` →
+  `DbasSqliteReader` → `DbasSqlitePlatform` →
+  `DbasSqliteNativeInterface`) was unconditionally importing
+  `package:path_provider/path_provider.dart`, `dart:io`, and
+  `package:flutter/services.dart` even though the call sites were
+  already runtime-gated by `kIsWeb`. pub.dev's static analyser walks
+  every unconditional import, so the web build graph reached
+  `path_provider` (which doesn't declare Web support) and
+  `dart:io` (incompatible with WASM), costing both Platform-support
+  points and the WASM badge.
+
+  Fix: the path-resolving and test-detection helpers move behind
+  conditional-import selectors in `lib/src/helpers/paths/` and
+  `lib/src/helpers/test_mode/`; FFI-only routines
+  (`getLibraryPath`, `_resolveTestBaseDir`) move from the abstract
+  `DbasSqliteNativeInterface` down into `DbasSqliteNativeAppBase`
+  (FFI-only, never loaded on web); the dead-code
+  `prepareLibIfNeeded` is removed entirely. The web build graph no
+  longer reaches `path_provider` or `dart:io`.
+
+  No public API change.
+
 ## 2.5.0 - 2026-05-06
 
 ### Added

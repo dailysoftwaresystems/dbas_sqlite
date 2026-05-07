@@ -1,8 +1,5 @@
-import 'package:flutter/foundation.dart';
-import 'dart:io';
+import 'package:dbas_sqlite/src/helpers/test_mode/dbas_sqlite_test_mode.dart';
 
 class DbasSqlitePlatformUtil {
-  static bool isTest() {
-    return !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
-  }
+  static bool isTest() => isFlutterTestEnv();
 }

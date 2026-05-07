@@ -1,17 +1,15 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:developer' as developer;
-import 'dart:io';
 
 import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
     if (dart.library.js_interop) 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_statement.dart';
+import 'package:dbas_sqlite/src/helpers/paths/dbas_sqlite_paths.dart' as paths;
 import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:dbas_sqlite/src/native/dbas_sqlite_native_interface.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
 
 /// A cross-platform SQLite database wrapper for Flutter.
 ///
@@ -71,7 +69,6 @@ class DbasSqlite {
   @visibleForTesting
   static int? debugSetBusyTimeoutAcquireMs;
 
-  static final String _webDbDir = 'dbas_data';
   static final Map<String, DbasSqlite> _instance = {};
 
   final DbasSqlitePlatform _platform;
@@ -91,6 +88,22 @@ class DbasSqlite {
   final Set<DbasSqliteStatement> _activeStatements = {};
   final Queue<Completer<void>> _writerWaitQueue = Queue<Completer<void>>();
   bool _writerLockHeld = false;
+  // Dart-level FIFO semaphore that gates entry to
+  // `poolAcquireReaderBlocking`. Capacity is set to [_readerPoolSize]
+  // on openDb, so at most that many concurrent C-level blocking
+  // acquires can be in flight. Without this gate, a `Future.wait` of
+  // many `executeReader` calls fans out one blocking acquire per
+  // call across the worker isolates; once every worker is parked
+  // inside `pool_acquire_reader_blocking`, no worker remains to
+  // process `prepareQuery` / `finalizeStmt` for in-flight reads, so
+  // no reader is ever released and the pool deadlocks until the
+  // 30 s C-side timeout fires. The gate caps concurrent blocking
+  // acquires at [_readerPoolSize]; with the worker pool sized at
+  // `readerPoolSize + 2`, at least two workers are always available
+  // for the non-blocking read steps. Excess callers wait here in
+  // Dart microtasks instead of occupying a worker.
+  int _readerSlotsAvailable = 0;
+  final Queue<Completer<void>> _readerSlotWaitQueue = Queue<Completer<void>>();
 
   /// When `true`, binding a named parameter that does not exist in
   /// the prepared statement throws an exception instead of silently
@@ -127,32 +140,14 @@ class DbasSqlite {
     return _instance[dbName]!;
   }
 
-  static Future<String> _getDbPath() async {
-    if (kIsWeb) return '/$_webDbDir';
-
-    final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/dbas_data'.replaceAll('\\', '/');
-    final dir = Directory(dirPath);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dirPath;
-  }
-
   // ── Lifecycle ────────────────────────────────────────────────────────
 
   /// Returns the full filesystem path for the database.
   Future<String> getAppDatabasePath({String? dbName}) async {
     dbName ??= this.dbName;
-
-    if (DbasSqlitePlatformUtil.isTest()) {
-      final dbPath = path.join(Directory.current.path, 'test', 'db');
-      final dbDir = Directory(dbPath);
-      if (!await dbDir.exists()) await dbDir.create(recursive: true);
-      return path.join(dbPath, dbName);
-    }
-
-    final dbPath = await _getDbPath();
+    final dbPath = await paths.resolveDatabaseDirectory(
+      isTest: DbasSqlitePlatformUtil.isTest(),
+    );
     return '$dbPath/$dbName';
   }
 
@@ -250,6 +245,7 @@ class DbasSqlite {
       if (poolPtr != 0) {
         _poolPtr = poolPtr;
         _readerPoolSize = readerPoolSize;
+        _readerSlotsAvailable = readerPoolSize;
         final writerPtr = _platform.poolGetWriter(dbName, poolPtr);
         _db = DbasSqliteDb(dbName, writerPtr);
         return;
@@ -257,6 +253,7 @@ class DbasSqlite {
     }
 
     _readerPoolSize = 0;
+    _readerSlotsAvailable = 0;
     _db = await _platform.openDb(fileName);
   }
 
@@ -288,6 +285,7 @@ class DbasSqlite {
     _activeStatements.clear();
 
     _cancelWriterWaitQueue();
+    _cancelReaderSlotWaitQueue();
 
     if (_instance.containsKey(dbName)) {
       _instance.remove(dbName);
@@ -638,6 +636,56 @@ class DbasSqlite {
     _writerLockHeld = false;
   }
 
+  // ── Async reader-slot semaphore (FIFO) ───────────────────────────────
+
+  /// Waits up to [timeoutMs] for a reader-slot to become available.
+  /// Slots are released by [_releaseReaderSlot]. The release order is
+  /// load-bearing: the C reader is returned to the pool BEFORE the
+  /// Dart slot is released, so when the next caller's await resumes
+  /// the C-side acquire is guaranteed to find a free reader.
+  Future<void> _acquireReaderSlot(int timeoutMs) async {
+    if (_readerSlotsAvailable > 0) {
+      _readerSlotsAvailable--;
+      return;
+    }
+    final waiter = Completer<void>();
+    _readerSlotWaitQueue.add(waiter);
+    Timer? timer;
+    if (timeoutMs > 0) {
+      timer = Timer(Duration(milliseconds: timeoutMs), () {
+        if (waiter.isCompleted) return;
+        _readerSlotWaitQueue.remove(waiter);
+        waiter.completeError(TimeoutException(
+          'Dart-side reader-slot wait timed out after ${timeoutMs}ms — '
+          'all pool readers are busy. Close in-flight readers or raise '
+          'DbasSqlite.kPoolAcquireTimeoutMs.',
+        ));
+      });
+    }
+    try {
+      await waiter.future;
+    } finally {
+      timer?.cancel();
+    }
+  }
+
+  void _releaseReaderSlot() {
+    if (_readerSlotWaitQueue.isNotEmpty) {
+      _readerSlotWaitQueue.removeFirst().complete();
+    } else {
+      _readerSlotsAvailable++;
+    }
+  }
+
+  void _cancelReaderSlotWaitQueue() {
+    while (_readerSlotWaitQueue.isNotEmpty) {
+      _readerSlotWaitQueue.removeFirst().completeError(
+        StateError('Database was closed while waiting for reader slot.'),
+      );
+    }
+    _readerSlotsAvailable = 0;
+  }
+
   // ── Internal hooks for DbasSqliteStatement ───────────────────────────
   // These have visible names but are only intended for the
   // statement implementation.
@@ -654,4 +702,57 @@ class DbasSqlite {
       debugPoolAcquireTimeoutMs ?? kPoolAcquireTimeoutMs;
   void unregisterStatementInternal(DbasSqliteStatement stmt) =>
       _activeStatements.remove(stmt);
+
+  /// Acquires a pool-reader connection, gated by the Dart-level
+  /// reader-slot semaphore so at most [_readerPoolSize] concurrent
+  /// blocking acquires can be in flight against the C pool. Returns
+  /// the reader pointer on success, or `0` if the C-side acquire
+  /// timed out.
+  ///
+  /// Throws [TimeoutException] when the Dart-side wait exceeds
+  /// [timeoutMs] (i.e. no slot freed in time). Also throws
+  /// [StateError] if the database is closed while waiting.
+  Future<int> acquireReaderConnectionInternal(int timeoutMs) async {
+    if (_poolPtr == null) {
+      throw StateError(
+          'No reader pool — single-connection mode does not use this path.');
+    }
+    final stopwatch = Stopwatch()..start();
+    await _acquireReaderSlot(timeoutMs);
+    try {
+      // With the semaphore granting at most [_readerPoolSize] slots,
+      // the C pool always has a reader available here. The remaining
+      // budget is a safety net in case some other caller (e.g.
+      // setBusyTimeout, which intentionally bypasses the semaphore)
+      // is holding readers concurrently.
+      //
+      // `timeoutMs <= 0` is the documented "non-blocking" form on the
+      // C side; passing it through unmodified preserves that
+      // semantic. Otherwise clamp the elapsed-adjusted budget into
+      // [1, timeoutMs] so the C call still gets a tick to make
+      // progress even when the Dart wait consumed the full window.
+      final int remaining = timeoutMs <= 0
+          ? timeoutMs
+          : (timeoutMs - stopwatch.elapsedMilliseconds).clamp(1, timeoutMs);
+      final readerPtr = await _platform.poolAcquireReaderBlocking(
+          dbName, _poolPtr!, remaining);
+      if (readerPtr == 0) {
+        _releaseReaderSlot();
+        return 0;
+      }
+      return readerPtr;
+    } catch (_) {
+      _releaseReaderSlot();
+      rethrow;
+    }
+  }
+
+  /// Returns a reader pointer to the C pool and releases the
+  /// Dart-level slot. Order matters: C release first so the next
+  /// semaphore-granted caller finds the reader already available.
+  void releaseReaderConnectionInternal(int readerPtr) {
+    if (_poolPtr == null) return;
+    _platform.poolReleaseReader(dbName, _poolPtr!, readerPtr);
+    _releaseReaderSlot();
+  }
 }

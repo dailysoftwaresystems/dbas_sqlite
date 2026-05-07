@@ -4812,6 +4812,139 @@ void main() async {
     await db.dropDb();
   });
 
+  // ──────────────────────────────────────────────────────────────────────
+  // Regression: parallel reads exceeding the pool must not deadlock.
+  //
+  // Pre-2.5.1 bug: a Future.wait of N executeReader calls (N > pool size)
+  // dispatched one `pool_acquire_reader_blocking` per call across the
+  // worker isolates. Once every worker was parked inside the C blocking
+  // acquire, no worker was free to run `prepareQuery` / `finalizeStmt`
+  // for the in-flight reads — so no read could finish, no reader was
+  // released, and the pool deadlocked until each worker's 30 s C-side
+  // timeout fired. The fix gates pool acquires through a Dart-level
+  // semaphore sized to the reader pool, so excess callers wait in Dart
+  // microtasks instead of occupying a worker.
+  // ──────────────────────────────────────────────────────────────────────
+
+  test(
+      'pool: 17 parallel reads complete with default reader pool of 4 '
+      '(no worker-pool deadlock)', () async {
+    final db = await _createTestDb('pool_parallel_starve.db',
+        readerPoolSize: 4);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)');
+    for (int i = 1; i <= 17; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)', params: [i, i * 10]);
+    }
+
+    final results = await Future.wait(
+      List.generate(17, (i) {
+        final id = i + 1;
+        return (() async => await (await db.prepareQuery(
+                    'SELECT val FROM t WHERE id = ?'))
+                .executeScalar(params: [id]) as int?)();
+      }),
+    ).timeout(
+      const Duration(seconds: 15),
+      onTimeout: () =>
+          fail('17 parallel reads with pool=4 deadlocked (regression)'),
+    );
+    for (int i = 0; i < 17; i++) {
+      expect(results[i], (i + 1) * 10);
+    }
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test(
+      'pool: parallel readers strictly exceeding pool serialise via '
+      'Dart semaphore', () async {
+    // Cap pool at 1 reader so the second caller is forced to wait at
+    // the Dart-level semaphore. Verifies that the semaphore correctly
+    // serialises excess callers and that the second read still
+    // succeeds once the first releases.
+    final db = await _createTestDb('pool_sem_serialise.db',
+        readerPoolSize: 1);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'a'), (2, 'b')");
+
+    final results = await Future.wait([
+      (() async => (await (await db.prepareQuery(
+                  'SELECT val FROM t WHERE id = 1'))
+              .executeScalar()) as String?)(),
+      (() async => (await (await db.prepareQuery(
+                  'SELECT val FROM t WHERE id = 2'))
+              .executeScalar()) as String?)(),
+    ]);
+    expect(results, ['a', 'b']);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test(
+      'pool: closeDb cancels surplus Dart-side reader-slot waiters with '
+      'StateError', () async {
+    // Park two reader-slot waiters behind a single held slot, then
+    // close the database. closeDb sweeps active statements first; the
+    // held reader's onClose releases the slot and grants ONE parked
+    // waiter (which then fails downstream at prepareQuery because the
+    // pool is mid-tear-down). The SECOND parked waiter never gets a
+    // slot — it must be drained by `_cancelReaderSlotWaitQueue` and
+    // reject with StateError. Without that drain the waiter would
+    // hang forever.
+    final db = await _createTestDb('pool_close_cancels_surplus_waiter.db',
+        readerPoolSize: 1);
+    DbasSqlite.debugPoolAcquireTimeoutMs = 30000;
+    try {
+      await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+      await _runSql(db, "INSERT INTO t VALUES (1, 'first')");
+
+      // First reader holds the only Dart slot.
+      final firstStmt = await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final firstReader = await firstStmt.executeReader();
+      expect(await firstReader.readRow(), isTrue);
+
+      // Two more executeReaders park at the Dart semaphore.
+      final parkedStmt1 =
+          await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final parkedStmt2 =
+          await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      // Capture each parked future's eventual outcome (value or error)
+      // so an uncaught rejection doesn't fail the test runner before
+      // we get a chance to inspect it.
+      final parked1Outcome =
+          parkedStmt1.executeReader().then<Object?>(
+              (r) => r, onError: (Object e) => e);
+      final parked2Outcome =
+          parkedStmt2.executeReader().then<Object?>(
+              (r) => r, onError: (Object e) => e);
+
+      // Yield so the waiters register in the queue.
+      await Future<void>.delayed(Duration.zero);
+
+      await db.closeDb();
+
+      // One of the two parked reads will be cancelled with StateError;
+      // the other will fail downstream at prepareQuery once its slot
+      // is granted mid-close. Assert that AT LEAST one threw the
+      // cancellation-specific StateError so the cancel path is
+      // exercised.
+      final err1 = await parked1Outcome;
+      final err2 = await parked2Outcome;
+      const stateErrorMsg = 'Database was closed while waiting for reader slot';
+      final sawCancellation =
+          (err1 is StateError && err1.message.contains(stateErrorMsg)) ||
+          (err2 is StateError && err2.message.contains(stateErrorMsg));
+      expect(sawCancellation, isTrue,
+          reason: 'expected at least one waiter to be cancelled by '
+              '_cancelReaderSlotWaitQueue, got err1=$err1 err2=$err2');
+    } finally {
+      DbasSqlite.debugPoolAcquireTimeoutMs = null;
+      await db.dropDb();
+    }
+  });
+
   test('streaming: row payload preserves int / double / text / blob / null',
       () async {
     final db = await _createTestDb('stream_mixed_types.db');
