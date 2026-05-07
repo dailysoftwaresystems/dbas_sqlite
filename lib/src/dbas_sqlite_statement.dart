@@ -436,8 +436,7 @@ class DbasSqliteStatement {
       releaseFn = () async {};
     } else if (_db.poolPtrInternal != null) {
       final timeout = _db.poolAcquireTimeoutMsInternal;
-      final readerPtr = await _platform.poolAcquireReaderBlocking(
-          _db.dbName, _db.poolPtrInternal!, timeout);
+      final readerPtr = await _db.acquireReaderConnectionInternal(timeout);
       if (readerPtr == 0) {
         throw TimeoutException(
           'No pool reader became available within ${timeout}ms — '
@@ -447,7 +446,7 @@ class DbasSqliteStatement {
       }
       conn = DbasSqliteDb(_db.dbName, readerPtr);
       releaseFn = () async {
-        _platform.poolReleaseReader(_db.dbName, _db.poolPtrInternal!, readerPtr);
+        _db.releaseReaderConnectionInternal(readerPtr);
       };
     } else {
       // Single-connection fallback: use writer with the writer lock.
