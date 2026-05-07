@@ -201,9 +201,6 @@ class DbasSqliteStatement {
     if (nameParams != null) _namedBinds = Map.of(nameParams);
 
     try {
-      if (kIsWeb) {
-        return await _executeSqlWeb();
-      }
       return await _executeSqlNative();
     } catch (_) {
       _positionalBinds = positionalSnapshot;
@@ -215,6 +212,12 @@ class DbasSqliteStatement {
   Future<int> _executeSqlNative() async {
     final lockHeld = _db.isInTransaction;
     if (!lockHeld) await _db.acquireWriterLockInternal();
+    // Mark the transaction dirty up-front. Subsequent reads in the same
+    // tx must route through the writer connection to observe this
+    // statement's effects (read-your-writes). Setting before dispatch
+    // is conservative: if the statement fails, later reads still go
+    // through the writer — slower but never incorrect.
+    _db.markTransactionWriteInternal();
 
     final conn = _db.dbInternal!;
     int handle = sqliteInvalidStmtHandle;
@@ -227,7 +230,7 @@ class DbasSqliteStatement {
       }
 
       try {
-        await _replayBindsNative(conn, handle);
+        await _replayBinds(conn, handle);
 
         final cache = RowData();
         final rc = await _platform.readRowAndCache(conn, handle, cache);
@@ -263,15 +266,7 @@ class DbasSqliteStatement {
     }
   }
 
-  Future<int> _executeSqlWeb() async {
-    final delegate = _platform.delegate(_db.dbName) as dynamic;
-    final result = await delegate.executeStatementWrite(_sql, _mergedParams());
-    _lastAffectedRows = result.affectedRows as int;
-    _lastInsertedId = result.lastInsertedId as int;
-    return _lastAffectedRows;
-  }
-
-  Future<void> _replayBindsNative(DbasSqliteDb conn, int handle) async {
+  Future<void> _replayBinds(DbasSqliteDb conn, int handle) async {
     for (int i = 0; i < _positionalBinds.length; i++) {
       final index = i + 1;
       final value = _positionalBinds[i];
@@ -365,60 +360,38 @@ class DbasSqliteStatement {
     throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
   }
 
-  /// Web-only: merge positional + named into a single payload that
-  /// the JS pool's exec/query understand. Positional wins if both are
-  /// set; if only named is set, we send a JS object with auto-prefixed
-  /// keys.
-  dynamic _mergedParams() {
-    if (_positionalBinds.isNotEmpty) {
-      return _positionalBinds.map(_jsifyBindValue).toList();
-    }
-    if (_namedBinds.isNotEmpty) {
-      final out = <String, dynamic>{};
-      for (final e in _namedBinds.entries) {
-        String name = e.key;
-        if (!name.startsWith(':') && !name.startsWith('@') && !name.startsWith(r'$')) {
-          name = ':$name';
-        }
-        out[name] = _jsifyBindValue(e.value);
-      }
-      return out;
-    }
-    return null;
-  }
-
-  Object? _jsifyBindValue(Object? value) {
-    if (value == null) return null;
-    if (value is bool) return value ? 1 : 0;
-    if (value is Decimal) return value.toString();
-    if (value is Enum) return value.index;
-    // Blobs MUST cross the postMessage boundary as a typed-array so
-    // the JS wrapper's bindParams recognises them via
-    // `instanceof Uint8Array` and routes through bindBlob. A raw
-    // `List<int>` jsifies to a regular JS Array and gets stringified
-    // by the bindText fallback, silently corrupting the bytes.
-    if (value is Uint8List) return value;
-    if (value is List<int>) return Uint8List.fromList(value);
-    return value;
-  }
-
   // ── Execution: reader ────────────────────────────────────────────────
 
   /// Executes the prepared statement as a SELECT and returns a
   /// [DbasSqliteReader] for row-by-row iteration.
   ///
-  /// Connection routing:
-  ///   - **Native, outside a transaction**: blocking-acquires a pool
-  ///     reader (default 30 s timeout). On timeout, throws
-  ///     [TimeoutException]; the statement remains in a clean,
-  ///     retriable state.
-  ///   - **Native, inside a transaction**: uses the writer connection
-  ///     (lock already held by `beginTransaction`).
-  ///   - **Web, outside a transaction**: dispatches `pool.query` to a
-  ///     reader worker. Rows are pre-buffered in Dart.
-  ///   - **Web, inside a transaction**: dispatches `pool.exec` (writer
-  ///     worker, EXCLUSIVE MRSW fence) so reads observe in-flight
-  ///     transactional state.
+  /// Routing is automatic and consistent across native and web. On
+  /// both platforms each row is fetched lazily — native uses the
+  /// FFI prepare/step/finalize lifecycle, web uses the worker's
+  /// `prepareQuery` / `bindParams` / `readRow` / `readRows` /
+  /// `finalizeStmt` RPC chain. `executeScalar` therefore issues
+  /// exactly one `step` / `readRow` regardless of how many rows the
+  /// SQL would otherwise produce.
+  ///
+  ///   - **Outside a transaction**: native uses a pool reader. Web's
+  ///     pool returns the same single worker connection for any
+  ///     reader-acquire (the web pool fronts one worker, no separate
+  ///     reader workers), so the same routing logic resolves to that
+  ///     connection.
+  ///   - **Inside a transaction, before any `executeSql` runs**: same
+  ///     as outside — pool reader on native, the writer worker on
+  ///     web. Parallel `Future.wait([executeReader, ...])` issued
+  ///     before the first write runs concurrently on native against
+  ///     independent pool connections; on web the worker serialises
+  ///     them through its single connection.
+  ///   - **Inside a transaction, after any `executeSql` runs**: routes
+  ///     through the writer connection (native) or the writer worker
+  ///     (web), so the read observes the in-flight transaction's
+  ///     uncommitted writes (read-your-writes).
+  ///
+  /// The "after any `executeSql`" detection is automatic: every
+  /// [executeSql] flips an internal flag on the owning [DbasSqlite]
+  /// for the rest of the transaction; `commit` / `rollback` reset it.
   ///
   /// Only one reader may be active per statement at a time. Throws
   /// [StateError] if a reader is already active.
@@ -437,9 +410,6 @@ class DbasSqliteStatement {
     if (nameParams != null) _namedBinds = Map.of(nameParams);
 
     try {
-      if (kIsWeb) {
-        return await _executeReaderWeb();
-      }
       return await _executeReaderNative();
     } catch (_) {
       _positionalBinds = positionalSnapshot;
@@ -449,11 +419,19 @@ class DbasSqliteStatement {
   }
 
   Future<DbasSqliteReader> _executeReaderNative() async {
-    final inTx = _db.isInTransaction;
+    // Use the writer connection only after a write has happened in the
+    // current transaction (read-your-writes). Before any writes — or
+    // outside a transaction — go through the pool so parallel reads
+    // can run on independent connections. Single-connection mode (no
+    // pool) inside a transaction also stays on the writer because the
+    // writer lock is already held by `beginTransaction`; trying to
+    // re-acquire it via the pool-reader fallback would deadlock.
+    final useWriter = _db.isInTransaction &&
+        (_db.transactionHasWritesInternal || _db.poolPtrInternal == null);
     final DbasSqliteDb conn;
     final Future<void> Function() releaseFn;
 
-    if (inTx) {
+    if (useWriter) {
       conn = _db.dbInternal!;
       releaseFn = () async {};
     } else if (_db.poolPtrInternal != null) {
@@ -490,7 +468,7 @@ class DbasSqliteStatement {
         throw Exception('It was not possible to prepare the query: $err');
       }
 
-      await _replayBindsNative(conn, handle);
+      await _replayBinds(conn, handle);
 
       final reader = DbasSqliteReader.internal(
         conn: conn,
@@ -586,24 +564,42 @@ class DbasSqliteStatement {
     }
   }
 
-  Future<DbasSqliteReader> _executeReaderWeb() async {
-    final delegate = _platform.delegate(_db.dbName) as dynamic;
-    final buffer = await delegate.executeStatementRead(
-      _sql,
-      _mergedParams(),
-      inTransaction: _db.isInTransaction,
+  // ── Execution: scalar ────────────────────────────────────────────────
+
+  /// Executes the prepared statement as a SELECT and returns the value
+  /// of the first column of the first row.
+  ///
+  /// Same input parameters and connection routing as [executeReader]
+  /// (see its docs for in-/out-of-transaction semantics — including the
+  /// automatic switch to read-your-writes after any [executeSql] runs
+  /// in the current transaction).
+  ///
+  /// Returns `null` when the query produces no rows, or when the first
+  /// column of the first row is SQL NULL. The returned dynamic is
+  /// typed by the column's SQLite type: `int` for INTEGER, `double`
+  /// for FLOAT, `String` for TEXT, [Uint8List] for BLOB.
+  ///
+  /// Closes both the underlying reader and this statement before
+  /// returning, so the statement is single-use — calling any execute
+  /// method on it afterwards throws [StateError].
+  Future<dynamic> executeScalar({
+    List<Object?>? params,
+    Map<String, Object?>? nameParams,
+  }) async {
+    final reader = await executeReader(
+      params: params,
+      nameParams: nameParams,
     );
-    final reader = DbasSqliteReader.internal(
-      conn: _db.dbInternal!,
-      handle: sqliteInvalidStmtHandle, // unused on web pool path
-      platform: _platform,
-      webBuffer: buffer,
-      onClose: () async {
-        _activeReader = null;
-      },
-    );
-    _activeReader = reader;
-    return reader;
+    try {
+      if (!await reader.readRow()) return null;
+      return reader.getColumnValue(0);
+    } finally {
+      // readRow() auto-closes when there are no more rows; close() is
+      // idempotent so calling it unconditionally is safe and keeps the
+      // happy path symmetric with the empty-result path.
+      if (!reader.isClosed) await reader.close();
+      await close();
+    }
   }
 
   // ── Per-stmt state ───────────────────────────────────────────────────

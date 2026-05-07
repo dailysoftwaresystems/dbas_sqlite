@@ -13,8 +13,16 @@ enum TestStatus { active, inactive, suspended }
 ///
 /// Uses single connection (no pool) by default to minimize native resource
 /// overhead. Pool-specific tests use [readerPoolSize] explicitly.
-Future<DbasSqlite> _createTestDb(String dbName, {int readerPoolSize = 0}) async {
-  final db = await DbasSqlite.getInstance(dbName: dbName);
+///
+/// [workerPoolSize] auto-bumps to `readerPoolSize + 2` inside the
+/// library on `openDb`. Tests that fan out many parallel reads (more
+/// than workers can serve concurrently) should pass an explicit
+/// higher value so worker isolates don't starve while in-flight reads
+/// wait for prepare/step round-trips.
+Future<DbasSqlite> _createTestDb(String dbName,
+    {int readerPoolSize = 0, int workerPoolSize = 4}) async {
+  final db = await DbasSqlite.getInstance(
+      dbName: dbName, workerPoolSize: workerPoolSize);
   await db.dropDb();
   await db.openDb(readerPoolSize: readerPoolSize);
   return db;
@@ -4188,6 +4196,646 @@ void main() async {
       throwsA(isA<StateError>()),
     );
 
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // executeScalar
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('executeScalar returns the first column of the first row', () async {
+    final db = await _createTestDb('scalar_basic.db');
+    await _runSql(db, 'CREATE TABLE t (i INTEGER, d REAL, s TEXT, b BLOB)');
+    await _runSql(db,
+        'INSERT INTO t VALUES (?, ?, ?, ?)',
+        params: [42, 3.14, 'hello', Uint8List.fromList([1, 2, 3])]);
+
+    final intVal =
+        await (await db.prepareQuery('SELECT i FROM t')).executeScalar();
+    expect(intVal, 42);
+
+    final dblVal =
+        await (await db.prepareQuery('SELECT d FROM t')).executeScalar();
+    expect(dblVal, closeTo(3.14, 1e-9));
+
+    final txtVal =
+        await (await db.prepareQuery('SELECT s FROM t')).executeScalar();
+    expect(txtVal, 'hello');
+
+    final blobVal =
+        await (await db.prepareQuery('SELECT b FROM t')).executeScalar();
+    expect(blobVal, isA<Uint8List>());
+    expect((blobVal as Uint8List).toList(), [1, 2, 3]);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar returns null when query produces no rows', () async {
+    final db = await _createTestDb('scalar_no_rows.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+
+    final v = await (await db.prepareQuery('SELECT id FROM t')).executeScalar();
+    expect(v, isNull);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar returns null when first column is SQL NULL', () async {
+    final db = await _createTestDb('scalar_null_col.db');
+    await _runSql(db, 'CREATE TABLE t (a INTEGER, b TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (NULL, 'present')");
+
+    final v = await (await db.prepareQuery('SELECT a FROM t')).executeScalar();
+    expect(v, isNull);
+
+    // Sanity: the second column is non-null, demonstrating the row exists.
+    final v2 = await (await db.prepareQuery('SELECT b FROM t')).executeScalar();
+    expect(v2, 'present');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar accepts positional params', () async {
+    final db = await _createTestDb('scalar_pos_params.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'one'), (2, 'two')");
+
+    final v = await (await db.prepareQuery('SELECT val FROM t WHERE id = ?'))
+        .executeScalar(params: [2]);
+    expect(v, 'two');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar accepts named params', () async {
+    final db = await _createTestDb('scalar_named_params.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'one'), (2, 'two')");
+
+    final v = await (await db.prepareQuery('SELECT val FROM t WHERE id = :id'))
+        .executeScalar(nameParams: {':id': 2});
+    expect(v, 'two');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar closes the statement (subsequent use throws)', () async {
+    final db = await _createTestDb('scalar_closes_stmt.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+    await _runSql(db, 'INSERT INTO t VALUES (1)');
+
+    final stmt = await db.prepareQuery('SELECT id FROM t');
+    final v = await stmt.executeScalar();
+    expect(v, 1);
+    expect(stmt.isClosed, isTrue);
+
+    await expectLater(stmt.executeScalar(), throwsA(isA<StateError>()));
+    await expectLater(stmt.executeSql(), throwsA(isA<StateError>()));
+    await expectLater(stmt.executeReader(), throwsA(isA<StateError>()));
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar returns the first column even with multiple columns',
+      () async {
+    final db = await _createTestDb('scalar_first_col.db');
+    await _runSql(db, 'CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER)');
+    await _runSql(db, 'INSERT INTO t VALUES (10, 20, 30)');
+
+    final v =
+        await (await db.prepareQuery('SELECT a, b, c FROM t')).executeScalar();
+    expect(v, 10);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('executeScalar returns the first row even with many rows', () async {
+    final db = await _createTestDb('scalar_first_row.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+    await _runSql(db, 'INSERT INTO t VALUES (1), (2), (3), (4)');
+
+    final v = await (await db.prepareQuery('SELECT id FROM t ORDER BY id'))
+        .executeScalar();
+    expect(v, 1);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Auto-detection: in-tx read routing (read-your-writes preserved)
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('in-tx read AFTER a write sees the in-flight write (executeReader)',
+      () async {
+    final db = await _createTestDb('autoroute_reader_postwrite.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await db.beginTransaction();
+    await _runSql(db, "INSERT INTO t VALUES (1, 'inflight')");
+
+    // The SELECT runs INSIDE the same tx, after the INSERT — must see it.
+    final reader =
+        await (await db.prepareQuery('SELECT val FROM t WHERE id = 1'))
+            .executeReader();
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnText(0), 'inflight');
+    await reader.close();
+
+    await db.rollback();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('in-tx read AFTER a write sees the in-flight write (executeScalar)',
+      () async {
+    final db = await _createTestDb('autoroute_scalar_postwrite.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await db.beginTransaction();
+    await _runSql(db, "INSERT INTO t VALUES (7, 'inflight-scalar')");
+
+    final v = await (await db.prepareQuery('SELECT val FROM t WHERE id = 7'))
+        .executeScalar();
+    expect(v, 'inflight-scalar');
+
+    await db.rollback();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('in-tx read BEFORE any write sees last-committed snapshot', () async {
+    final db = await _createTestDb('autoroute_reader_prewrite.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'committed')");
+
+    await db.beginTransaction();
+    // No executeSql yet — read should hit the pool reader (last commit).
+    final v =
+        await (await db.prepareQuery('SELECT val FROM t WHERE id = 1'))
+            .executeScalar();
+    expect(v, 'committed');
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('parallel pre-write in-tx reads run without serialising on writer',
+      () async {
+    // With auto-routing, pre-write in-tx reads use pool readers, so a
+    // Future.wait over many SELECTs completes — none of them block on
+    // the writer lock that beginTransaction holds.
+    final db = await _createTestDb('autoroute_parallel_prewrite.db',
+        readerPoolSize: 4);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+
+    await db.beginTransaction();
+    final results = await Future.wait([
+      (() async => (await (await db.prepareQuery('SELECT val FROM t WHERE id = 1')).executeScalar()) as String?)(),
+      (() async => (await (await db.prepareQuery('SELECT val FROM t WHERE id = 2')).executeScalar()) as String?)(),
+      (() async => (await (await db.prepareQuery('SELECT val FROM t WHERE id = 3')).executeScalar()) as String?)(),
+    ]);
+    expect(results, ['a', 'b', 'c']);
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('rollback resets txHasWrites — next tx starts on pool reader again',
+      () async {
+    final db = await _createTestDb('autoroute_reset_rollback.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'committed')");
+
+    // First tx: write, then read, then rollback.
+    await db.beginTransaction();
+    await _runSql(db, "INSERT INTO t VALUES (2, 'inflight')");
+    await db.rollback();
+
+    // Second tx: read FIRST (pre-write). Routing must be "no writes
+    // yet" → pool reader → committed snapshot. The rollback above
+    // means the row from the first tx is gone.
+    await db.beginTransaction();
+    final reader = await (await db
+            .prepareQuery('SELECT COUNT(*) FROM t'))
+        .executeReader();
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 1);
+    await reader.close();
+    await db.commit();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('commit resets txHasWrites — next tx starts on pool reader again',
+      () async {
+    final db = await _createTestDb('autoroute_reset_commit.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+
+    await db.beginTransaction();
+    await _runSql(db, "INSERT INTO t VALUES (1, 'a')");
+    await db.commit();
+
+    // Second tx, no writes yet — read goes to pool reader (committed).
+    await db.beginTransaction();
+    final v = await (await db.prepareQuery('SELECT val FROM t WHERE id = 1'))
+        .executeScalar();
+    expect(v, 'a');
+    await db.commit();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('single-connection (no pool) in-tx read works (no deadlock)', () async {
+    // readerPoolSize: 0 → no pool, single writer connection. The
+    // routing must avoid trying to re-acquire the writer lock that
+    // beginTransaction already holds.
+    final db = await _createTestDb('autoroute_no_pool.db', readerPoolSize: 0);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+    await _runSql(db, "INSERT INTO t VALUES (1, 'pre')");
+
+    await db.beginTransaction();
+    // Pre-write read: must work (writer connection, lock already held).
+    final v1 = await (await db.prepareQuery('SELECT val FROM t WHERE id = 1'))
+        .executeScalar()
+        .timeout(const Duration(seconds: 5),
+            onTimeout: () => fail('pre-write in-tx read deadlocked'));
+    expect(v1, 'pre');
+
+    await _runSql(db, "INSERT INTO t VALUES (2, 'mid')");
+    final v2 = await (await db.prepareQuery('SELECT val FROM t WHERE id = 2'))
+        .executeScalar()
+        .timeout(const Duration(seconds: 5),
+            onTimeout: () => fail('post-write in-tx read deadlocked'));
+    expect(v2, 'mid');
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('10 parallel pre-write in-tx scalar reads all complete (Future.wait)',
+      () async {
+    // Pool size matches parallel fan-out so every reader gets its own
+    // connection without queuing on poolAcquireReaderBlocking. Worker
+    // pool auto-bumps to readerCount + 2 = 12, which leaves enough
+    // headroom for the prepare / bind / step round-trips that follow
+    // each acquire — without that headroom, blocked acquires can
+    // starve the workers that the in-flight reads need to release.
+    final db = await _createTestDb('autoroute_parallel_heavy_scalar.db',
+        readerPoolSize: 10);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)');
+    for (int i = 1; i <= 10; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)', params: [i, i * 10]);
+    }
+
+    await db.beginTransaction();
+    final futures = <Future<dynamic>>[];
+    for (int i = 1; i <= 10; i++) {
+      final id = i;
+      futures.add((() async => (await db
+              .prepareQuery('SELECT val FROM t WHERE id = ?'))
+          .executeScalar(params: [id]))());
+    }
+    final results = await Future.wait(futures).timeout(
+      const Duration(seconds: 60),
+      onTimeout: () =>
+          fail('10 parallel pre-write in-tx scalar reads timed out'),
+    );
+    for (int i = 0; i < 10; i++) {
+      expect(results[i], (i + 1) * 10, reason: 'mismatch at index $i');
+    }
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('10 parallel pre-write in-tx executeReader runs all complete',
+      () async {
+    // Same fan-out / worker-pool reasoning as the scalar variant.
+    final db = await _createTestDb('autoroute_parallel_heavy_reader.db',
+        readerPoolSize: 10);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+    for (int i = 1; i <= 10; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)',
+          params: [i, 'row-$i']);
+    }
+
+    await db.beginTransaction();
+    Future<String?> readOne(int id) async {
+      final stmt =
+          await db.prepareQuery('SELECT val FROM t WHERE id = ?');
+      try {
+        final reader = await stmt.executeReader(params: [id]);
+        try {
+          if (!await reader.readRow()) return null;
+          return reader.getColumnText(0);
+        } finally {
+          await reader.close();
+        }
+      } finally {
+        await stmt.close();
+      }
+    }
+
+    final results = await Future.wait(
+      List.generate(10, (i) => readOne(i + 1)),
+    ).timeout(
+      const Duration(seconds: 60),
+      onTimeout: () =>
+          fail('10 parallel pre-write in-tx executeReader runs timed out'),
+    );
+    for (int i = 0; i < 10; i++) {
+      expect(results[i], 'row-${i + 1}');
+    }
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('10 parallel post-write in-tx reads all complete (writer-serialised)',
+      () async {
+    // After a write, every in-tx read routes to the writer connection
+    // for read-your-writes. They serialise on the writer but must all
+    // succeed — no deadlock, no lost reads, no error. Pool size still
+    // generous so the routing decision is unambiguous (writer chosen
+    // because of the write, not because no reader was free).
+    final db = await _createTestDb('autoroute_parallel_postwrite.db',
+        readerPoolSize: 10);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)');
+    for (int i = 1; i <= 10; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)', params: [i, i]);
+    }
+
+    await db.beginTransaction();
+    // Write inside tx — flips routing to writer for subsequent reads.
+    await _runSql(db, 'UPDATE t SET val = val * 100');
+
+    final results = await Future.wait(
+      List.generate(10, (i) {
+        final id = i + 1;
+        return (() async => (await db
+                .prepareQuery('SELECT val FROM t WHERE id = ?'))
+            .executeScalar(params: [id]))();
+      }),
+    ).timeout(
+      const Duration(seconds: 60),
+      onTimeout: () =>
+          fail('10 parallel post-write in-tx reads timed out (writer)'),
+    );
+    for (int i = 0; i < 10; i++) {
+      // Each row was multiplied by 100, and these reads see the
+      // in-flight UPDATE.
+      expect(results[i], (i + 1) * 100);
+    }
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('multi-statement write/read alternation inside one tx', () async {
+    // Stress: write, read, write, read, all inside a single tx. Each
+    // read after a write must see all writes so far.
+    final db = await _createTestDb('autoroute_alternation.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)');
+
+    await db.beginTransaction();
+
+    await _runSql(db, 'INSERT INTO t VALUES (1, 100)');
+    var sum = await (await db.prepareQuery('SELECT SUM(val) FROM t'))
+        .executeScalar();
+    expect(sum, 100);
+
+    await _runSql(db, 'INSERT INTO t VALUES (2, 200)');
+    sum = await (await db.prepareQuery('SELECT SUM(val) FROM t'))
+        .executeScalar();
+    expect(sum, 300);
+
+    await _runSql(db, 'UPDATE t SET val = val + 50 WHERE id = 1');
+    sum = await (await db.prepareQuery('SELECT SUM(val) FROM t'))
+        .executeScalar();
+    expect(sum, 350);
+
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Streaming-SELECT regression coverage (v2.5.0)
+  //
+  // The web side of v2.5.0 replaced the eager `pool.query` materialisation
+  // with a per-row streaming pipeline (`prepareQuery` / `bindParams` /
+  // `readRow` / `finalizeStmt`) so it matches the native FFI behaviour.
+  // Native has always streamed; these tests pin down the cross-platform
+  // contract so a regression on either side surfaces.
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('streaming: empty result set still exposes column count and names',
+      () async {
+    // Native has always populated column metadata at prepare time. The
+    // test is the regression net so the native contract doesn't drift
+    // away from what the web side now also guarantees.
+    final db = await _createTestDb('stream_empty_meta.db');
+    await _runSql(db, 'CREATE TABLE t (a INTEGER, b TEXT, c REAL)');
+
+    final stmt = await db.prepareQuery('SELECT a, b, c FROM t WHERE a > 1000');
+    final reader = await stmt.executeReader();
+    expect(reader.getColumnCount(), 3,
+        reason: 'columnCount must be available before first readRow');
+    expect(reader.getColumnName(0), 'a');
+    expect(reader.getColumnName(1), 'b');
+    expect(reader.getColumnName(2), 'c');
+    expect(await reader.readRow(), isFalse);
+    expect(reader.isClosed, isTrue);
+    await stmt.close();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('streaming: SQLite INTEGER values around int32 boundaries round-trip',
+      () async {
+    final db = await _createTestDb('stream_int_boundaries.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, big INTEGER)');
+
+    // Each value: positive small, max int32, just past max int32, max
+    // safe integer in Dart-on-web (also valid on native), and
+    // corresponding negatives. Native int is 64-bit so these all fit
+    // exactly; the test is shaped this way so the same input set works
+    // on web (53-bit) when this same test is run via integration_test.
+    const cases = <int>[
+      0,
+      42,
+      2147483647, // INT32_MAX
+      2147483648, // just past — worker emits BigInt on web
+      9007199254740991, // 2^53 - 1
+      -2147483648, // INT32_MIN
+      -2147483649, // just past
+      -9007199254740991,
+    ];
+    for (int i = 0; i < cases.length; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)',
+          params: [i, cases[i]]);
+    }
+    for (int i = 0; i < cases.length; i++) {
+      final v = await (await db.prepareQuery(
+              'SELECT big FROM t WHERE id = ?'))
+          .executeScalar(params: [i]);
+      expect(v, cases[i], reason: 'value at id=$i did not round-trip');
+      expect(v, isA<int>(),
+          reason: 'value at id=$i must surface as Dart int, not BigInt/text');
+    }
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('streaming: closing a reader before exhaustion releases the stmt',
+      () async {
+    final db = await _createTestDb('stream_abandoned.db', readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)');
+    for (int i = 1; i <= 1000; i++) {
+      await _runSql(db, 'INSERT INTO t VALUES (?, ?)', params: [i, i]);
+    }
+
+    {
+      final stmt =
+          await db.prepareQuery('SELECT id FROM t ORDER BY id');
+      final reader = await stmt.executeReader();
+      for (int i = 0; i < 5; i++) {
+        expect(await reader.readRow(), isTrue);
+      }
+      await reader.close();
+      await stmt.close();
+    }
+
+    // Fresh full scan after the partial read — if the previous handle
+    // had leaked, this would either fail outright or starve the pool.
+    {
+      final stmt =
+          await db.prepareQuery('SELECT id FROM t ORDER BY id');
+      final reader = await stmt.executeReader();
+      int seen = 0;
+      while (await reader.readRow()) {
+        seen++;
+        expect(reader.getColumnInt(0), seen);
+      }
+      expect(seen, 1000);
+      await stmt.close();
+    }
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test(
+      'streaming: in-tx write then parallel executeReader runs all see the write',
+      () async {
+    // The existing autoroute tests cover post-write parallel reads
+    // via executeScalar (single-row scalar). This unit pins down the
+    // multi-row case: every parallel executeReader inside a tx (after
+    // a write) streams its rows from the writer connection and
+    // observes the in-flight UPDATE — the read-your-writes contract
+    // must hold under reader fan-out.
+    final db = await _createTestDb('stream_inttx_par_reader.db',
+        readerPoolSize: 8, workerPoolSize: 12);
+    await _runSql(db,
+        'CREATE TABLE t (group_id INTEGER, id INTEGER PRIMARY KEY, val INTEGER)');
+    int rowId = 1;
+    for (int g = 1; g <= 6; g++) {
+      for (int i = 1; i <= 4; i++) {
+        await _runSql(db, 'INSERT INTO t VALUES (?, ?, ?)',
+            params: [g, rowId++, i]);
+      }
+    }
+
+    await db.beginTransaction();
+    await _runSql(db, 'UPDATE t SET val = val + 100');
+
+    final results = await Future.wait(
+      List.generate(6, (g) async {
+        final reader = await (await db.prepareQuery(
+                'SELECT val FROM t WHERE group_id = ? ORDER BY id'))
+            .executeReader(params: [g + 1]);
+        try {
+          final got = <int>[];
+          while (await reader.readRow()) {
+            got.add(reader.getColumnInt(0));
+          }
+          return got;
+        } finally {
+          if (!reader.isClosed) await reader.close();
+        }
+      }),
+    ).timeout(
+      const Duration(seconds: 60),
+      onTimeout: () => fail(
+          '6 parallel post-write in-tx executeReader runs timed out '
+          '(writer-serialised path)'),
+    );
+
+    for (int g = 0; g < 6; g++) {
+      // Group g+1's val column was originally [1, 2, 3, 4]; the
+      // in-flight UPDATE bumped each by 100. Every parallel reader
+      // must observe the bumped values.
+      expect(results[g], [101, 102, 103, 104],
+          reason: 'group ${g + 1} did not observe the in-flight UPDATE');
+    }
+
+    await db.rollback();
+    final after = await (await db
+            .prepareQuery('SELECT val FROM t WHERE id = 1'))
+        .executeScalar();
+    expect(after, 1, reason: 'rollback must restore the original value');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('streaming: row payload preserves int / double / text / blob / null',
+      () async {
+    final db = await _createTestDb('stream_mixed_types.db');
+    await _runSql(db,
+        'CREATE TABLE t (i INTEGER, d REAL, s TEXT, b BLOB, n INTEGER)');
+    final blob = Uint8List.fromList([1, 2, 3, 4, 255]);
+    final stmt =
+        await db.prepareQuery('INSERT INTO t VALUES (?, ?, ?, ?, ?)');
+    await stmt.executeSql(params: [42, 3.14, 'hello', blob, null]);
+    await stmt.close();
+
+    final reader =
+        await (await db.prepareQuery('SELECT i, d, s, b, n FROM t'))
+            .executeReader();
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 42);
+    expect(reader.getColumnDouble(1), closeTo(3.14, 1e-9));
+    expect(reader.getColumnText(2), 'hello');
+    expect(reader.getColumnBlob(3), blob);
+    expect(reader.isColumnNull(4), isTrue);
+    expect(reader.getColumnNullableInt(4), isNull);
+    expect(await reader.readRow(), isFalse);
+
+    await db.closeDb();
     await db.dropDb();
   });
 }

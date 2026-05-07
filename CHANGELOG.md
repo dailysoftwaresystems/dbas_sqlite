@@ -2,6 +2,97 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.5.0 - 2026-05-06
+
+### Added
+
+- **`DbasSqliteStatement.executeScalar({params, nameParams})`** — runs the
+  prepared statement as a SELECT and returns the first column of the first
+  row as a `dynamic` (typed by SQLite column kind: `int`, `double`,
+  `String`, `Uint8List`). Returns `null` when the query produces no rows
+  or the first column is SQL NULL. Closes both the reader and the
+  statement before returning, so the statement becomes single-use. Same
+  input parameters and connection routing as `executeReader`.
+
+### Changed
+
+- **In-transaction read routing is now automatic.** `executeReader` and
+  `executeScalar` route through a pool reader (native) or the writer
+  worker (web) until the first `executeSql` runs in the current
+  transaction; after that, subsequent in-tx reads switch to the writer
+  connection so they observe the transaction's uncommitted writes
+  (read-your-writes). Previously, in-tx reads always used the writer
+  connection on native, serialising parallel pre-write validation behind
+  the single writer. Now `Future.wait([executeReader, executeReader,
+  ...])` issued before any write in a transaction runs concurrently
+  against the pool. After any `executeSql`, the routing flips
+  automatically; on `commit` / `rollback` it resets. No caller-side flag
+  needed.
+
+- **Web in-transaction reads no longer throw.** Previously, calling
+  `executeReader` inside a transaction on web threw `UnsupportedError`
+  because the bundled JS worker can't return SELECT rows through the
+  writer-only `pool.exec` channel. The library now routes web reads
+  through the writer worker regardless of transaction state — the web
+  pool fronts a single worker holding the writer connection, so SELECTs
+  observe in-flight transactional state automatically.
+
+- **Web SELECT path is now streaming.** `executeReader` / `executeScalar`
+  on web no longer materialise the entire result set in the worker
+  before the first row reaches Dart. The platform layer uses the
+  worker bundle's per-statement RPC so reads stream one chunk at a
+  time across the worker boundary — matching the native FFI behaviour
+  exactly. `executeScalar` over a 10k-row table now issues a single
+  `readRow` round-trip instead of fetching all 10k rows.
+
+- **Web platform implementation unified with native.** Web now
+  implements the full per-stmt platform interface (`prepareQuery` /
+  `bind*` / `readRowAndCache` / `finalizeStmt` / `getStmt*`).
+  `DbasSqliteStatement` and `DbasSqliteReader` no longer have any
+  `kIsWeb` branches — both platforms run the exact same Dart code
+  path; only the platform-delegate implementation differs.
+
+  - On web, `bind*` calls buffer Dart-side and flush via one
+    `bindParams` round-trip on the first step, matching the worker's
+    batch-bind shape.
+  - The first row fetch uses the worker's single-row `readRow` action
+    so `executeScalar` issues exactly one row's worth of work and no
+    waste; subsequent fetches use the chunked `readRows` action with a
+    50-row chunk so a 10k-row scan is ~200 round-trips instead of the
+    ~10000 a per-row pipeline would require (worker bundle v4.5.0).
+  - Per-stmt counters (`getStmtAffectedRows` / `getStmtLastInsertedId`)
+    are eagerly captured on every `SQLITE_DONE` step (covering plain
+    DML, `INSERT … RETURNING`, and SELECT readers alike), so the
+    synchronous platform getters return correct values without extra
+    round-trips at read time.
+  - Statements that mix `?N` (positional) and `:name` (named) markers
+    are bound via two `bindParams` worker calls (one per shape);
+    SQLite's bind slots are independent so the calls accumulate,
+    matching native FFI's per-slot bind semantics.
+
+  Internally, the `WebQueryBuffer` / `WebRowStream` shims, the
+  `executeStatementWrite` / `executeStatementRead` entry points, and
+  the `_executeSqlWeb` / `_executeReaderWeb` branches in
+  `DbasSqliteStatement` are all gone. Public API surface is unchanged.
+
+### Fixed
+
+- **Empty SELECT result sets now expose column metadata on web.** The
+  pre-2.5.0 web path could only recover column names from row 0, so
+  `getColumnCount()` / `getColumnName(i)` returned `0` / `''` for an
+  empty result. The streaming path captures column metadata from
+  `prepareQuery`, so the metadata is populated before the first
+  `readRow()` step regardless of whether any rows match.
+
+- **Large SQLite `INTEGER` values on web round-trip as Dart `int`.**
+  Values outside the int32 range (which the worker emits as JS BigInt)
+  are now classified as `INTEGER` (type 1) and materialised through JS
+  `Number(bigint)` into a Dart `int`, matching `getColumnInt(idx)` on
+  native. Previously these would surface as TEXT (type 3) because the
+  Dart-side type-detection branch fell through. Values within the
+  53-bit Dart-on-web safe integer range are exact; values beyond that
+  are truncated, which matches Dart's own `int` precision on web.
+
 ## 2.4.4 - 2026-05-05
 
 Re-publish of 2.4.1. Earlier release-pipeline runs (2.4.1 – 2.4.3) were

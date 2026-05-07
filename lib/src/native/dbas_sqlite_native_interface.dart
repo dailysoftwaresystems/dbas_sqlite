@@ -147,9 +147,26 @@ abstract class DbasSqliteNativeInterface {
   Future<int> openDb(String path);
   bool isOpened(int dbPtr);
   Future<bool> databaseExists(String fileName);
+  /// Eager input — caller hands over the full database bytes in
+  /// memory. The platform writes them out to its file backend (FFI
+  /// `writeAsBytes` on native, chunked OPFS write on web). For
+  /// memory-friendly attach use [attachStreamDb] with a real source
+  /// stream instead; this convenience overload exists for the common
+  /// "I already have the bytes" case.
   Future attachDb(String fileName, List<int> content);
+
+  /// Streaming input — chunks are written incrementally as they
+  /// arrive. Native pipes them through `File.openWrite()`; web sends
+  /// each chunk via the worker's chunked-attach protocol with
+  /// per-chunk ACK backpressure.
   Future attachStreamDb(String fileName, Stream<List<int>> stream);
+
+  /// Eager output — returns the full database content as a single
+  /// byte buffer. The buffer is materialised in Dart memory before
+  /// the future completes; for large databases prefer [streamCopyDb]
+  /// (file-to-file copy that never enters Dart memory).
   Future<List<int>> getContent(String fileName);
+
   Future<void> streamCopyDb(String sourceFileName, String destFileName);
   Future<void> dropDb(String fileName);
 
@@ -223,9 +240,11 @@ abstract class DbasSqliteNativeInterface {
   Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value);
 
   // ── Column accessors ────────────────────────────────────────────────
-  // These exist on the interface so single-connection web fallback can
-  // implement them; the pool path on web reads from the pre-buffered
-  // WebQueryBuffer directly via `executeStatementRead`.
+  // These exist on the interface for the native FFI implementation,
+  // which calls them per-column inside `readRowAndCache` to populate
+  // the per-reader [RowData] cache. Web's `readRowAndCache` populates
+  // the cache directly from the worker's row payload, so these
+  // methods are unreachable on web (the implementation throws).
   bool isNull(int dbPtr, int handle, int colIndex);
   String getColumnText(int dbPtr, int handle, int colIndex);
   int getColumnInt(int dbPtr, int handle, int colIndex);

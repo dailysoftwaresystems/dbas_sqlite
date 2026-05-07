@@ -34,11 +34,6 @@ class DbasSqliteReader {
   final Future<void> Function() _onClose;
   final RowData _rowCache = RowData();
 
-  /// On web, `readRowAndCache` is not used — the entire result set is
-  /// pre-buffered into [_webBuffer] at execute time. The cursor walks
-  /// it via [_webBuffer.moveNext()].
-  final dynamic _webBuffer; // WebQueryBuffer when on web, null otherwise
-
   bool _closed = false;
   Future<void>? _closeFuture;
 
@@ -48,9 +43,7 @@ class DbasSqliteReader {
   /// [initialColumnCount] / [initialColumnNames] populate the per-
   /// reader [RowData] cache with metadata captured at prepare time.
   /// This makes [getColumnCount] / [getColumnName] return correct
-  /// values BEFORE the first [readRow] call. Both default to empty
-  /// when not provided (e.g. on the web pool path, which uses a
-  /// pre-buffered [WebQueryBuffer] instead).
+  /// values BEFORE the first [readRow] call.
   DbasSqliteReader.internal({
     required DbasSqliteDb conn,
     required int handle,
@@ -58,12 +51,10 @@ class DbasSqliteReader {
     required Future<void> Function() onClose,
     int initialColumnCount = 0,
     List<String> initialColumnNames = const [],
-    dynamic webBuffer,
   })  : _conn = conn,
         _handle = handle,
         _platform = platform,
-        _onClose = onClose,
-        _webBuffer = webBuffer {
+        _onClose = onClose {
     _rowCache.columnCount = initialColumnCount;
     _rowCache.columnNames = initialColumnNames;
   }
@@ -80,13 +71,6 @@ class DbasSqliteReader {
   /// Throws an [Exception] if the query execution fails.
   Future<bool> readRow() async {
     if (_closed) return false;
-
-    if (_webBuffer != null) {
-      // Web pool path — pre-buffered result set.
-      final hasRow = (_webBuffer as dynamic).moveNext() as bool;
-      if (!hasRow) await close();
-      return hasRow;
-    }
 
     final readResult = await _platform.readRowAndCache(_conn, _handle, _rowCache);
     if (!_isSuccessRc(readResult)) {
@@ -226,10 +210,7 @@ class DbasSqliteReader {
   SqliteColumnType getColumnType(int idx) =>
       SqliteColumnType.fromInt(_column(idx)?.type ?? 5);
 
-  int getColumnCount() {
-    if (_webBuffer != null) return (_webBuffer as dynamic).columnCount as int;
-    return _rowCache.columnCount;
-  }
+  int getColumnCount() => _rowCache.columnCount;
 
   /// Returns the typed value of the column at [idx] based on its
   /// SQLite type. Returns `null` for NULL columns.
@@ -249,20 +230,12 @@ class DbasSqliteReader {
   }
 
   ColumnData? _column(int idx) {
-    if (_webBuffer != null) {
-      return (_webBuffer as dynamic).getColumnData(idx) as ColumnData;
-    }
     final cols = _rowCache.columns;
     if (cols == null || idx >= cols.length) return null;
     return cols[idx];
   }
 
-  List<String> _columnNames() {
-    if (_webBuffer != null) {
-      return (_webBuffer as dynamic).columnNames as List<String>;
-    }
-    return _rowCache.columnNames;
-  }
+  List<String> _columnNames() => _rowCache.columnNames;
 
   // ── Lifecycle ────────────────────────────────────────────────────────
 
