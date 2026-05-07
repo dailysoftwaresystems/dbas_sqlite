@@ -88,6 +88,39 @@ class DbasSqliteReader {
     return hasRow;
   }
 
+  /// Reads up to [amount] rows by repeatedly calling [readRow],
+  /// snapshotting each row as a `Map<String, ColumnData>` keyed by
+  /// column name. Each [ColumnData] preserves the SQLite type, the
+  /// raw value, and the null flag for the column.
+  ///
+  /// Returns a record with:
+  ///   * `rows`: between 0 and [amount] entries;
+  ///   * `hasMore`: the boolean result of the last [readRow] call —
+  ///     `true` if [amount] rows were read and more may still follow,
+  ///     `false` if the result set was exhausted before reaching
+  ///     [amount].
+  ///
+  /// Returns an empty list with `hasMore: false` immediately when
+  /// [amount] is non-positive.
+  Future<({List<Map<String, ColumnData>> rows, bool hasMore})> readRows(
+      [int amount = 50]) async {
+    final rows = <Map<String, ColumnData>>[];
+    if (amount <= 0) return (rows: rows, hasMore: false);
+    bool hasMore = false;
+    for (int i = 0; i < amount; i++) {
+      hasMore = await readRow();
+      if (!hasMore) break;
+      final cols = _rowCache.columns;
+      if (cols == null) continue;
+      final row = <String, ColumnData>{};
+      for (int c = 0; c < cols.length; c++) {
+        row[getColumnName(c)] = cols[c];
+      }
+      rows.add(row);
+    }
+    return (rows: rows, hasMore: hasMore);
+  }
+
   // sqlite3_step never returns SQLITE_OK per the C contract; the
   // success values are SQLITE_ROW (more rows) and SQLITE_DONE (end of
   // result set). Anything else is an error.

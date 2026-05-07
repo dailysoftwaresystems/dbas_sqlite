@@ -4971,4 +4971,205 @@ void main() async {
     await db.closeDb();
     await db.dropDb();
   });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // readRows — batch row reader
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('readRows returns up to amount rows with hasMore=true when more remain',
+      () async {
+    final db = await _createTestDb('read_rows_partial.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER, name TEXT)');
+    final ins = await db.prepareQuery('INSERT INTO t VALUES (?, ?)');
+    for (int i = 1; i <= 10; i++) {
+      await ins.executeSql(params: [i, 'name_$i']);
+    }
+    await ins.close();
+
+    final reader =
+        await (await db.prepareQuery('SELECT id, name FROM t ORDER BY id'))
+            .executeReader();
+    final result = await reader.readRows(3);
+    expect(result.rows.length, 3);
+    expect(result.hasMore, isTrue);
+    expect(result.rows[0]['id']!.value, 1);
+    expect(result.rows[0]['name']!.value, 'name_1');
+    expect(result.rows[2]['id']!.value, 3);
+    expect(result.rows[2]['name']!.value, 'name_3');
+    expect(reader.isClosed, isFalse);
+    await reader.close();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test(
+      'readRows returns fewer than amount rows with hasMore=false on exhaustion',
+      () async {
+    final db = await _createTestDb('read_rows_exhaust.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+    final ins = await db.prepareQuery('INSERT INTO t VALUES (?)');
+    for (int i = 1; i <= 3; i++) {
+      await ins.executeSql(params: [i]);
+    }
+    await ins.close();
+
+    final reader = await (await db.prepareQuery('SELECT id FROM t ORDER BY id'))
+        .executeReader();
+    final result = await reader.readRows(10);
+    expect(result.rows.length, 3);
+    expect(result.hasMore, isFalse);
+    expect(result.rows.map((r) => r['id']!.value).toList(), [1, 2, 3]);
+    // The trailing readRow that returned false auto-closed the reader.
+    expect(reader.isClosed, isTrue);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('readRows defaults to amount of 50', () async {
+    final db = await _createTestDb('read_rows_default.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+    final ins = await db.prepareQuery('INSERT INTO t VALUES (?)');
+    for (int i = 1; i <= 75; i++) {
+      await ins.executeSql(params: [i]);
+    }
+    await ins.close();
+
+    final reader = await (await db.prepareQuery('SELECT id FROM t ORDER BY id'))
+        .executeReader();
+    final result = await reader.readRows();
+    expect(result.rows.length, 50);
+    expect(result.hasMore, isTrue);
+    expect(result.rows.first['id']!.value, 1);
+    expect(result.rows.last['id']!.value, 50);
+    await reader.close();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('readRows returns empty with hasMore=false when amount <= 0', () async {
+    final db = await _createTestDb('read_rows_zero.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+    await _runSql(db, 'INSERT INTO t VALUES (1)');
+
+    final reader =
+        await (await db.prepareQuery('SELECT id FROM t')).executeReader();
+    final zero = await reader.readRows(0);
+    expect(zero.rows, isEmpty);
+    expect(zero.hasMore, isFalse);
+    final negative = await reader.readRows(-5);
+    expect(negative.rows, isEmpty);
+    expect(negative.hasMore, isFalse);
+    // Reader must remain usable — no readRow was issued.
+    expect(reader.isClosed, isFalse);
+    expect(await reader.readRow(), isTrue);
+    expect(reader.getColumnInt(0), 1);
+    await reader.close();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('readRows preserves SQLite type, value and null flag in ColumnData',
+      () async {
+    final db = await _createTestDb('read_rows_types.db');
+    await _runSql(
+        db, 'CREATE TABLE t (i INTEGER, d REAL, s TEXT, b BLOB, n INTEGER)');
+    final blob = Uint8List.fromList([1, 2, 3, 255]);
+    final ins = await db.prepareQuery('INSERT INTO t VALUES (?, ?, ?, ?, ?)');
+    await ins.executeSql(params: [42, 3.14, 'hello', blob, null]);
+    await ins.close();
+
+    final reader = await (await db.prepareQuery('SELECT i, d, s, b, n FROM t'))
+        .executeReader();
+    final result = await reader.readRows(10);
+    expect(result.rows.length, 1);
+    expect(result.hasMore, isFalse);
+    final row = result.rows.first;
+
+    expect(SqliteColumnType.fromInt(row['i']!.type), SqliteColumnType.integer);
+    expect(row['i']!.isNull, isFalse);
+    expect(row['i']!.value, 42);
+
+    expect(SqliteColumnType.fromInt(row['d']!.type), SqliteColumnType.double);
+    expect(row['d']!.isNull, isFalse);
+    expect(row['d']!.value as double, closeTo(3.14, 1e-9));
+
+    expect(SqliteColumnType.fromInt(row['s']!.type), SqliteColumnType.text);
+    expect(row['s']!.isNull, isFalse);
+    expect(row['s']!.value, 'hello');
+
+    expect(SqliteColumnType.fromInt(row['b']!.type), SqliteColumnType.blob);
+    expect(row['b']!.isNull, isFalse);
+    // ColumnData.value for blob is the raw List<int> from the native layer;
+    // compare element-wise so the assertion holds whether the platform
+    // surfaced it as List<int> or Uint8List.
+    expect((row['b']!.value as List).cast<int>(), [1, 2, 3, 255]);
+
+    expect(row['n']!.isNull, isTrue);
+    expect(row['n']!.value, isNull);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('readRows can be called repeatedly to paginate', () async {
+    final db = await _createTestDb('read_rows_paginate.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER)');
+    final ins = await db.prepareQuery('INSERT INTO t VALUES (?)');
+    for (int i = 1; i <= 7; i++) {
+      await ins.executeSql(params: [i]);
+    }
+    await ins.close();
+
+    final reader = await (await db.prepareQuery('SELECT id FROM t ORDER BY id'))
+        .executeReader();
+
+    final batch1 = await reader.readRows(3);
+    expect(batch1.rows.map((r) => r['id']!.value).toList(), [1, 2, 3]);
+    expect(batch1.hasMore, isTrue);
+
+    final batch2 = await reader.readRows(3);
+    expect(batch2.rows.map((r) => r['id']!.value).toList(), [4, 5, 6]);
+    expect(batch2.hasMore, isTrue);
+
+    final batch3 = await reader.readRows(3);
+    expect(batch3.rows.map((r) => r['id']!.value).toList(), [7]);
+    expect(batch3.hasMore, isFalse);
+    expect(reader.isClosed, isTrue);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test(
+      'readRows snapshots are independent — earlier rows are not aliased to the cache',
+      () async {
+    final db = await _createTestDb('read_rows_snapshot.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER, name TEXT)');
+    final ins = await db.prepareQuery('INSERT INTO t VALUES (?, ?)');
+    for (int i = 1; i <= 5; i++) {
+      await ins.executeSql(params: [i, 'row_$i']);
+    }
+    await ins.close();
+
+    final reader =
+        await (await db.prepareQuery('SELECT id, name FROM t ORDER BY id'))
+            .executeReader();
+    final result = await reader.readRows(5);
+    expect(result.rows.length, 5);
+    // If readRows had aliased the per-reader cache instead of capturing
+    // each step's column list, every entry would carry the last row's
+    // values. Verify each row matches its iteration step.
+    for (int i = 0; i < 5; i++) {
+      expect(result.rows[i]['id']!.value, i + 1);
+      expect(result.rows[i]['name']!.value, 'row_${i + 1}');
+    }
+    await reader.close();
+
+    await db.closeDb();
+    await db.dropDb();
+  });
 }
