@@ -4882,6 +4882,69 @@ void main() async {
     await db.dropDb();
   });
 
+  test(
+      'pool: closeDb cancels surplus Dart-side reader-slot waiters with '
+      'StateError', () async {
+    // Park two reader-slot waiters behind a single held slot, then
+    // close the database. closeDb sweeps active statements first; the
+    // held reader's onClose releases the slot and grants ONE parked
+    // waiter (which then fails downstream at prepareQuery because the
+    // pool is mid-tear-down). The SECOND parked waiter never gets a
+    // slot — it must be drained by `_cancelReaderSlotWaitQueue` and
+    // reject with StateError. Without that drain the waiter would
+    // hang forever.
+    final db = await _createTestDb('pool_close_cancels_surplus_waiter.db',
+        readerPoolSize: 1);
+    DbasSqlite.debugPoolAcquireTimeoutMs = 30000;
+    try {
+      await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+      await _runSql(db, "INSERT INTO t VALUES (1, 'first')");
+
+      // First reader holds the only Dart slot.
+      final firstStmt = await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final firstReader = await firstStmt.executeReader();
+      expect(await firstReader.readRow(), isTrue);
+
+      // Two more executeReaders park at the Dart semaphore.
+      final parkedStmt1 =
+          await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final parkedStmt2 =
+          await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      // Capture each parked future's eventual outcome (value or error)
+      // so an uncaught rejection doesn't fail the test runner before
+      // we get a chance to inspect it.
+      final parked1Outcome =
+          parkedStmt1.executeReader().then<Object?>(
+              (r) => r, onError: (Object e) => e);
+      final parked2Outcome =
+          parkedStmt2.executeReader().then<Object?>(
+              (r) => r, onError: (Object e) => e);
+
+      // Yield so the waiters register in the queue.
+      await Future<void>.delayed(Duration.zero);
+
+      await db.closeDb();
+
+      // One of the two parked reads will be cancelled with StateError;
+      // the other will fail downstream at prepareQuery once its slot
+      // is granted mid-close. Assert that AT LEAST one threw the
+      // cancellation-specific StateError so the cancel path is
+      // exercised.
+      final err1 = await parked1Outcome;
+      final err2 = await parked2Outcome;
+      const stateErrorMsg = 'Database was closed while waiting for reader slot';
+      final sawCancellation =
+          (err1 is StateError && err1.message.contains(stateErrorMsg)) ||
+          (err2 is StateError && err2.message.contains(stateErrorMsg));
+      expect(sawCancellation, isTrue,
+          reason: 'expected at least one waiter to be cancelled by '
+              '_cancelReaderSlotWaitQueue, got err1=$err1 err2=$err2');
+    } finally {
+      DbasSqlite.debugPoolAcquireTimeoutMs = null;
+      await db.dropDb();
+    }
+  });
+
   test('streaming: row payload preserves int / double / text / blob / null',
       () async {
     final db = await _createTestDb('stream_mixed_types.db');

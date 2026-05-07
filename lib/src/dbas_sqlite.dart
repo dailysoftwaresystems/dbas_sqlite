@@ -656,8 +656,8 @@ class DbasSqlite {
         if (waiter.isCompleted) return;
         _readerSlotWaitQueue.remove(waiter);
         waiter.completeError(TimeoutException(
-          'No reader slot became available within ${timeoutMs}ms — '
-          'all readers busy. Close in-flight readers or raise '
+          'Dart-side reader-slot wait timed out after ${timeoutMs}ms — '
+          'all pool readers are busy. Close in-flight readers or raise '
           'DbasSqlite.kPoolAcquireTimeoutMs.',
         ));
       });
@@ -725,8 +725,15 @@ class DbasSqlite {
       // budget is a safety net in case some other caller (e.g.
       // setBusyTimeout, which intentionally bypasses the semaphore)
       // is holding readers concurrently.
-      final remaining =
-          (timeoutMs - stopwatch.elapsedMilliseconds).clamp(1, timeoutMs);
+      //
+      // `timeoutMs <= 0` is the documented "non-blocking" form on the
+      // C side; passing it through unmodified preserves that
+      // semantic. Otherwise clamp the elapsed-adjusted budget into
+      // [1, timeoutMs] so the C call still gets a tick to make
+      // progress even when the Dart wait consumed the full window.
+      final int remaining = timeoutMs <= 0
+          ? timeoutMs
+          : (timeoutMs - stopwatch.elapsedMilliseconds).clamp(1, timeoutMs);
       final readerPtr = await _platform.poolAcquireReaderBlocking(
           dbName, _poolPtr!, remaining);
       if (readerPtr == 0) {

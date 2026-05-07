@@ -35,8 +35,9 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   /// Resolves the on-disk path to the platform's native dynamic
   /// library. Only the FFI subclass calls this; web never loads
   /// this base class. Throws [UnsupportedError] on unrecognised
-  /// platforms (matches the behaviour of the previous
-  /// `_getPlatform` factory).
+  /// platforms (matches the `UnsupportedError` previously thrown by
+  /// `DbasSqliteNativeInterface._getPlatform` for unsupported
+  /// non-web targets).
   Future<String> getLibraryPath() async {
     if (Platform.isIOS || (Platform.isMacOS && !isTest)) {
       return '';
