@@ -45,7 +45,6 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
     if (!isTest && (Platform.isIOS || Platform.isMacOS)) {
       _lib = DynamicLibrary.process();
     } else {
-      await prepareLibIfNeeded();
       final libPath = await getLibraryPath();
       _lib = DynamicLibrary.open(libPath);
     }

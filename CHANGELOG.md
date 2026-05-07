@@ -32,6 +32,29 @@ All notable changes to this project will be documented in this file.
   mode (`readerPoolSize: 0`) is unaffected — it goes through the
   writer lock, not the pool.
 
+- **pub.dev Web platform-support and WASM compatibility scoring.**
+  The public API chain (`dbas_sqlite.dart` → `DbasSqliteStatement` →
+  `DbasSqliteReader` → `DbasSqlitePlatform` →
+  `DbasSqliteNativeInterface`) was unconditionally importing
+  `package:path_provider/path_provider.dart`, `dart:io`, and
+  `package:flutter/services.dart` even though the call sites were
+  already runtime-gated by `kIsWeb`. pub.dev's static analyser walks
+  every unconditional import, so the web build graph reached
+  `path_provider` (which doesn't declare Web support) and
+  `dart:io` (incompatible with WASM), costing both Platform-support
+  points and the WASM badge.
+
+  Fix: the path-resolving and test-detection helpers move behind
+  conditional-import selectors in `lib/src/helpers/paths/` and
+  `lib/src/helpers/test_mode/`; FFI-only routines
+  (`getLibraryPath`, `_resolveTestBaseDir`) move from the abstract
+  `DbasSqliteNativeInterface` down into `DbasSqliteNativeAppBase`
+  (FFI-only, never loaded on web); the dead-code
+  `prepareLibIfNeeded` is removed entirely. The web build graph no
+  longer reaches `path_provider` or `dart:io`.
+
+  No public API change.
+
 ## 2.5.0 - 2026-05-06
 
 ### Added

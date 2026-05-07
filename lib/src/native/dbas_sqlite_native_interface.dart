@@ -1,15 +1,9 @@
-import 'dart:io';
-import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
-import 'package:flutter/services.dart';
-import 'package:path/path.dart' as path;
-
 import 'package:dbas_sqlite/src/native/dbas_sqlite_native_app_selector.dart';
 import 'package:dbas_sqlite/src/native/stub/dbas_sqlite_native_web_stub.dart'
     if (dart.library.js_interop) 'package:dbas_sqlite/src/native/dbas_sqlite_native_web.dart';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
 abstract class DbasSqliteNativeInterface {
   static final Map<String, DbasSqliteNativeInterface> _instance = {};
@@ -34,107 +28,16 @@ abstract class DbasSqliteNativeInterface {
     if (kIsWeb) {
       return DbasSqliteNativeWeb(dbName);
     }
-    if (Platform.isAndroid ||
-        Platform.isIOS ||
-        Platform.isMacOS ||
-        Platform.isLinux ||
-        Platform.isWindows) {
-      return DbasSqliteNativeApp(dbName);
-    }
-    throw UnsupportedError("Platform not supported: ${Platform.operatingSystem}");
+    // On native targets the conditional export resolves
+    // [DbasSqliteNativeApp] to the FFI implementation; on non-Flutter
+    // Dart targets without `dart.library.ffi` it falls back to a stub
+    // that throws on every call.
+    return DbasSqliteNativeApp(dbName);
   }
 
   Future<void> initialize();
 
   String get dbName => _dbName;
-
-  bool get isTest => DbasSqlitePlatformUtil.isTest();
-
-  Future<void> prepareLibIfNeeded() async {
-    if (!kIsWeb || isTest) {
-      return;
-    }
-
-    late String libAsset;
-    late String libAssetName;
-    if (kIsWeb) {
-      libAssetName = 'dbas_sqlite.js';
-      libAsset = path.join('dbas_sqlite', 'libs', libAssetName);
-    }
-
-    final dir = isTest ? Directory.current : await getApplicationSupportDirectory();
-    final libDir = '${dir.path}/libs';
-    if (!await Directory(libDir).exists()) {
-      await Directory(libDir).create(recursive: true);
-    }
-
-    final libPath = '$libDir/$libAssetName';
-    final dllFile = File(libPath);
-    if (await dllFile.exists()) {
-      await dllFile.delete();
-    }
-
-    libAsset = 'packages/dbas_sqlite/${libAsset.replaceAll('\\', '/')}';
-    final buffer = await rootBundle.load(libAsset);
-    await dllFile.writeAsBytes(buffer.buffer.asUint8List());
-  }
-
-  String _resolveTestBaseDir(String platformSubPath) {
-    final current = Directory.current.path;
-    final candidate = path.join(current, platformSubPath);
-    if (File(candidate).existsSync()) {
-      return current;
-    }
-    final parent = path.dirname(current);
-    return parent;
-  }
-
-  Future<String> getLibraryPath() async {
-    if (Platform.isIOS || (Platform.isMacOS && !isTest)) {
-      return '';
-    } else if (Platform.isMacOS) {
-      String arch = Platform.version.contains('arm64') ||
-              Platform.version.toLowerCase().contains('arm64')
-          ? 'a64'
-          : 'x86';
-      final relativePath = path.join('macos', 'libs', arch, 'dbas_sqlite.dylib');
-      final baseDir = isTest ? _resolveTestBaseDir(relativePath) : Directory.current.path;
-      return path.join(baseDir, relativePath);
-    }
-
-    late String libPath;
-    if (Platform.isAndroid) {
-      return 'dbas_sqlite.so';
-    } else if (Platform.isWindows) {
-      if (isTest) {
-        String arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
-        final relativePath = path.join('windows', 'libs', arch, 'dbas_sqlite.dll');
-        final baseDir = _resolveTestBaseDir(relativePath);
-        libPath = path.join(baseDir, relativePath);
-      } else {
-        libPath = 'dbas_sqlite.dll';
-      }
-    } else if (Platform.isLinux) {
-      if (isTest) {
-        final relativePath = path.join('linux', 'libs', 'dbas_sqlite.so');
-        final baseDir = _resolveTestBaseDir(relativePath);
-        libPath = path.join(baseDir, relativePath);
-      } else {
-        libPath = 'dbas_sqlite.so';
-      }
-    } else if (kIsWeb) {
-      libPath = isTest
-          ? path.join(Directory.current.path, 'web', 'libs', 'dbas_sqlite.js')
-          : path.join('libs', 'dbas_sqlite.js');
-      if (!isTest) {
-        libPath = path.join((await getApplicationSupportDirectory()).path, libPath);
-      }
-    } else {
-      throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
-    }
-
-    return libPath.replaceAll('\\', '/');
-  }
 
   // ── Library-scoped ──────────────────────────────────────────────────
   /// Cached at openDb time on every platform. Sync return on Dart side.

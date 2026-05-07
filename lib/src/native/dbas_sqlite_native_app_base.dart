@@ -3,9 +3,11 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart' show protected;
+import 'package:path/path.dart' as path;
 import 'dbas_sqlite_native_interface.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_db.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
 
 /// Base class for the native FFI app implementation.
 ///
@@ -23,6 +25,72 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
 
   /// SQLite version cached at [initialize] time. Sync return.
   String _sqliteVersion = '';
+
+  /// `true` when the current process is the Flutter test runner.
+  /// Read via the conditional `dart:io` helper so the abstract
+  /// interface does not need to import it.
+  @protected
+  bool get isTest => DbasSqlitePlatformUtil.isTest();
+
+  /// Resolves the on-disk path to the platform's native dynamic
+  /// library. Only the FFI subclass calls this; web never loads
+  /// this base class. Throws [UnsupportedError] on unrecognised
+  /// platforms (matches the behaviour of the previous
+  /// `_getPlatform` factory).
+  Future<String> getLibraryPath() async {
+    if (Platform.isIOS || (Platform.isMacOS && !isTest)) {
+      return '';
+    } else if (Platform.isMacOS) {
+      String arch = Platform.version.contains('arm64') ||
+              Platform.version.toLowerCase().contains('arm64')
+          ? 'a64'
+          : 'x86';
+      final relativePath = path.join('macos', 'libs', arch, 'dbas_sqlite.dylib');
+      final baseDir =
+          isTest ? _resolveTestBaseDir(relativePath) : Directory.current.path;
+      return path.join(baseDir, relativePath);
+    }
+
+    late String libPath;
+    if (Platform.isAndroid) {
+      return 'dbas_sqlite.so';
+    } else if (Platform.isWindows) {
+      if (isTest) {
+        String arch = Platform.version.contains('_x64') ? 'x64' : 'x86';
+        final relativePath = path.join('windows', 'libs', arch, 'dbas_sqlite.dll');
+        final baseDir = _resolveTestBaseDir(relativePath);
+        libPath = path.join(baseDir, relativePath);
+      } else {
+        libPath = 'dbas_sqlite.dll';
+      }
+    } else if (Platform.isLinux) {
+      if (isTest) {
+        final relativePath = path.join('linux', 'libs', 'dbas_sqlite.so');
+        final baseDir = _resolveTestBaseDir(relativePath);
+        libPath = path.join(baseDir, relativePath);
+      } else {
+        libPath = 'dbas_sqlite.so';
+      }
+    } else {
+      throw UnsupportedError('Platform ${Platform.operatingSystem} not supported.');
+    }
+
+    return libPath.replaceAll('\\', '/');
+  }
+
+  /// Walks one level up from `Directory.current` if the relative
+  /// `platformSubPath` (e.g. `windows/libs/x64/dbas_sqlite.dll`) is
+  /// not present at the expected location — handles the case where
+  /// `flutter test` is run from the `example/` subdirectory but the
+  /// pre-built native libraries live at the package root.
+  String _resolveTestBaseDir(String platformSubPath) {
+    final current = Directory.current.path;
+    final candidate = path.join(current, platformSubPath);
+    if (File(candidate).existsSync()) {
+      return current;
+    }
+    return path.dirname(current);
+  }
 
   // ── Protected abstract methods (raw native calls) ──────────────────────
 

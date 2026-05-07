@@ -1,17 +1,15 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:developer' as developer;
-import 'dart:io';
 
 import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
     if (dart.library.js_interop) 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_statement.dart';
+import 'package:dbas_sqlite/src/helpers/paths/dbas_sqlite_paths.dart' as paths;
 import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:dbas_sqlite/src/native/dbas_sqlite_native_interface.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
 
 /// A cross-platform SQLite database wrapper for Flutter.
 ///
@@ -71,7 +69,6 @@ class DbasSqlite {
   @visibleForTesting
   static int? debugSetBusyTimeoutAcquireMs;
 
-  static final String _webDbDir = 'dbas_data';
   static final Map<String, DbasSqlite> _instance = {};
 
   final DbasSqlitePlatform _platform;
@@ -143,32 +140,14 @@ class DbasSqlite {
     return _instance[dbName]!;
   }
 
-  static Future<String> _getDbPath() async {
-    if (kIsWeb) return '/$_webDbDir';
-
-    final directory = await getApplicationSupportDirectory();
-    final dirPath = '${directory.path}/dbas_data'.replaceAll('\\', '/');
-    final dir = Directory(dirPath);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dirPath;
-  }
-
   // ── Lifecycle ────────────────────────────────────────────────────────
 
   /// Returns the full filesystem path for the database.
   Future<String> getAppDatabasePath({String? dbName}) async {
     dbName ??= this.dbName;
-
-    if (DbasSqlitePlatformUtil.isTest()) {
-      final dbPath = path.join(Directory.current.path, 'test', 'db');
-      final dbDir = Directory(dbPath);
-      if (!await dbDir.exists()) await dbDir.create(recursive: true);
-      return path.join(dbPath, dbName);
-    }
-
-    final dbPath = await _getDbPath();
+    final dbPath = await paths.resolveDatabaseDirectory(
+      isTest: DbasSqlitePlatformUtil.isTest(),
+    );
     return '$dbPath/$dbName';
   }
 
