@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.5.2 - 2026-05-07
+
+### Fixed
+
+- **Windows / Linux / macOS build broke for consumers of the published
+  package.** The platform `CMakeLists.txt` files had a `POST_BUILD`
+  `copy_if_different` step pointing at `../native_libs/sqlite/<os>/.../dbas_sqlite.<ext>`,
+  but `native_libs/` is excluded from the published tarball by
+  `.pubignore` (it is the local staging tree that duplicates the
+  platform-folder binaries). The copy therefore failed at consumer
+  build time with `MSB3073` on Windows and equivalent CMake errors on
+  Linux/macOS. Repointed the source path to the platform-folder copy
+  that is actually shipped (`<platform>/libs/...`), which was already
+  the value used by `dbas_sqlite_bundled_libraries`.
+
 ## 2.5.1 - 2026-05-07
 
 ### Fixed

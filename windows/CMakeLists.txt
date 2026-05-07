@@ -61,7 +61,7 @@ endif()
 
 
 # --- Automatically copy SQLite DLL after build ---
-set(SQLITE_DLL "${CMAKE_CURRENT_LIST_DIR}/../native_libs/sqlite/windows/${ARCH}/dbas_sqlite.dll")
+set(SQLITE_DLL "${CMAKE_CURRENT_LIST_DIR}/libs/${ARCH}/dbas_sqlite.dll")
 set(SQLITE_DLL_DEST "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/libs/${ARCH}/dbas_sqlite.dll")
 add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/libs/${ARCH}"
