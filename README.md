@@ -94,7 +94,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite: ^2.5.0
+  dbas_sqlite: ^2.5.2
 ```
 
 Or install with the Dart CLI:
