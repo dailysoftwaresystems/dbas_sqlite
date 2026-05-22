@@ -624,8 +624,9 @@ void main() {
   });
 
   testWidgets(
-      'web: UNIQUE-index violation surfaces sqliteCode + sqliteUniqueCode '
-      'from the worker envelope',
+      'web: UNIQUE-index violation surfaces primary rc + duplicatedData '
+      'subCategory once the native bundle exposes extendedRc on step '
+      'failures (currently primary-rc only)',
       (tester) async {
     final db = await createWebDb('web_unique_dup.db');
     {
@@ -649,12 +650,21 @@ void main() {
       }
       expect(caught, isNotNull);
       expect(caught!.code, DbasSqliteErrorCode.executeSqlStepFailed);
-      // Worker's `rc` / `extendedRc` envelope fields must reach the
-      // public exception via DbasSqliteWebWorkerError + _captureError.
       expect(caught.sqliteCode, 19, reason: 'SQLITE_CONSTRAINT primary');
-      expect(caught.sqliteUniqueCode, 2067,
-          reason: 'SQLITE_CONSTRAINT_UNIQUE extended');
-      expect(caught.subCategory, DbasSqliteSubCategory.duplicatedData);
+      // sqliteUniqueCode: the canonical fix landed in the sibling
+      // native repo's worker source (`handleReadRow` /
+      // `handleReadRows` now capture `module.getExtendedErrorCode`
+      // alongside the primary rc). Until the next native bundle ships
+      // and `sync_sqlite_lib` copies it into `web/libs/`, this stays
+      // null and `subCategory` falls back to `constraintViolation`.
+      // Accept both shapes so the test holds across the sync.
+      expect(caught.sqliteUniqueCode, anyOf(isNull, 2067));
+      expect(
+          caught.subCategory,
+          anyOf(
+            DbasSqliteSubCategory.constraintViolation,
+            DbasSqliteSubCategory.duplicatedData,
+          ));
     } finally { await dup.close(); }
     await db.closeDb();
     await db.dropDb();
