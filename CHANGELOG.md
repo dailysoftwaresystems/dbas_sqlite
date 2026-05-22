@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.2 - 2026-05-22
+
+### Fixed
+
+- **Windows integration-test build (MSB3073 on Flutter 3.44)** — the C++
+  unit-test target's `gtest_discover_tests` was running at POST_BUILD,
+  invoking `dbas_sqlite_test.exe` before its DLL search path was set up
+  and exiting 1. Switched to `DISCOVERY_MODE PRE_TEST` so discovery
+  defers to `ctest` time; `flutter drive` / `flutter build windows` no
+  longer trip the discovery step at all. Matches the current Flutter
+  plugin template.
+- **`example/ios/Runner.xcodeproj/project.pbxproj` simulator slice
+  typo** — header search paths referenced
+  `ios-arm64_x86_x64-simulator` (extra `x`); the actual xcframework
+  slice is `ios-arm64_x86_64-simulator`. Fixed in 3 build configs (6
+  occurrences total).
+- **Lint: `prefer_initializing_formals`** in
+  `lib/src/dbas_sqlite_reader.dart` — the `DbasSqliteReader.internal`
+  constructor now uses `required this._conn` / `_handle` / `_platform`
+  / `_onClose` instead of an init list.
+
+### Changed
+
+- **README title** — renamed from `DBAS.SQLite.Flutter` to
+  `dbas_sqlite` to match the pub package and GitHub repo. The 2.7.1
+  note about "keeping the old display name as human-facing branding"
+  is superseded by this change; a one-line "previously published as
+  `dbas_sqlite_flutter` …" pointer is added in its place for
+  long-tail upgraders.
+- **Defensive xcframework slice-name fix in
+  `scripts/sqlite/sync_sqlite_lib.{sh,ps1}`** — after copying the
+  upstream `dbas_sqlite.xcframework` into `ios/dbas_sqlite/` and
+  `macos/dbas_sqlite/`, the scripts now rename any slice directory
+  containing `_x86_x64` to `_x86_64`. Today's upstream ships the
+  correct name, so the loop is a no-op; the fix prevents a future
+  upstream typo from breaking podspec / SPM `.binaryTarget` /
+  header-search paths.
+- **Stale name cleanup** — three remaining references to the old
+  `DBAS.SQLite.Flutter` / `dbas_sqlite_flutter` names that don't
+  affect any consumer-visible surface:
+  - `.github/CODEOWNERS` header comment.
+  - `.idea/DBAS.SQLite.Flutter.iml` → `.idea/dbas_sqlite.iml`,
+    `.idea/modules.xml` updated to match.
+  - `example/ios/Runner.xcodeproj/project.pbxproj` —
+    `dbas_sqlite_flutter.framework` `PBXFileReference` and its
+    `Frameworks` group child removed (pre-2.0 pub name, no longer
+    produced), plus 3
+    `${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/...` and 3
+    `${PODS_CONFIGURATION_BUILD_DIR}/integration_test/...` header
+    search paths removed (post pod-deintegrate dead refs). The
+    active `dbas_sqlite.xcframework` entries already supersede them.
+
+  Historical `CHANGELOG` entries, `README` body content describing
+  prior names, and the `.claude/skills/dbas-sqlite-flutter/` skill
+  descriptor are left unchanged.
+
 ## 2.7.1 - 2026-05-22
 
 ### Added

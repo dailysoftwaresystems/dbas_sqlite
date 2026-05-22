@@ -1,6 +1,8 @@
-# DBAS.SQLite.Flutter
+# dbas_sqlite
 
 Flutter plugin that provides access to SQLite databases for Android, iOS, macOS, Linux, Windows and Web platforms.
+
+> Previously published as `dbas_sqlite_flutter` (≤ 1.x) under the repository name `DBAS.SQLite.Flutter`. Both the pub package and GitHub repo now use `dbas_sqlite`.
 
 ## Features
 
@@ -95,7 +97,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite: ^2.7.0
+  dbas_sqlite: ^2.7.2
 ```
 
 Or install with the Dart CLI:
