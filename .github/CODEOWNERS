@@ -1,4 +1,4 @@
-# Code owners for DBAS.SQLite.Flutter.
+# Code owners for dbas_sqlite.
 #
 # Every PR opened against `main` automatically requests review from the
 # team(s) listed below. When the branch protection rule on `main` has

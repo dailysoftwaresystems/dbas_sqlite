@@ -49,7 +49,6 @@
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
-		5B474F6D2E3AF3B80078076D /* dbas_sqlite_flutter.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = dbas_sqlite_flutter.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B733EDF2E3BF5F1009C23FA /* dbas_sqlite.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = dbas_sqlite.xcframework; path = ../../ios/dbas_sqlite/dbas_sqlite.xcframework; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -155,7 +154,6 @@
 			isa = PBXGroup;
 			children = (
 				5B733EDF2E3BF5F1009C23FA /* dbas_sqlite.xcframework */,
-				5B474F6D2E3AF3B80078076D /* dbas_sqlite_flutter.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -412,10 +410,8 @@
 				ENABLE_BITCODE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
-					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
 					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_64-simulator/Headers\"/**",
 				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -602,10 +598,8 @@
 				ENABLE_BITCODE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
-					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
 					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_64-simulator/Headers\"/**",
 				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -631,10 +625,8 @@
 				ENABLE_BITCODE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
-					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
 					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_64-simulator/Headers\"/**",
 				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

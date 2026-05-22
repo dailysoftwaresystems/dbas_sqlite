@@ -85,4 +85,17 @@ Write-Host "Copying macos binaries..."
 New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../macos/dbas_sqlite" | Out-Null
 Copy-Item "$OUT_DIR/macos/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../macos/dbas_sqlite" -Recurse -Force
 
+# Defensive: fix the upstream `_x86_x64` typo (extra `x`) in xcframework slice names.
+$Xcframeworks = @(
+    "$SCRIPT_DIR/../../ios/dbas_sqlite/dbas_sqlite.xcframework",
+    "$SCRIPT_DIR/../../macos/dbas_sqlite/dbas_sqlite.xcframework"
+)
+foreach ($fw in $Xcframeworks) {
+    Get-ChildItem -Path $fw -Directory -Filter "*_x86_x64*" -ErrorAction SilentlyContinue | ForEach-Object {
+        $newName = $_.Name -replace '_x86_x64', '_x86_64'
+        Write-Host "Fixing slice name typo: $($_.Name) -> $newName"
+        Rename-Item -Path $_.FullName -NewName $newName
+    }
+}
+
 Write-Host "All platform binaries copied successfully."

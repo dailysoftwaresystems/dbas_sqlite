@@ -81,4 +81,16 @@ echo "Copying macos binaries..."
 mkdir -p "$SCRIPT_DIR/../../macos/dbas_sqlite/dbas_sqlite.xcframework"
 cp -r "$OUT_DIR/macos/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../macos/dbas_sqlite/dbas_sqlite.xcframework"
 
+# Defensive: fix the upstream `_x86_x64` typo (extra `x`) in xcframework slice names.
+for fw in \
+    "$SCRIPT_DIR/../../ios/dbas_sqlite/dbas_sqlite.xcframework" \
+    "$SCRIPT_DIR/../../macos/dbas_sqlite/dbas_sqlite.xcframework"; do
+    for dir in "$fw"/*_x86_x64*; do
+        [ -d "$dir" ] || continue
+        fixed="${dir//_x86_x64/_x86_64}"
+        echo "Fixing slice name typo: $(basename "$dir") -> $(basename "$fixed")"
+        mv "$dir" "$fixed"
+    done
+done
+
 echo "All platform binaries copied successfully."
