@@ -342,6 +342,8 @@
 				Flutter/ephemeral/FlutterOutputs.xcfilelist,
 			);
 			outputPaths = (
+				"$(DERIVED_FILE_DIR)/flutter_assets_path",
+				"$(BUILT_PRODUCTS_DIR)/$(WRAPPER_NAME)/Contents/Frameworks/App.framework",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
