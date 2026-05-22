@@ -349,7 +349,7 @@ class DbasSqlite {
         // Fall back to the observed `rc` when the helpers return null
         // (the C lib didn't queue an active error on the connection).
         final primaryRc = _platform.getErrorCode(_db!) ?? rc;
-        final uniqueRc = _platform.getUniqueErrorCode(_db!) ?? primaryRc;
+        final uniqueRc = _platform.getUniqueErrorCode(_db!);
         _db = null;
         if (stmtCloseFailures > 0) {
           throw DbasSqliteException.sqlite(
@@ -472,7 +472,7 @@ class DbasSqlite {
         DbasSqliteErrorCode.setBusyTimeoutWriterFailed,
         'setBusyTimeout failed on writer: $err',
         sqliteCode: primary,
-        sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
+        sqliteUniqueCode: _platform.getUniqueErrorCode(_db!),
       );
     }
 
@@ -509,7 +509,7 @@ class DbasSqlite {
             DbasSqliteErrorCode.setBusyTimeoutReaderFailed,
             'setBusyTimeout failed on a pool reader: rc=$rrc',
             sqliteCode: primary,
-            sqliteUniqueCode: _platform.getUniqueErrorCode(readerDb) ?? primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(readerDb),
           );
         }
       }
@@ -548,7 +548,7 @@ class DbasSqlite {
         DbasSqliteErrorCode.enableWalFailed,
         'enableWal failed: $err',
         sqliteCode: primary,
-        sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
+        sqliteUniqueCode: _platform.getUniqueErrorCode(_db!),
       );
     }
   }
@@ -585,7 +585,7 @@ class DbasSqlite {
           DbasSqliteErrorCode.beginTransactionFailed,
           'BEGIN TRANSACTION failed: $err',
           sqliteCode: primary,
-          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!),
         );
       }
       _transactionHasWrites = false;
@@ -597,6 +597,13 @@ class DbasSqlite {
   }
 
   /// Commits the current transaction. No-op if no transaction is active.
+  ///
+  /// If COMMIT fails the implicit recovery is to `rollback()`. When
+  /// the rollback ALSO fails, the rollback's failure is logged via
+  /// `dart:developer` and the original COMMIT exception is rethrown —
+  /// so the caller sees the proximate cause (commit failure) rather
+  /// than the recovery failure. This mirrors `transaction()`'s
+  /// behaviour for the same shape.
   Future<void> commit() async {
     if (!_isInTransaction) return;
     try {
@@ -608,14 +615,26 @@ class DbasSqlite {
           DbasSqliteErrorCode.commitFailed,
           'COMMIT failed: $err',
           sqliteCode: primary,
-          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!),
         );
       }
       _isInTransaction = false;
       _transactionHasWrites = false;
       _releaseWriterLock();
     } catch (_) {
-      await rollback();
+      try {
+        await rollback();
+      } catch (rollbackError, rollbackStack) {
+        // Don't let the rollback failure mask the COMMIT failure —
+        // log it with its stack and continue to rethrow the original.
+        developer.log(
+          'commit: rollback failed after COMMIT failure; '
+          'rethrowing the original COMMIT exception',
+          name: 'dbas_sqlite.DbasSqlite',
+          error: rollbackError,
+          stackTrace: rollbackStack,
+        );
+      }
       rethrow;
     }
   }
@@ -628,9 +647,12 @@ class DbasSqlite {
   /// [DbasSqliteException] with code [DbasSqliteErrorCode.rollbackFailed]
   /// so the caller knows the C connection's autocommit state may be
   /// inconsistent. When the underlying cause is itself a
-  /// [DbasSqliteException] its [DbasSqliteException.sqliteCode] is
-  /// lifted onto the outer exception; the original error is attached
-  /// as [DbasSqliteException.cause] for programmatic inspection.
+  /// [DbasSqliteException] its [DbasSqliteException.sqliteCode] AND
+  /// [DbasSqliteException.sqliteUniqueCode] are lifted onto the outer
+  /// exception; the original error is attached as
+  /// [DbasSqliteException.cause] (with its stack trace on
+  /// [DbasSqliteException.causeStackTrace]) for programmatic
+  /// inspection.
   Future<void> rollback() async {
     if (!_isInTransaction) return;
     Object? rollbackCause;
@@ -643,8 +665,7 @@ class DbasSqlite {
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
         rollbackPrimaryRc = _platform.getErrorCode(_db!) ?? rc;
-        rollbackUniqueRc =
-            _platform.getUniqueErrorCode(_db!) ?? rollbackPrimaryRc;
+        rollbackUniqueRc = _platform.getUniqueErrorCode(_db!);
         rollbackDetail = 'ROLLBACK rc=$rc: $err';
         rollbackCauseStack = StackTrace.current;
       }
@@ -695,8 +716,15 @@ class DbasSqlite {
   /// [DbasSqliteException.causeStackTrace]; the rollback failure is
   /// logged via `dart:developer` (its stack would otherwise be lost in
   /// the wrapper). When the original error is itself a
-  /// [DbasSqliteException], its [DbasSqliteException.sqliteCode] is
-  /// lifted onto the outer exception.
+  /// [DbasSqliteException], its [DbasSqliteException.sqliteCode] and
+  /// [DbasSqliteException.sqliteUniqueCode] are lifted onto the
+  /// outer exception. Callers branching on subCategory should also
+  /// inspect `cause` — the outer exception's category is
+  /// [DbasSqliteErrorCategory.transactionFailed] regardless of what
+  /// the proximate failure was, so a UNIQUE-violation-then-rollback-
+  /// failure surfaces as `transactionRollbackAlsoFailed` outwardly
+  /// while `cause` holds the original `executeSqlStepFailed` with
+  /// `duplicatedData`.
   Future<void> transaction(Future<void> Function(DbasSqlite db) action) async {
     if (_isInTransaction) {
       throw DbasSqliteException.dart(
@@ -786,7 +814,7 @@ class DbasSqlite {
           DbasSqliteErrorCode.vacuumFailed,
           'VACUUM failed: $err',
           sqliteCode: primary,
-          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!),
         );
       }
     } finally {

@@ -164,8 +164,10 @@ extension DbasSqliteErrorCodeX on DbasSqliteErrorCode {
 }
 
 /// Fine-grained semantic interpretation of the underlying SQLite
-/// result code. Derived from [DbasSqliteException.sqliteCode] when
-/// it is non-null; otherwise [DbasSqliteSubCategory.notApplicable].
+/// result code. Derived from [DbasSqliteException.sqliteUniqueCode]
+/// (the extended rc) when present, falling back to
+/// [DbasSqliteException.sqliteCode] (the primary rc) otherwise.
+/// Returns [DbasSqliteSubCategory.notApplicable] when both are `null`.
 ///
 /// Both primary result codes (e.g. `SQLITE_BUSY=5`, `SQLITE_CONSTRAINT=19`)
 /// and extended result codes (e.g. `SQLITE_CONSTRAINT_UNIQUE=2067`)
@@ -176,8 +178,8 @@ extension DbasSqliteErrorCodeX on DbasSqliteErrorCode {
 /// Use this to write `switch`-style recovery code that doesn't depend
 /// on raw integer rc literals at the call site.
 enum DbasSqliteSubCategory {
-  /// The exception has no `sqliteCode` (Dart-side failure) — the
-  /// semantic interpretation does not apply.
+  /// The exception has neither `sqliteCode` nor `sqliteUniqueCode`
+  /// (Dart-side failure) — the semantic interpretation does not apply.
   notApplicable,
 
   /// `SQLITE_ERROR` (1) — generic catch-all from the SQLite layer.
@@ -196,8 +198,10 @@ enum DbasSqliteSubCategory {
   /// connection. Typically resolvable by retrying after a backoff.
   databaseBusy,
 
-  /// `SQLITE_LOCKED` (6) — a table within the same connection is
-  /// locked (often by an open reader).
+  /// `SQLITE_LOCKED` (6) — a table or shared-cache resource is locked
+  /// by another statement on the same database connection. Distinct
+  /// from `SQLITE_BUSY` ([databaseBusy]), which signals contention
+  /// across separate connections.
   tableLocked,
 
   /// `SQLITE_NOMEM` (7) — malloc() failure inside SQLite.
@@ -404,7 +408,8 @@ class DbasSqliteException implements Exception {
     this.message, {
     this.cause,
     this.causeStackTrace,
-  });
+  }) : assert(sqliteUniqueCode == null || sqliteCode != null,
+            'sqliteUniqueCode is only meaningful when sqliteCode is also set');
 
   /// Dart-side failure: no native rc available.
   factory DbasSqliteException.dart(
@@ -422,10 +427,16 @@ class DbasSqliteException implements Exception {
         causeStackTrace: causeStackTrace,
       );
 
-  /// Native SQLite failure. [sqliteCode] is the primary rc (required);
-  /// [sqliteUniqueCode] is the extended rc when the platform exposes
-  /// it (the native lib always does; the web shim returns `null`
-  /// today).
+  /// Native SQLite failure. [sqliteCode] is the primary rc (required).
+  /// [sqliteUniqueCode] is the extended rc when the platform resolved
+  /// one; pass `null` when only the primary rc is known.
+  ///
+  /// Both native and web populate [sqliteUniqueCode] when the SQLite
+  /// layer set it: native via `sqlite3_extended_errcode`, web via the
+  /// worker's `extendedRc` envelope field. It is `null` when the
+  /// failing call didn't update the connection's extended-rc slot
+  /// (e.g. `sqlite3_bind_*` returning `SQLITE_RANGE` without queuing
+  /// it on the connection).
   factory DbasSqliteException.sqlite(
     DbasSqliteErrorCode code,
     String message, {

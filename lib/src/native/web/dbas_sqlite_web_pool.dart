@@ -27,18 +27,34 @@ extension type _JSObj._(JSObject _) implements JSObject {
 @JS('Number')
 external JSNumber _jsToNumber(JSAny? value);
 
-/// Exception carrying the SQLite rc / extended rc reported by the
-/// worker's `postErr` envelope. Every error path through this pool
-/// rejects with one of these (with [sqliteCode] / [sqliteUniqueCode]
-/// being `null` only when the worker omitted them — e.g. internal
-/// protocol failures that never reached the C library).
+/// **Internal** — implementation detail of the web shim. Carries the
+/// SQLite rc / extended rc reported by the worker's `postErr` envelope.
 ///
-/// Consumers (notably [DbasSqliteNativeWeb]) downcast to this type to
-/// surface the codes on the outgoing [DbasSqliteException] without
-/// substring-matching message text.
+/// Every error path through [DbasSqliteWebPool] rejects with one of
+/// these. The only consumer is [DbasSqliteNativeWeb._captureError],
+/// which downcasts to read the rcs and stores them on the public
+/// [DbasSqliteException]. The type is not exported from the package
+/// barrel and never escapes the platform boundary (the web shim's
+/// `executeSql` returns a non-OK rc on failure rather than rethrowing).
 class DbasSqliteWebWorkerError implements Exception {
+  /// Human-readable error text from the worker's `message` field. The
+  /// worker's structured error `code` (e.g. `'WORKER_CRASHED'`,
+  /// `'SQLITE_BUSY'`) is folded in by [_workerErrorFromJsError] when
+  /// present, prefixed in square brackets, so this string carries both
+  /// the symbolic kind and the human message.
   final String message;
+
+  /// SQLite **primary** result code reported as the `rc` field of the
+  /// worker's `postErr` envelope (e.g. 19 for `SQLITE_CONSTRAINT`,
+  /// 5 for `SQLITE_BUSY`). `null` when the worker omitted it —
+  /// typically a Dart-side / protocol failure that never reached the
+  /// C library.
   final int? sqliteCode;
+
+  /// SQLite **extended** result code reported as the `extendedRc`
+  /// field of the worker's `postErr` envelope (e.g. 2067 for
+  /// `SQLITE_CONSTRAINT_UNIQUE`). `null` when the worker omitted it
+  /// or when the C library reported only the primary rc.
   final int? sqliteUniqueCode;
 
   DbasSqliteWebWorkerError(this.message,
@@ -61,10 +77,15 @@ class DbasSqliteWebWorkerError implements Exception {
 /// Builds a [DbasSqliteWebWorkerError] from the dartified `err` map
 /// returned in the worker's `error` envelope. The map shape is
 /// `{code, message, rc?, extendedRc?}` per `postErr` in the worker.
-/// Falls back to `err.toString()` when the shape is non-Map (defensive).
+/// The structured `code` (e.g. `'WORKER_CRASHED'`, `'POOL_CLOSED'`)
+/// is prefixed onto the message in `[code] ` form so callers don't
+/// lose the symbolic kind. Falls back to `err.toString()` when the
+/// shape is non-Map (defensive).
 DbasSqliteWebWorkerError _workerErrorFromJsError(Object? err) {
   if (err is Map) {
-    final msg = (err['message'] ?? err.toString()).toString();
+    final codeRaw = err['code'];
+    final codeStr = codeRaw is String ? '[$codeRaw] ' : '';
+    final msg = '$codeStr${(err['message'] ?? err.toString())}';
     final rc = err['rc'];
     final extRc = err['extendedRc'];
     return DbasSqliteWebWorkerError(
@@ -465,14 +486,22 @@ class DbasSqliteWebPool {
         return;
       }
       if (rc != sqliteRow) {
-        completer.completeError(
-            Exception('readRow: unexpected rc=$rc from worker'));
+        // Worker returned a real envelope with a non-OK SQLite rc
+        // (e.g. SQLITE_CONSTRAINT mid-iteration over an
+        // INSERT…RETURNING that violates UNIQUE). Surface the rc on
+        // the worker error so [DbasSqliteNativeWeb._captureError] can
+        // populate the platform accessors and the public
+        // [DbasSqliteException] carries the code.
+        completer.completeError(DbasSqliteWebWorkerError(
+            'readRow: unexpected rc=$rc from worker',
+            sqliteCode: rc));
         return;
       }
       final rowProp = result['row'];
       if (rowProp == null || rowProp.isUndefinedOrNull) {
-        completer.completeError(
-            Exception('readRow: rc=100 but no row payload'));
+        completer.completeError(DbasSqliteWebWorkerError(
+            'readRow: rc=100 but no row payload',
+            sqliteCode: rc));
         return;
       }
       final rowObj = rowProp as _JSObj;
@@ -836,7 +865,17 @@ class DbasSqliteWebPool {
             'action': 'attachStreamAbort',
             'payload': <String, dynamic>{},
           }.jsify());
-        } catch (_) {}
+        } catch (abortErr, abortStack) {
+          // Best-effort signal — if posting fails the worker is
+          // likely already gone. Log so the rare diagnostic case
+          // (worker terminated unexpectedly) isn't completely silent.
+          developer.log(
+            'attachStreamAbort postMessage failed for "$dbName"',
+            name: 'dbas_sqlite.DbasSqliteWebPool',
+            error: abortErr,
+            stackTrace: abortStack,
+          );
+        }
       }
       rethrow;
     }

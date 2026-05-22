@@ -306,13 +306,17 @@ All public API calls on `DbasSqlite`, `DbasSqliteStatement`, and
   site (e.g. `bindPositionalFailed`, `statementClosed`,
   `transactionAlreadyActive`). Useful for telemetry IDs and test
   assertions.
-- `int? sqliteCode` — non-`null` when the failure came from the
-  native SQLite layer (the rc returned by `sqlite3_prepare_v2`,
-  `sqlite3_step`, etc.).
+- `int? sqliteCode` — SQLite **primary** result code (e.g. `19` for
+  `SQLITE_CONSTRAINT`, `5` for `SQLITE_BUSY`). `null` for Dart-side
+  failures.
+- `int? sqliteUniqueCode` — SQLite **extended** result code, the
+  unique discriminator within a primary code (e.g. `2067` for
+  `SQLITE_CONSTRAINT_UNIQUE`, `787` for `SQLITE_CONSTRAINT_FOREIGNKEY`).
+  `null` when the platform didn't queue an extended rc.
 - `String message` — human-readable description.
 - `Object? cause` / `StackTrace? causeStackTrace` — non-`null` when
   the exception wraps an underlying failure (the rollback-failed
-  paths of `rollback()` / `transaction()`).
+  paths of `rollback()` / `commit()` / `transaction()`).
 
 Two derived enums make recovery branching ergonomic:
 
@@ -321,8 +325,8 @@ Two derived enums make recovery branching ergonomic:
   `bindFailed`, `transactionFailed`, `readerStateFailed`,
   `decodeFailed`, `internal`.
 - **`DbasSqliteSubCategory`** (fine, SQLite-aware) — derived from
-  `sqliteCode`. Maps both primary and extended SQLite result codes
-  to semantic values: `databaseBusy`, `tableLocked`,
+  `sqliteUniqueCode ?? sqliteCode`, so the extended rc wins over the
+  primary. Maps to semantic values: `databaseBusy`, `tableLocked`,
   `duplicatedData` (UNIQUE/PRIMARY KEY/ROWID violations),
   `foreignKeyViolation`, `notNullViolation`, `checkViolation`,
   `corruptDatabase`, `diskFull`, `readOnlyDatabase`, `rangeError`,
@@ -343,11 +347,21 @@ try {
       // Transient — retry after a backoff.
       break;
     default:
-      // Inspect e.code, e.sqliteCode, e.message, e.cause for the rest.
+      // Inspect e.code, e.sqliteCode, e.sqliteUniqueCode, e.message,
+      // and e.cause for the rest. For wrapped failures
+      // (transactionRollbackAlsoFailed), e.cause holds the original
+      // exception with its own code/subCategory.
       rethrow;
   }
 }
 ```
+
+`DbasSqliteStatement` also exposes `getLastErrorCode()` and
+`getLastUniqueErrorCode()` — `int?` accessors parallel to the
+existing `getLastError()` — populated after every `executeSql` /
+`executeReader`. Useful when an exception is routed through a
+generic handler and the statement is later inspected for telemetry
+without rethrowing.
 
 `openDb()` is idempotent — a second call on an already-open
 instance is a no-op. Calling it with a different `readerPoolSize`

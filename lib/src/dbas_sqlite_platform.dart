@@ -60,9 +60,14 @@ final class DbasSqlitePlatform {
       await _delegate[db.name]!.closeDb(db.ptr, checkpoint: checkpoint);
 
   /// SQLite **primary** result code for [db]'s last failed operation
-  /// (e.g. `19` for `SQLITE_CONSTRAINT`, `5` for `SQLITE_BUSY`). On
-  /// native this is the low byte of [getUniqueErrorCode]; on web
-  /// returns `null` until the worker's `rc` field is plumbed through.
+  /// (e.g. `19` for `SQLITE_CONSTRAINT`, `5` for `SQLITE_BUSY`).
+  ///
+  /// Native: derived as the low byte of [getUniqueErrorCode]
+  /// (`sqlite3_extended_errcode`'s low byte is the primary code by
+  /// SQLite convention). Web: returns the `rc` field of the most
+  /// recent worker `postErr` envelope routed through this shim, or
+  /// `null` when no worker-side error has been observed since the
+  /// last successful call.
   ///
   /// MUST be called right after observing a non-OK rc from a C call
   /// against the same connection; otherwise the result may reflect a
@@ -73,8 +78,12 @@ final class DbasSqlitePlatform {
   /// SQLite **extended** result code for [db]'s last failed operation
   /// — the unique discriminator within a primary code (e.g. `2067` for
   /// `SQLITE_CONSTRAINT_UNIQUE`, `787` for `SQLITE_CONSTRAINT_FOREIGNKEY`).
-  /// Returned by the native lib's `GetExtendedErrorCode` FFI entry
-  /// point. Web returns `null` (today).
+  ///
+  /// Native: returned by the native lib's `GetExtendedErrorCode` FFI
+  /// entry point (`sqlite3_extended_errcode`). Web: returned via the
+  /// `extendedRc` field of the worker's `postErr` envelope. `null`
+  /// when the SQLite layer didn't queue an extended rc (e.g. some
+  /// bind-time failures) or when no error has been observed.
   ///
   /// Same temporal constraint as [getErrorCode]: call right after the
   /// failing rc is observed.

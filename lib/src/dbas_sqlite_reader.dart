@@ -70,9 +70,11 @@ class DbasSqliteReader {
   /// more rows.
   ///
   /// Throws a [DbasSqliteException] with code
-  /// [DbasSqliteErrorCode.readRowFailed] (and a non-null
-  /// [DbasSqliteException.sqliteCode] carrying the step rc) if the
-  /// query execution fails.
+  /// [DbasSqliteErrorCode.readRowFailed] if the query execution fails.
+  /// The exception carries the primary step rc on
+  /// [DbasSqliteException.sqliteCode] and — when the platform resolved
+  /// one — the extended rc on [DbasSqliteException.sqliteUniqueCode]
+  /// (e.g. 2067 for `SQLITE_CONSTRAINT_UNIQUE`).
   Future<bool> readRow() async {
     if (_closed) return false;
 
@@ -84,12 +86,11 @@ class DbasSqliteReader {
         error = 'Misuse: possibly missing or invalid bind.';
       }
       error ??= 'Unknown error ($readResult).';
-      final primary = _platform.getErrorCode(_conn) ?? readResult;
       throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.readRowFailed,
         'It was not possible to run the query ($readResult): $error',
-        sqliteCode: primary,
-        sqliteUniqueCode: _platform.getUniqueErrorCode(_conn) ?? primary,
+        sqliteCode: _platform.getErrorCode(_conn) ?? readResult,
+        sqliteUniqueCode: _platform.getUniqueErrorCode(_conn),
       );
     }
 

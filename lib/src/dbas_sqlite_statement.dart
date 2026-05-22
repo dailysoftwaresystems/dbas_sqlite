@@ -213,6 +213,13 @@ class DbasSqliteStatement {
   }
 
   Future<int> _executeSqlNative() async {
+    // Reset error state up-front so the post-call accessors reflect
+    // ONLY this execute. Mirrors the reader path's onClose, which
+    // overwrites these fields when the iteration ends.
+    _lastError = null;
+    _lastErrorCode = null;
+    _lastUniqueErrorCode = null;
+
     final lockHeld = _db.isInTransaction;
     if (!lockHeld) await _db.acquireWriterLockInternal();
     // Mark the transaction dirty up-front. Subsequent reads in the same
@@ -225,10 +232,24 @@ class DbasSqliteStatement {
     final conn = _db.dbInternal!;
     int handle = sqliteInvalidStmtHandle;
     try {
+      try {
       final prepared = await _platform.prepareQuery(conn, _sql);
       handle = prepared.handle;
       if (handle == sqliteInvalidStmtHandle) {
         final err = _platform.getLastDbError(conn) ?? 'Unknown error.';
+        // sqlite3_prepare_v2 failures DO populate sqlite3_extended_errcode
+        // (and the web shim caches the worker-reported rc into the same
+        // platform accessors). Surface both codes when available; only
+        // fall through to `.dart()` when neither is resolvable.
+        final primary = _platform.getErrorCode(conn);
+        if (primary != null) {
+          throw DbasSqliteException.sqlite(
+            DbasSqliteErrorCode.executeSqlPrepareFailed,
+            'It was not possible to prepare the query: $err',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+          );
+        }
         throw DbasSqliteException.dart(
           DbasSqliteErrorCode.executeSqlPrepareFailed,
           'It was not possible to prepare the query: $err',
@@ -248,7 +269,7 @@ class DbasSqliteStatement {
             DbasSqliteErrorCode.executeSqlStepFailed,
             'It was not possible to run the query ($rc): $err',
             sqliteCode: primary,
-            sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
           );
         }
 
@@ -273,6 +294,16 @@ class DbasSqliteStatement {
           }
         }
       }
+      } on DbasSqliteException catch (e) {
+        // Capture the rcs onto the statement so post-failure callers
+        // of getLastErrorCode / getLastUniqueErrorCode see the same
+        // codes that are on the thrown exception, mirroring the
+        // reader path's onClose behaviour.
+        _lastError = e.message;
+        _lastErrorCode = e.sqliteCode;
+        _lastUniqueErrorCode = e.sqliteUniqueCode;
+        rethrow;
+      }
     } finally {
       if (!lockHeld) _db.releaseWriterLockInternal();
     }
@@ -291,7 +322,7 @@ class DbasSqliteStatement {
           DbasSqliteErrorCode.bindPositionalFailed,
           'Bind failed at positional index $index: $err',
           sqliteCode: primary,
-          sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
         );
       }
     }
@@ -308,7 +339,7 @@ class DbasSqliteStatement {
             DbasSqliteErrorCode.bindNamedParameterNotFound,
             "Named parameter '$name' not found in the prepared statement",
             sqliteCode: primary,
-            sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
           );
         }
         continue;
@@ -321,7 +352,7 @@ class DbasSqliteStatement {
           DbasSqliteErrorCode.bindNamedFailed,
           'Bind failed for "$name": $err',
           sqliteCode: primary,
-          sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
         );
       }
     }
@@ -506,6 +537,15 @@ class DbasSqliteStatement {
       handle = prepared.handle;
       if (handle == sqliteInvalidStmtHandle) {
         final err = _platform.getLastDbError(conn) ?? 'Unknown error.';
+        final primary = _platform.getErrorCode(conn);
+        if (primary != null) {
+          throw DbasSqliteException.sqlite(
+            DbasSqliteErrorCode.executeReaderPrepareFailed,
+            'It was not possible to prepare the query: $err',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+          );
+        }
         throw DbasSqliteException.dart(
           DbasSqliteErrorCode.executeReaderPrepareFailed,
           'It was not possible to prepare the query: $err',
@@ -534,8 +574,7 @@ class DbasSqliteStatement {
             _lastInsertedId = _platform.getStmtLastInsertedId(conn, handle);
             _lastError = _platform.getLastStmtError(conn, handle);
             _lastErrorCode = _platform.getErrorCode(conn);
-            _lastUniqueErrorCode = _platform.getUniqueErrorCode(conn) ??
-                _lastErrorCode;
+            _lastUniqueErrorCode = _platform.getUniqueErrorCode(conn);
           } catch (e, st) {
             firstErr = e;
             firstStack = st;
@@ -665,17 +704,28 @@ class DbasSqliteStatement {
   /// error is pending.
   String? getLastError() => _lastError;
 
-  /// SQLite **primary** result code captured at the end of the most
-  /// recent reader iteration (e.g. `19` for `SQLITE_CONSTRAINT`, `5`
-  /// for `SQLITE_BUSY`). `null` when no error was observed or the
-  /// statement has never been stepped through a reader.
+  /// SQLite **primary** result code captured from the most recent
+  /// execute on this statement (e.g. `19` for `SQLITE_CONSTRAINT`, `5`
+  /// for `SQLITE_BUSY`).
+  ///
+  /// Populated by both execution paths:
+  ///   - `executeSql` / `executeScalar` write the codes that the
+  ///     thrown [DbasSqliteException] carried, so a caller can read
+  ///     them again after catching the exception.
+  ///   - `executeReader` writes the connection's error state at
+  ///     reader-close time alongside [getLastError] /
+  ///     [getAffectedRows] / [getLastInsertedId].
+  ///
+  /// `null` when no error was observed (last execute succeeded, or
+  /// the statement has never been executed).
   int? getLastErrorCode() => _lastErrorCode;
 
-  /// SQLite **extended** result code captured at the end of the most
-  /// recent reader iteration (e.g. `2067` for `SQLITE_CONSTRAINT_UNIQUE`,
-  /// `787` for `SQLITE_CONSTRAINT_FOREIGNKEY`). Falls back to the
-  /// primary rc when the platform doesn't expose an extended rc.
-  /// `null` when no error was observed.
+  /// SQLite **extended** result code captured from the most recent
+  /// execute on this statement (e.g. `2067` for
+  /// `SQLITE_CONSTRAINT_UNIQUE`, `787` for
+  /// `SQLITE_CONSTRAINT_FOREIGNKEY`). Populated by the same paths as
+  /// [getLastErrorCode]. `null` when the platform didn't queue an
+  /// extended rc.
   int? getLastUniqueErrorCode() => _lastUniqueErrorCode;
 
   // ── Lifecycle ────────────────────────────────────────────────────────

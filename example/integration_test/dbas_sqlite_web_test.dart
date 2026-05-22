@@ -623,6 +623,43 @@ void main() {
     await db.dropDb();
   });
 
+  testWidgets(
+      'web: UNIQUE-index violation surfaces sqliteCode + sqliteUniqueCode '
+      'from the worker envelope',
+      (tester) async {
+    final db = await createWebDb('web_unique_dup.db');
+    {
+      final stmt = await db.prepareQuery(
+          'CREATE TABLE u (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)');
+      try { await stmt.executeSql(); } finally { await stmt.close(); }
+    }
+    {
+      final stmt = await db.prepareQuery(
+          "INSERT INTO u (id, email) VALUES (1, 'a@b')");
+      try { await stmt.executeSql(); } finally { await stmt.close(); }
+    }
+    final dup = await db.prepareQuery(
+        "INSERT INTO u (id, email) VALUES (2, 'a@b')");
+    try {
+      DbasSqliteException? caught;
+      try {
+        await dup.executeSql();
+      } on DbasSqliteException catch (e) {
+        caught = e;
+      }
+      expect(caught, isNotNull);
+      expect(caught!.code, DbasSqliteErrorCode.executeSqlStepFailed);
+      // Worker's `rc` / `extendedRc` envelope fields must reach the
+      // public exception via DbasSqliteWebWorkerError + _captureError.
+      expect(caught.sqliteCode, 19, reason: 'SQLITE_CONSTRAINT primary');
+      expect(caught.sqliteUniqueCode, 2067,
+          reason: 'SQLITE_CONSTRAINT_UNIQUE extended');
+      expect(caught.subCategory, DbasSqliteSubCategory.duplicatedData);
+    } finally { await dup.close(); }
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   testWidgets('getColumnDecimal works with valid Decimal', (tester) async {
     final db = await createWebDb('decimal_ok_web.db');
     {

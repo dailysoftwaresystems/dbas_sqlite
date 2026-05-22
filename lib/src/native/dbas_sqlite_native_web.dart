@@ -256,8 +256,15 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _lastUniqueErrorCode = null;
       return sqliteOk;
     } catch (e) {
+      // Return a non-OK rc and cache the codes rather than rethrowing.
+      // Rethrowing would let a raw [DbasSqliteWebWorkerError] escape
+      // the platform boundary and bypass the rc-based wrapping in
+      // `DbasSqlite.beginTransaction` / `commit` / `rollback` /
+      // `vacuum` — those wrappers fire on `rc != sqliteOk` and rely on
+      // [getErrorCode] / [getUniqueErrorCode] to lift the codes onto
+      // the public [DbasSqliteException].
       _captureError(e);
-      rethrow;
+      return 1; // SQLITE_ERROR
     }
   }
 
@@ -276,15 +283,23 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   /// from every `catch` block that talks to the worker so the public
   /// exception surface can read [getErrorCode] / [getUniqueErrorCode]
   /// immediately afterwards.
+  ///
+  /// When [e] is a [DbasSqliteWebWorkerError] the rcs are updated from
+  /// its `sqliteCode` / `sqliteUniqueCode`. For any other exception type
+  /// (Dart-side `StateError`, plain `Exception`, etc.) the rc caches
+  /// are LEFT UNCHANGED rather than nulled — clobbering them would
+  /// erase legitimate codes captured by a concurrent worker error
+  /// whose downstream consumer hasn't yet read them.
   void _captureError(Object e, [String? prefix]) {
     _lastError = prefix != null ? '$prefix: $e' : e.toString();
     if (e is DbasSqliteWebWorkerError) {
       _lastErrorCode = e.sqliteCode;
       _lastUniqueErrorCode = e.sqliteUniqueCode;
-    } else {
-      _lastErrorCode = null;
-      _lastUniqueErrorCode = null;
     }
+    // else: non-worker error has no SQLite rc info — preserve any
+    // previously-captured rcs so callers reading getErrorCode /
+    // getUniqueErrorCode after the originating worker failure still
+    // see them.
   }
   @override
   int getAffectedRows(int dbPtr) => _lastAffectedRows;

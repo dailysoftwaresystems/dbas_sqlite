@@ -87,21 +87,26 @@ abstract class DbasSqliteNativeInterface {
 
   /// SQLite **primary** result code for [dbPtr]'s last failed
   /// operation (e.g. `19` for `SQLITE_CONSTRAINT`, `5` for
-  /// `SQLITE_BUSY`). On native this is derived as
-  /// `getUniqueErrorCode(dbPtr) & 0xFF` since SQLite encodes the
-  /// primary code in the low byte of the extended code. Returns
-  /// `null` when the platform cannot resolve any code (web today;
-  /// stale `dbPtr`).
+  /// `SQLITE_BUSY`).
+  ///
+  /// Native: derived as `getUniqueErrorCode(dbPtr) & 0xFF` since
+  /// SQLite encodes the primary code in the low byte of the extended
+  /// code. Web: read from the cached `rc` of the most recent worker
+  /// error captured by `DbasSqliteNativeWeb._captureError`. Returns
+  /// `null` when no error has been observed (the cache is empty, the
+  /// `dbPtr` is stale, or the C wrapper returned its 0/-1 sentinel).
   int? getErrorCode(int dbPtr);
 
   /// SQLite **extended** result code for [dbPtr]'s last failed
   /// operation — the unique discriminator within a primary code
   /// (e.g. `2067` for `SQLITE_CONSTRAINT_UNIQUE`, `787` for
-  /// `SQLITE_CONSTRAINT_FOREIGNKEY`). Returned by the native lib's
-  /// `GetExtendedErrorCode` FFI entry point.
+  /// `SQLITE_CONSTRAINT_FOREIGNKEY`).
   ///
-  /// Returns `null` when the platform cannot resolve it (web today;
-  /// native libs that ship without `GetExtendedErrorCode`).
+  /// Native: returned by the C lib's `GetExtendedErrorCode` FFI entry
+  /// point. Web: cached from the worker's `extendedRc` envelope field.
+  /// Returns `null` when the platform cannot resolve one (some
+  /// bind-time failures don't queue an extended rc; a stale `dbPtr`;
+  /// or a native lib that ships without `GetExtendedErrorCode`).
   int? getUniqueErrorCode(int dbPtr);
   int getAffectedRows(int dbPtr);
   int getLastInsertedId(int dbPtr);

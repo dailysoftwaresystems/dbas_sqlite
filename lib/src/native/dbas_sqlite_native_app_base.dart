@@ -297,13 +297,15 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
 
   @override
   int? getUniqueErrorCode(int dbPtr) {
-    // Returns null (rather than 0) when the connection has no active
-    // error — some bind-time failures (e.g. SQLITE_RANGE from
+    // Returns null when the connection has no active error. The C
+    // wrapper returns `0` for "no error" and `-1` for a NULL / unopened
+    // connection — neither is a legitimate SQLite rc, so both collapse
+    // to null. Some bind-time failures (e.g. SQLITE_RANGE from
     // `sqlite3_bind_*`) propagate the rc to the caller without
-    // updating `sqlite3_extended_errcode`. Callers fall back to the
+    // updating `sqlite3_extended_errcode`, so callers fall back to the
     // primary rc they observed at the failing call site.
     final ext = nativeGetExtendedErrorCode(resolveDbPtr(dbPtr));
-    return ext == 0 ? null : ext;
+    return ext <= 0 ? null : ext;
   }
 
   @override
@@ -311,9 +313,11 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
     // SQLite encodes the primary code in the low byte of the extended
     // code, so deriving one from the other avoids a second FFI lookup
     // for `sqlite3_errcode`. Returns null if the lib reports no error
-    // (extended == 0).
+    // (extended == 0) or a NULL/unopened connection (extended == -1) —
+    // taking `& 0xFF` of -1 would yield a nonsense 255 that masks the
+    // sentinel.
     final ext = nativeGetExtendedErrorCode(resolveDbPtr(dbPtr));
-    return ext == 0 ? null : (ext & 0xFF);
+    return ext <= 0 ? null : (ext & 0xFF);
   }
 
   @override
