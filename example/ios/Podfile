@@ -52,9 +52,9 @@ post_install do |installer|
     config.build_settings['OTHER_LDFLAGS'] ||= '$(inherited)'
     config.build_settings['OTHER_LDFLAGS'] += %q{
         $(if [ "${PLATFORM_NAME}" = "iphonesimulator" ]; then
-          echo "-force_load $(PODS_ROOT)/../../../ios/dbas_sqlite.xcframework/ios-arm64_x86_64-simulator/dbas_sqlite.a";
+          echo "-force_load $(PODS_ROOT)/../../../ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_64-simulator/dbas_sqlite.a";
         else
-          echo "-force_load $(PODS_ROOT)/../../../ios/dbas_sqlite.xcframework/ios-arm64/dbas_sqlite.a";
+          echo "-force_load $(PODS_ROOT)/../../../ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/dbas_sqlite.a";
         fi)
       }
     end

@@ -74,11 +74,11 @@ cp -r "$OUT_DIR/linux/"* "$SCRIPT_DIR/../../linux/libs"
 cp -r "$OUT_DIR/web/"* "$SCRIPT_DIR/../../web/libs"
 
 echo "Copying ios binaries..."
-mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"
-cp -r "$OUT_DIR/ios/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../ios/dbas_sqlite.xcframework"
+mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite/dbas_sqlite.xcframework"
+cp -r "$OUT_DIR/ios/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../ios/dbas_sqlite/dbas_sqlite.xcframework"
 
 echo "Copying macos binaries..."
-mkdir -p "$SCRIPT_DIR/../../macos/dbas_sqlite.xcframework"
-cp -r "$OUT_DIR/macos/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../macos/dbas_sqlite.xcframework"
+mkdir -p "$SCRIPT_DIR/../../macos/dbas_sqlite/dbas_sqlite.xcframework"
+cp -r "$OUT_DIR/macos/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../macos/dbas_sqlite/dbas_sqlite.xcframework"
 
 echo "All platform binaries copied successfully."

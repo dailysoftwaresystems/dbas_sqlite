@@ -55,7 +55,7 @@
 		38607EAB5FB69AD3666B68E7 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		5B474F6D2E3AF3B80078076D /* dbas_sqlite_flutter.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = dbas_sqlite_flutter.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		5B733EDF2E3BF5F1009C23FA /* dbas_sqlite.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = dbas_sqlite.xcframework; path = ../../ios/dbas_sqlite.xcframework; sourceTree = "<group>"; };
+		5B733EDF2E3BF5F1009C23FA /* dbas_sqlite.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = dbas_sqlite.xcframework; path = ../../ios/dbas_sqlite/dbas_sqlite.xcframework; sourceTree = "<group>"; };
 		6A9FA0CE76A37BB86E0F6EE6 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		718A9E9887D7D4F128B53FC8 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -485,8 +485,8 @@
 					"$(inherited)",
 					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
 					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
 				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -678,8 +678,8 @@
 					"$(inherited)",
 					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
 					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
 				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -707,8 +707,8 @@
 					"$(inherited)",
 					"\"${PODS_CONFIGURATION_BUILD_DIR}/dbas_sqlite_flutter/dbas_sqlite_flutter.framework/Headers\"",
 					"\"${PODS_CONFIGURATION_BUILD_DIR}/integration_test/integration_test.framework/Headers\"",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
-					"\"$(PROJECT_DIR)/ios/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64/Headers\"/**",
+					"\"$(PROJECT_DIR)/ios/dbas_sqlite/dbas_sqlite.xcframework/ios-arm64_x86_x64-simulator/Headers\"/**",
 				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

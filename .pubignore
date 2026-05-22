@@ -26,7 +26,8 @@ build/
 
 # ── Native staging tree (duplicates platform-folder binaries) ────────
 # `native_libs/` is the build-output landing zone before binaries are
-# copied into `ios/dbas_sqlite.xcframework/`, `macos/libs/`,
+# copied into `ios/dbas_sqlite/dbas_sqlite.xcframework/`,
+# `macos/dbas_sqlite/dbas_sqlite.xcframework/`, `macos/libs/`,
 # `linux/libs/`, `windows/libs/`, and `android/src/main/jniLibs/`.
 # Consumers only need the platform-folder copies; this is pure
 # duplication (and includes a 24 MB ASan test binary).

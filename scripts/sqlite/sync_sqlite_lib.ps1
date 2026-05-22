@@ -78,9 +78,11 @@ Copy-Item "$OUT_DIR/linux/*" -Destination "$SCRIPT_DIR/../../linux/libs" -Recurs
 Copy-Item "$OUT_DIR/web/*" -Destination "$SCRIPT_DIR/../../web/libs" -Recurse -Force
 
 Write-Host "Copying ios binaries..."
-Copy-Item "$OUT_DIR/ios/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../ios" -Recurse -Force
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../ios/dbas_sqlite" | Out-Null
+Copy-Item "$OUT_DIR/ios/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../ios/dbas_sqlite" -Recurse -Force
 
 Write-Host "Copying macos binaries..."
-Copy-Item "$OUT_DIR/macos/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../macos" -Recurse -Force
+New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../macos/dbas_sqlite" | Out-Null
+Copy-Item "$OUT_DIR/macos/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../macos/dbas_sqlite" -Recurse -Force
 
 Write-Host "All platform binaries copied successfully."
