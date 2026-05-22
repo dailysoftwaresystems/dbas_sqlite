@@ -8,7 +8,12 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
-    show sqliteOk, sqliteRow, sqliteDone, sqliteMisuse;
+    show
+        sqliteOk,
+        sqliteRow,
+        sqliteDone,
+        sqliteMisuse,
+        sqliteInvalidStmtHandle;
 import 'dbas_sqlite_native_interface.dart';
 import 'web/dbas_sqlite_web_pool.dart';
 
@@ -68,6 +73,14 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int _lastInsertedId = 0;
   String? _lastError;
 
+  /// Cached SQLite primary / extended rcs from the most recent worker
+  /// error. Populated whenever a caught [DbasSqliteWebWorkerError]
+  /// flows through any of the methods on this shim that touch the
+  /// pool. Returned from [getErrorCode] / [getUniqueErrorCode] so the
+  /// public exception can surface both codes parallel to native.
+  int? _lastErrorCode;
+  int? _lastUniqueErrorCode;
+
   /// Per-handle prepared-statement state. Keyed by the Dart-side
   /// `int` handle returned from [prepareQuery] (a monotonic counter
   /// — see [_nextStmtId]). The worker's actual handle (a JS BigInt)
@@ -107,7 +120,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         if (first != null) _sqliteVersion = first.toString();
       }
     } catch (e, st) {
-      _lastError = 'getSqliteVersion via pool.query failed: $e';
+      _captureError(e, 'getSqliteVersion via pool.query failed');
       developer.log(
         'DbasSqliteNativeWeb._ensureSqliteVersion: pool.query failed for "$dbName"',
         name: 'dbas_sqlite.DbasSqliteNativeWeb',
@@ -239,10 +252,19 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       _lastAffectedRows = toIntSafe(result['affectedRows']);
       _lastInsertedId = toIntSafe(result['lastInsertId']);
       _lastError = null;
+      _lastErrorCode = null;
+      _lastUniqueErrorCode = null;
       return sqliteOk;
     } catch (e) {
-      _lastError = e.toString();
-      rethrow;
+      // Return a non-OK rc and cache the codes rather than rethrowing.
+      // Rethrowing would let a raw [DbasSqliteWebWorkerError] escape
+      // the platform boundary and bypass the rc-based wrapping in
+      // `DbasSqlite.beginTransaction` / `commit` / `rollback` /
+      // `vacuum` — those wrappers fire on `rc != sqliteOk` and rely on
+      // [getErrorCode] / [getUniqueErrorCode] to lift the codes onto
+      // the public [DbasSqliteException].
+      _captureError(e);
+      return 1; // SQLITE_ERROR
     }
   }
 
@@ -250,6 +272,35 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   String? getLastDbError(int dbPtr) => _lastError;
+
+  @override
+  int? getErrorCode(int dbPtr) => _lastErrorCode;
+
+  @override
+  int? getUniqueErrorCode(int dbPtr) => _lastUniqueErrorCode;
+
+  /// Updates [_lastError] + the two rc caches from a caught error. Use
+  /// from every `catch` block that talks to the worker so the public
+  /// exception surface can read [getErrorCode] / [getUniqueErrorCode]
+  /// immediately afterwards.
+  ///
+  /// When [e] is a [DbasSqliteWebWorkerError] the rcs are updated from
+  /// its `sqliteCode` / `sqliteUniqueCode`. For any other exception type
+  /// (Dart-side `StateError`, plain `Exception`, etc.) the rc caches
+  /// are LEFT UNCHANGED rather than nulled — clobbering them would
+  /// erase legitimate codes captured by a concurrent worker error
+  /// whose downstream consumer hasn't yet read them.
+  void _captureError(Object e, [String? prefix]) {
+    _lastError = prefix != null ? '$prefix: $e' : e.toString();
+    if (e is DbasSqliteWebWorkerError) {
+      _lastErrorCode = e.sqliteCode;
+      _lastUniqueErrorCode = e.sqliteUniqueCode;
+    }
+    // else: non-worker error has no SQLite rc info — preserve any
+    // previously-captured rcs so callers reading getErrorCode /
+    // getUniqueErrorCode after the originating worker failure still
+    // see them.
+  }
   @override
   int getAffectedRows(int dbPtr) => _lastAffectedRows;
   @override
@@ -286,7 +337,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       }
       return sqliteOk;
     } catch (e) {
-      _lastError = 'enableWal: $e';
+      _captureError(e, 'enableWal');
       return 1; // SQLITE_ERROR
     }
   }
@@ -297,18 +348,33 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   Future<({int handle, int columnCount, List<String> columnNames})>
       prepareQuery(int dbPtr, String sql) async {
     await _ensurePool();
-    final prep = await _pool!.prepareQueryStream(sql);
-    final handle = _nextStmtId++;
-    _stmts[handle] = _WebStmtState(
-      rawHandle: prep.rawHandle,
-      columnCount: prep.columnCount,
-      columnNames: prep.columnNames,
-    );
-    return (
-      handle: handle,
-      columnCount: prep.columnCount,
-      columnNames: prep.columnNames,
-    );
+    try {
+      final prep = await _pool!.prepareQueryStream(sql);
+      final handle = _nextStmtId++;
+      _stmts[handle] = _WebStmtState(
+        rawHandle: prep.rawHandle,
+        columnCount: prep.columnCount,
+        columnNames: prep.columnNames,
+      );
+      return (
+        handle: handle,
+        columnCount: prep.columnCount,
+        columnNames: prep.columnNames,
+      );
+    } catch (e) {
+      // Capture so the statement layer's `executeXxxPrepareFailed`
+      // throw can surface the worker's rc / extendedRc via
+      // [getErrorCode] / [getUniqueErrorCode] on this shim. Return
+      // the invalid-handle sentinel to match native's "bad rc → null
+      // handle" shape rather than letting the raw worker error
+      // escape the platform boundary.
+      _captureError(e);
+      return (
+        handle: sqliteInvalidStmtHandle,
+        columnCount: 0,
+        columnNames: const <String>[],
+      );
+    }
   }
 
   @override
@@ -331,7 +397,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       // Native FFI's `finalizeStmt` returns the C-level rc directly;
       // the previous "always sqliteOk" lie hid worker-side leaks the
       // caller could otherwise have surfaced through `getLastDbError`.
-      _lastError = 'finalizeStmt failed: $e';
+      _captureError(e, 'finalizeStmt failed');
       return 1; // SQLITE_ERROR
     }
   }
@@ -369,6 +435,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         }
       } catch (e) {
         state.lastError = e.toString();
+        _captureError(e);
         state.bindsFlushed = true;
         cache.columns = null;
         return 1; // SQLITE_ERROR — caller propagates
@@ -429,6 +496,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       return sqliteRow;
     } catch (e) {
       state.lastError = e.toString();
+      _captureError(e);
       cache.columns = null;
       return 1; // SQLITE_ERROR
     }

@@ -580,7 +580,11 @@ void main() {
 
     final reader = await (await db.prepareQuery('SELECT val FROM d_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
-    expect(() => reader.getColumnDecimal(0), throwsFormatException);
+    expect(
+      () => reader.getColumnDecimal(0),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidDecimalFormat)),
+    );
     await reader.close();
 
     await db.closeDb();
@@ -608,9 +612,60 @@ void main() {
 
     final reader = await (await db.prepareQuery('SELECT val FROM t_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
-    expect(() => reader.getColumnTime(0), throwsFormatException);
+    expect(
+      () => reader.getColumnTime(0),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidTimeFormat)),
+    );
     await reader.close();
 
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  testWidgets(
+      'web: UNIQUE-index violation surfaces primary rc + duplicatedData '
+      'subCategory once the native bundle exposes extendedRc on step '
+      'failures (currently primary-rc only)',
+      (tester) async {
+    final db = await createWebDb('web_unique_dup.db');
+    {
+      final stmt = await db.prepareQuery(
+          'CREATE TABLE u (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)');
+      try { await stmt.executeSql(); } finally { await stmt.close(); }
+    }
+    {
+      final stmt = await db.prepareQuery(
+          "INSERT INTO u (id, email) VALUES (1, 'a@b')");
+      try { await stmt.executeSql(); } finally { await stmt.close(); }
+    }
+    final dup = await db.prepareQuery(
+        "INSERT INTO u (id, email) VALUES (2, 'a@b')");
+    try {
+      DbasSqliteException? caught;
+      try {
+        await dup.executeSql();
+      } on DbasSqliteException catch (e) {
+        caught = e;
+      }
+      expect(caught, isNotNull);
+      expect(caught!.code, DbasSqliteErrorCode.executeSqlStepFailed);
+      expect(caught.sqliteCode, 19, reason: 'SQLITE_CONSTRAINT primary');
+      // sqliteUniqueCode: the canonical fix landed in the sibling
+      // native repo's worker source (`handleReadRow` /
+      // `handleReadRows` now capture `module.getExtendedErrorCode`
+      // alongside the primary rc). Until the next native bundle ships
+      // and `sync_sqlite_lib` copies it into `web/libs/`, this stays
+      // null and `subCategory` falls back to `constraintViolation`.
+      // Accept both shapes so the test holds across the sync.
+      expect(caught.sqliteUniqueCode, anyOf(isNull, 2067));
+      expect(
+          caught.subCategory,
+          anyOf(
+            DbasSqliteSubCategory.constraintViolation,
+            DbasSqliteSubCategory.duplicatedData,
+          ));
+    } finally { await dup.close(); }
     await db.closeDb();
     await db.dropDb();
   });

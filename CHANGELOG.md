@@ -2,6 +2,127 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.0 - 2026-05-22
+
+### Added
+
+- **`DbasSqliteException`** — single exception type thrown by the
+  public API of `DbasSqlite`, `DbasSqliteStatement`, and
+  `DbasSqliteReader`. Fields:
+  - `DbasSqliteErrorCode code` — stable per-throw-site identifier
+    (40+ values, 1:1 with throw sites; useful for telemetry IDs and
+    test assertions).
+  - `int? sqliteCode` — SQLite **primary** result code (e.g. `19` for
+    `SQLITE_CONSTRAINT`, `5` for `SQLITE_BUSY`). `null` for `.dart`
+    factory throws.
+  - `int? sqliteUniqueCode` — SQLite **extended** result code (e.g.
+    `2067` for `SQLITE_CONSTRAINT_UNIQUE`, `787` for
+    `SQLITE_CONSTRAINT_FOREIGNKEY`). `null` when the platform didn't
+    queue an extended rc or for `.dart` factory throws.
+  - `String message` — human-readable description.
+  - `Object? cause` + `StackTrace? causeStackTrace` — non-null when
+    this exception wraps an underlying failure (the
+    rollback-after-failed-transaction path and the rollback's own
+    catch branch).
+
+  Factories:
+  - `DbasSqliteException.dart(code, message, {cause, causeStackTrace})`
+    — Dart-side condition (closed DB, format/range errors, timeouts,
+    queue cancellations). Both rcs are `null`.
+  - `DbasSqliteException.sqlite(code, message, {required int sqliteCode,
+    int? sqliteUniqueCode, cause, causeStackTrace})` — native SQLite
+    failure.
+
+  Two derived enums help consumers branch:
+  - **`DbasSqliteErrorCategory`** (coarse) — `notOpened`,
+    `busyOrCancelled`, `prepareFailed`, `executeFailed`,
+    `bindFailed`, `transactionFailed`, `readerStateFailed`,
+    `decodeFailed`, `internal`. Available as `code.category` or
+    `exception.category`.
+  - **`DbasSqliteSubCategory`** (fine, SQLite-aware) — derived from
+    `sqliteUniqueCode ?? sqliteCode`, so extended codes win over their
+    primary counterparts: `databaseBusy` (SQLITE_BUSY=5),
+    `tableLocked` (SQLITE_LOCKED=6),
+    `duplicatedData` (SQLITE_CONSTRAINT_UNIQUE=2067, `_PRIMARYKEY`=1555,
+    `_ROWID`=2579 — covers UNIQUE column constraints, UNIQUE
+    indexes, and PRIMARY KEY duplicates), `foreignKeyViolation` (787),
+    `notNullViolation` (1299), `checkViolation` (275),
+    `corruptDatabase`, `diskFull`, `readOnlyDatabase`,
+    `valueTooLarge`, `rangeError`, and ~20 more. Available as
+    `exception.subCategory`.
+
+  Both codes flow end-to-end on both platforms:
+  - **Native** — the bundled C lib's `GetExtendedErrorCode` FFI entry
+    point feeds the platform's `getUniqueErrorCode`; the primary is
+    derived as `extended & 0xFF` via `getErrorCode`.
+  - **Web** — the worker's `postErr` envelope carries `rc` /
+    `extendedRc`; `DbasSqliteWebPool` constructs an internal
+    `DbasSqliteWebWorkerError` from them, and the web shim caches
+    them in fields read by `getErrorCode` / `getUniqueErrorCode`.
+
+- **`DbasSqliteStatement.getLastErrorCode()` and
+  `getLastUniqueErrorCode()`** — int-valued accessors parallel to the
+  existing `getLastError()` string accessor. Populated by both
+  `executeSql` (from the thrown exception's codes) and `executeReader`
+  (from the connection's error state at reader-close time). Useful
+  for callers that route exceptions through a generic handler and
+  later inspect the statement for telemetry without rethrowing.
+
+- **`DbasSqlite.openDb()` is now idempotent.** A second call on an
+  already-open instance is a no-op. Calling with a different
+  `readerPoolSize` throws `DbasSqliteException` with code
+  `openDbReopenWithDifferentPoolSize` — pool resizing isn't
+  supported; close the database first.
+
+### Changed (breaking)
+
+- Every previously-exposed `StateError`, `Exception`,
+  `TimeoutException`, `FormatException`, `ArgumentError`, and
+  `UnsupportedError` thrown by `DbasSqlite`, `DbasSqliteStatement`,
+  and `DbasSqliteReader` is now a `DbasSqliteException`. Code that
+  caught a specific type (e.g. `on TimeoutException catch`,
+  `on FormatException catch`) will no longer match — catch
+  `DbasSqliteException` (or any supertype like `Exception`) and
+  branch on `e.code`, `e.category`, or `e.subCategory`.
+
+  - `getColumnDecimal` / `getColumnTime` previously threw
+    `FormatException`; now `DbasSqliteException` with
+    `invalidDecimalFormat` / `invalidTimeFormat` /
+    `invalidTimeComponent`.
+  - `getColumnEnum` previously threw `ArgumentError`; now
+    `invalidEnumIndex`.
+  - The two `bindXxx` paths that hit an unsupported type previously
+    threw `UnsupportedError`; now `unsupportedPositionalBindType`
+    / `unsupportedNamedBindType`.
+  - The pool-saturated reader-acquire previously threw
+    `TimeoutException`; now `readerSlotWaitTimeout` (Dart-side
+    semaphore wait) or `executeReaderPoolAcquireTimeout` (C-side
+    pool wait).
+  - All "database is not opened" / "statement is closed" guards
+    previously threw `StateError`; now various `…DatabaseNotOpened`
+    and `statementClosed` codes.
+
+### Fixed
+
+- **`closeDb()` no longer aborts teardown when `rollback()` fails.**
+  Previously a failed in-flight ROLLBACK skipped statement cleanup,
+  queue cancellation, and pool close, leaving the cache and OS
+  resources dangling. The rollback failure is now logged via
+  `dart:developer` and teardown continues.
+
+- **`rollback()`, `commit()`, and `transaction()` preserve the
+  underlying error.** When ROLLBACK fails (or when both
+  `action`/`commit` and the subsequent rollback fail), the inner
+  exception is now attached as `DbasSqliteException.cause` with its
+  stack trace on `causeStackTrace`. When the inner failure is itself
+  a `DbasSqliteException`, both its `sqliteCode` and
+  `sqliteUniqueCode` are lifted onto the outer exception so
+  programmatic recovery on `subCategory` keeps working across the
+  wrap. `commit()` now mirrors `transaction()`'s behaviour: if the
+  implicit rollback after a commit failure also fails, the rollback
+  error is logged and the original COMMIT exception is rethrown
+  (previously the rollback error masked the commit error).
+
 ## 2.6.0 - 2026-05-07
 
 ### Added

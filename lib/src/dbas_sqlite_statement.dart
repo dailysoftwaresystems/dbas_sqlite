@@ -10,6 +10,7 @@ import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
 import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_reader.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/exceptions/dbas_sqlite_exception.dart';
 
 /// A prepared SQL statement.
 ///
@@ -42,6 +43,8 @@ class DbasSqliteStatement {
   int _lastAffectedRows = -1;
   int _lastInsertedId = -1;
   String? _lastError;
+  int? _lastErrorCode;
+  int? _lastUniqueErrorCode;
 
   /// Internal — see [DbasSqlite.prepareQuery].
   DbasSqliteStatement.internal(
@@ -210,6 +213,13 @@ class DbasSqliteStatement {
   }
 
   Future<int> _executeSqlNative() async {
+    // Reset error state up-front so the post-call accessors reflect
+    // ONLY this execute. Mirrors the reader path's onClose, which
+    // overwrites these fields when the iteration ends.
+    _lastError = null;
+    _lastErrorCode = null;
+    _lastUniqueErrorCode = null;
+
     final lockHeld = _db.isInTransaction;
     if (!lockHeld) await _db.acquireWriterLockInternal();
     // Mark the transaction dirty up-front. Subsequent reads in the same
@@ -222,11 +232,28 @@ class DbasSqliteStatement {
     final conn = _db.dbInternal!;
     int handle = sqliteInvalidStmtHandle;
     try {
+      try {
       final prepared = await _platform.prepareQuery(conn, _sql);
       handle = prepared.handle;
       if (handle == sqliteInvalidStmtHandle) {
         final err = _platform.getLastDbError(conn) ?? 'Unknown error.';
-        throw Exception('It was not possible to prepare the query: $err');
+        // sqlite3_prepare_v2 failures DO populate sqlite3_extended_errcode
+        // (and the web shim caches the worker-reported rc into the same
+        // platform accessors). Surface both codes when available; only
+        // fall through to `.dart()` when neither is resolvable.
+        final primary = _platform.getErrorCode(conn);
+        if (primary != null) {
+          throw DbasSqliteException.sqlite(
+            DbasSqliteErrorCode.executeSqlPrepareFailed,
+            'It was not possible to prepare the query: $err',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+          );
+        }
+        throw DbasSqliteException.dart(
+          DbasSqliteErrorCode.executeSqlPrepareFailed,
+          'It was not possible to prepare the query: $err',
+        );
       }
 
       try {
@@ -237,7 +264,13 @@ class DbasSqliteStatement {
         if (rc != sqliteOk && rc != sqliteRow && rc != sqliteDone) {
           final err = _platform.getLastStmtError(conn, handle) ??
               'Unknown error ($rc).';
-          throw Exception('It was not possible to run the query ($rc): $err');
+          final primary = _platform.getErrorCode(conn) ?? rc;
+          throw DbasSqliteException.sqlite(
+            DbasSqliteErrorCode.executeSqlStepFailed,
+            'It was not possible to run the query ($rc): $err',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+          );
         }
 
         // Counters MUST be read BEFORE finalize. After finalize the
@@ -261,6 +294,16 @@ class DbasSqliteStatement {
           }
         }
       }
+      } on DbasSqliteException catch (e) {
+        // Capture the rcs onto the statement so post-failure callers
+        // of getLastErrorCode / getLastUniqueErrorCode see the same
+        // codes that are on the thrown exception, mirroring the
+        // reader path's onClose behaviour.
+        _lastError = e.message;
+        _lastErrorCode = e.sqliteCode;
+        _lastUniqueErrorCode = e.sqliteUniqueCode;
+        rethrow;
+      }
     } finally {
       if (!lockHeld) _db.releaseWriterLockInternal();
     }
@@ -274,7 +317,13 @@ class DbasSqliteStatement {
       if (rc != sqliteOk) {
         final err = _platform.getLastStmtError(conn, handle) ??
             'Bind failed at positional index $index ($rc).';
-        throw Exception('Bind failed at positional index $index: $err');
+        final primary = _platform.getErrorCode(conn) ?? rc;
+        throw DbasSqliteException.sqlite(
+          DbasSqliteErrorCode.bindPositionalFailed,
+          'Bind failed at positional index $index: $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+        );
       }
     }
     for (final entry in _namedBinds.entries) {
@@ -285,14 +334,26 @@ class DbasSqliteStatement {
       final rc = await _bindNamed(conn, handle, name, entry.value);
       if (rc == sqliteRange) {
         if (_db.throwOnMissingNamedParams) {
-          throw Exception("Named parameter '$name' not found in the prepared statement");
+          final primary = _platform.getErrorCode(conn) ?? rc;
+          throw DbasSqliteException.sqlite(
+            DbasSqliteErrorCode.bindNamedParameterNotFound,
+            "Named parameter '$name' not found in the prepared statement",
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+          );
         }
         continue;
       }
       if (rc != sqliteOk) {
         final err = _platform.getLastStmtError(conn, handle) ??
             'Bind failed for named parameter "$name" ($rc).';
-        throw Exception('Bind failed for "$name": $err');
+        final primary = _platform.getErrorCode(conn) ?? rc;
+        throw DbasSqliteException.sqlite(
+          DbasSqliteErrorCode.bindNamedFailed,
+          'Bind failed for "$name": $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+        );
       }
     }
   }
@@ -324,7 +385,10 @@ class DbasSqliteStatement {
     if (value is Enum) {
       return _platform.bindInt(conn, handle, index, value.index);
     }
-    throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
+    throw DbasSqliteException.dart(
+      DbasSqliteErrorCode.unsupportedPositionalBindType,
+      'Unsupported type to SQLite bind: ${value.runtimeType}',
+    );
   }
 
   Future<int> _bindNamed(
@@ -357,7 +421,10 @@ class DbasSqliteStatement {
     if (value is Enum) {
       return _platform.bindNameInt(conn, handle, name, value.index);
     }
-    throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
+    throw DbasSqliteException.dart(
+      DbasSqliteErrorCode.unsupportedNamedBindType,
+      'Unsupported type to SQLite named bind: ${value.runtimeType}',
+    );
   }
 
   // ── Execution: reader ────────────────────────────────────────────────
@@ -393,15 +460,20 @@ class DbasSqliteStatement {
   /// [executeSql] flips an internal flag on the owning [DbasSqlite]
   /// for the rest of the transaction; `commit` / `rollback` reset it.
   ///
-  /// Only one reader may be active per statement at a time. Throws
-  /// [StateError] if a reader is already active.
+  /// Only one reader may be active per statement at a time. Throws a
+  /// [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.readerAlreadyActive] if a reader is already
+  /// active.
   Future<DbasSqliteReader> executeReader({
     List<Object?>? params,
     Map<String, Object?>? nameParams,
   }) async {
     _checkUsable();
     if (_activeReader != null && !_activeReader!.isClosed) {
-      throw StateError('A reader from this statement is still active.');
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.readerAlreadyActive,
+        'A reader from this statement is still active.',
+      );
     }
     // Snapshot for restore-on-failure — same rationale as executeSql.
     final positionalSnapshot = List<Object?>.of(_positionalBinds);
@@ -438,7 +510,8 @@ class DbasSqliteStatement {
       final timeout = _db.poolAcquireTimeoutMsInternal;
       final readerPtr = await _db.acquireReaderConnectionInternal(timeout);
       if (readerPtr == 0) {
-        throw TimeoutException(
+        throw DbasSqliteException.dart(
+          DbasSqliteErrorCode.executeReaderPoolAcquireTimeout,
           'No pool reader became available within ${timeout}ms — '
           'all readers busy. Close in-flight readers or raise '
           'DbasSqlite.kPoolAcquireTimeoutMs.',
@@ -464,7 +537,19 @@ class DbasSqliteStatement {
       handle = prepared.handle;
       if (handle == sqliteInvalidStmtHandle) {
         final err = _platform.getLastDbError(conn) ?? 'Unknown error.';
-        throw Exception('It was not possible to prepare the query: $err');
+        final primary = _platform.getErrorCode(conn);
+        if (primary != null) {
+          throw DbasSqliteException.sqlite(
+            DbasSqliteErrorCode.executeReaderPrepareFailed,
+            'It was not possible to prepare the query: $err',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn),
+          );
+        }
+        throw DbasSqliteException.dart(
+          DbasSqliteErrorCode.executeReaderPrepareFailed,
+          'It was not possible to prepare the query: $err',
+        );
       }
 
       await _replayBinds(conn, handle);
@@ -488,6 +573,8 @@ class DbasSqliteStatement {
             _lastAffectedRows = _platform.getStmtAffectedRows(conn, handle);
             _lastInsertedId = _platform.getStmtLastInsertedId(conn, handle);
             _lastError = _platform.getLastStmtError(conn, handle);
+            _lastErrorCode = _platform.getErrorCode(conn);
+            _lastUniqueErrorCode = _platform.getUniqueErrorCode(conn);
           } catch (e, st) {
             firstErr = e;
             firstStack = st;
@@ -580,7 +667,8 @@ class DbasSqliteStatement {
   ///
   /// Closes both the underlying reader and this statement before
   /// returning, so the statement is single-use — calling any execute
-  /// method on it afterwards throws [StateError].
+  /// method on it afterwards throws a [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.statementClosed].
   Future<dynamic> executeScalar({
     List<Object?>? params,
     Map<String, Object?>? nameParams,
@@ -616,11 +704,35 @@ class DbasSqliteStatement {
   /// error is pending.
   String? getLastError() => _lastError;
 
+  /// SQLite **primary** result code captured from the most recent
+  /// execute on this statement (e.g. `19` for `SQLITE_CONSTRAINT`, `5`
+  /// for `SQLITE_BUSY`).
+  ///
+  /// Populated by both execution paths:
+  ///   - `executeSql` / `executeScalar` write the codes that the
+  ///     thrown [DbasSqliteException] carried, so a caller can read
+  ///     them again after catching the exception.
+  ///   - `executeReader` writes the connection's error state at
+  ///     reader-close time alongside [getLastError] /
+  ///     [getAffectedRows] / [getLastInsertedId].
+  ///
+  /// `null` when no error was observed (last execute succeeded, or
+  /// the statement has never been executed).
+  int? getLastErrorCode() => _lastErrorCode;
+
+  /// SQLite **extended** result code captured from the most recent
+  /// execute on this statement (e.g. `2067` for
+  /// `SQLITE_CONSTRAINT_UNIQUE`, `787` for
+  /// `SQLITE_CONSTRAINT_FOREIGNKEY`). Populated by the same paths as
+  /// [getLastErrorCode]. `null` when the platform didn't queue an
+  /// extended rc.
+  int? getLastUniqueErrorCode() => _lastUniqueErrorCode;
+
   // ── Lifecycle ────────────────────────────────────────────────────────
 
   /// Closes any active reader, clears the bind buffers, and marks the
-  /// statement closed. Idempotent. Subsequent execute calls throw
-  /// [StateError].
+  /// statement closed. Idempotent. Subsequent execute calls throw a
+  /// [DbasSqliteException] with code [DbasSqliteErrorCode.statementClosed].
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -643,9 +755,17 @@ class DbasSqliteStatement {
   }
 
   void _checkUsable() {
-    if (_closed) throw StateError('Statement is closed.');
+    if (_closed) {
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.statementClosed,
+        'Statement is closed.',
+      );
+    }
     if (!_db.isOpened()) {
-      throw StateError('Database is not opened.');
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.statementDatabaseNotOpened,
+        'Database is not opened.',
+      );
     }
   }
 }
