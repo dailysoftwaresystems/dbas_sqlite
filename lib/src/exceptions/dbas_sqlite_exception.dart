@@ -366,9 +366,13 @@ DbasSqliteSubCategory _subCategoryFromRc(int rc) {
 /// Choose the factory at the call site to encode the invariant:
 ///   * [DbasSqliteException.dart] — Dart-side failure with no native
 ///     SQLite result code (closed-state guards, format errors, timeouts,
-///     queue cancellations). [sqliteCode] is always `null`.
+///     queue cancellations). Both [sqliteCode] and [sqliteUniqueCode]
+///     are `null`.
 ///   * [DbasSqliteException.sqlite] — native SQLite layer returned a
-///     non-OK rc; the rc is passed through as [sqliteCode].
+///     non-OK rc. [sqliteCode] carries the **primary** rc (e.g. `19`
+///     for `SQLITE_CONSTRAINT`); [sqliteUniqueCode] is the **extended**
+///     rc (e.g. `2067` for `SQLITE_CONSTRAINT_UNIQUE`) when the
+///     platform exposes it, otherwise `null`.
 ///
 /// [cause] / [causeStackTrace] are non-null when this exception wraps
 /// an underlying failure (the rollback-after-failed-transaction path
@@ -376,7 +380,19 @@ DbasSqliteSubCategory _subCategoryFromRc(int rc) {
 /// to recover the original error's type and structured fields.
 class DbasSqliteException implements Exception {
   final DbasSqliteErrorCode code;
+
+  /// SQLite **primary** result code — the coarse category from
+  /// `sqlite3_errcode` (e.g. `5` = `SQLITE_BUSY`, `19` =
+  /// `SQLITE_CONSTRAINT`). `null` for `.dart` factory throws.
   final int? sqliteCode;
+
+  /// SQLite **extended** result code — the unique discriminator
+  /// within a primary code (e.g. `2067` = `SQLITE_CONSTRAINT_UNIQUE`,
+  /// `787` = `SQLITE_CONSTRAINT_FOREIGNKEY`). `null` when the
+  /// platform doesn't expose extended rcs (web today) or for `.dart`
+  /// factory throws.
+  final int? sqliteUniqueCode;
+
   final String message;
   final Object? cause;
   final StackTrace? causeStackTrace;
@@ -384,12 +400,13 @@ class DbasSqliteException implements Exception {
   const DbasSqliteException._(
     this.code,
     this.sqliteCode,
+    this.sqliteUniqueCode,
     this.message, {
     this.cause,
     this.causeStackTrace,
   });
 
-  /// Dart-side failure: no native rc available. [sqliteCode] is `null`.
+  /// Dart-side failure: no native rc available.
   factory DbasSqliteException.dart(
     DbasSqliteErrorCode code,
     String message, {
@@ -399,23 +416,28 @@ class DbasSqliteException implements Exception {
       DbasSqliteException._(
         code,
         null,
+        null,
         message,
         cause: cause,
         causeStackTrace: causeStackTrace,
       );
 
-  /// Native SQLite failure: [sqliteCode] carries the rc from the
-  /// underlying C call (or the step rc returned by `sqlite3_step`).
+  /// Native SQLite failure. [sqliteCode] is the primary rc (required);
+  /// [sqliteUniqueCode] is the extended rc when the platform exposes
+  /// it (the native lib always does; the web shim returns `null`
+  /// today).
   factory DbasSqliteException.sqlite(
     DbasSqliteErrorCode code,
-    int sqliteCode,
     String message, {
+    required int sqliteCode,
+    int? sqliteUniqueCode,
     Object? cause,
     StackTrace? causeStackTrace,
   }) =>
       DbasSqliteException._(
         code,
         sqliteCode,
+        sqliteUniqueCode,
         message,
         cause: cause,
         causeStackTrace: causeStackTrace,
@@ -425,19 +447,28 @@ class DbasSqliteException implements Exception {
   /// Equivalent to `code.category`.
   DbasSqliteErrorCategory get category => code.category;
 
-  /// Fine-grained semantic interpretation of [sqliteCode] — e.g.
-  /// `duplicatedData` for a UNIQUE-index violation, `foreignKeyViolation`
-  /// for a FOREIGN KEY breach, `databaseBusy` for SQLITE_BUSY. Returns
-  /// [DbasSqliteSubCategory.notApplicable] when [sqliteCode] is `null`.
-  DbasSqliteSubCategory get subCategory => sqliteCode == null
-      ? DbasSqliteSubCategory.notApplicable
-      : _subCategoryFromRc(sqliteCode!);
+  /// Fine-grained semantic interpretation. Prefers the extended rc
+  /// ([sqliteUniqueCode]) when available — that's what carries the
+  /// specific constraint kind (UNIQUE vs FOREIGNKEY vs NOTNULL etc.).
+  /// Falls back to [sqliteCode] (primary) when no extended rc was
+  /// resolved. Returns [DbasSqliteSubCategory.notApplicable] when
+  /// neither is available.
+  DbasSqliteSubCategory get subCategory {
+    final rc = sqliteUniqueCode ?? sqliteCode;
+    return rc == null
+        ? DbasSqliteSubCategory.notApplicable
+        : _subCategoryFromRc(rc);
+  }
 
   @override
   String toString() {
     final buf = StringBuffer('DbasSqliteException(${code.name})');
-    if (sqliteCode != null) {
-      buf.write(' [sqliteCode=$sqliteCode, ${subCategory.name}]');
+    if (sqliteCode != null || sqliteUniqueCode != null) {
+      buf.write(' [sqliteCode=$sqliteCode');
+      if (sqliteUniqueCode != null) {
+        buf.write(', sqliteUniqueCode=$sqliteUniqueCode');
+      }
+      buf.write(', ${subCategory.name}]');
     }
     buf.write(': $message');
     if (cause != null) {

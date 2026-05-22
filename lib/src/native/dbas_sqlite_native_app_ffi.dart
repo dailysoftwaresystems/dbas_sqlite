@@ -438,6 +438,9 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   Pointer<Utf8> nativeGetLastDbError(Pointer<DbasSqliteDbStruct> dbPtr) =>
       _ffi.getLastDbError(dbPtr);
   @override
+  int nativeGetExtendedErrorCode(Pointer<DbasSqliteDbStruct> dbPtr) =>
+      _ffi.getExtendedErrorCode(dbPtr);
+  @override
   int nativeGetAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr) =>
       _ffi.getAffectedRows(dbPtr);
   @override
@@ -640,6 +643,7 @@ class _MainIsolateFfi {
   late final int Function(Pointer<DbasSqliteDbStruct>, Pointer<Utf8>) executeSql;
   late final int Function(Pointer<DbasSqliteDbStruct>, int) closeDb;
   late final Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>) getLastDbError;
+  late final int Function(Pointer<DbasSqliteDbStruct>) getExtendedErrorCode;
   late final int Function(Pointer<DbasSqliteDbStruct>) getAffectedRows;
   late final int Function(Pointer<DbasSqliteDbStruct>) getLastInsertedId;
   late final int Function(Pointer<DbasSqliteDbStruct>) getTotalChanges;
@@ -732,6 +736,9 @@ class _MainIsolateFfi {
     getLastDbError = lib.lookupFunction<
         Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>),
         Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>)>('GetLastDbError');
+    getExtendedErrorCode = lib.lookupFunction<
+        Int32 Function(Pointer<DbasSqliteDbStruct>),
+        int Function(Pointer<DbasSqliteDbStruct>)>('GetExtendedErrorCode');
     getAffectedRows = lib.lookupFunction<
         Int64 Function(Pointer<DbasSqliteDbStruct>),
         int Function(Pointer<DbasSqliteDbStruct>)>('GetAffectedRows');

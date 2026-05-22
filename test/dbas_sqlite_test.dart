@@ -1070,6 +1070,8 @@ void main() async {
           .having((e) => e.code, 'code',
               DbasSqliteErrorCode.bindNamedParameterNotFound)
           .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_RANGE)', 25)
+          .having((e) => e.sqliteUniqueCode,
+              'sqliteUniqueCode (SQLITE_RANGE has no extended discriminator)', 25)
           .having((e) => e.subCategory, 'subCategory',
               DbasSqliteSubCategory.rangeError)),
     );
@@ -3827,6 +3829,8 @@ void main() async {
           (e) =>
               e.code == DbasSqliteErrorCode.bindPositionalFailed &&
               e.sqliteCode == 25 /* SQLITE_RANGE */ &&
+              // RANGE has no extended discriminator — primary == extended.
+              e.sqliteUniqueCode == 25 &&
               e.subCategory == DbasSqliteSubCategory.rangeError &&
               e.message.contains('positional index 2'),
           'exception carries bindPositionalFailed + SQLITE_RANGE rc and identifies the offending bind index',
@@ -3857,22 +3861,18 @@ void main() async {
       stmt.bindInt(1, 100).bindText(2, 'good');
 
       // Override with bad params. NULL into NOT NULL → SQLITE_CONSTRAINT
-      // at step time. The execute throws and the buffer must be
-      // restored to [100, 'good']. The thrown exception carries the
-      // step rc and the NOT NULL sub-category so callers can branch on
-      // the specific constraint that fired.
+      // (primary 19) at step time, with the extended rc
+      // `SQLITE_CONSTRAINT_NOTNULL=1299`. The execute throws and the
+      // buffer must be restored to [100, 'good'].
       await expectLater(
         stmt.executeSql(params: [101, null]),
         throwsA(isA<DbasSqliteException>()
             .having((e) => e.code, 'code', DbasSqliteErrorCode.executeSqlStepFailed)
-            .having((e) => e.sqliteCode, 'sqliteCode is non-null', isNotNull)
-            .having(
-                (e) => e.subCategory,
-                'subCategory',
-                anyOf(
-                  DbasSqliteSubCategory.notNullViolation,
-                  DbasSqliteSubCategory.constraintViolation,
-                ))),
+            .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_CONSTRAINT)', 19)
+            .having((e) => e.sqliteUniqueCode,
+                'sqliteUniqueCode (SQLITE_CONSTRAINT_NOTNULL)', 1299)
+            .having((e) => e.subCategory, 'subCategory',
+                DbasSqliteSubCategory.notNullViolation)),
       );
 
       // No params on this call — must use the restored buffer.
@@ -5298,19 +5298,12 @@ void main() async {
     await db.dropDb();
   });
 
-  // The native binary currently surfaces only the PRIMARY SQLite
-  // result code (e.g. `SQLITE_CONSTRAINT=19`) rather than the
-  // EXTENDED code (e.g. `SQLITE_CONSTRAINT_UNIQUE=2067`,
-  // `SQLITE_CONSTRAINT_FOREIGNKEY=787`). The
-  // [DbasSqliteSubCategory] mapping handles both — extended codes
-  // are tested directly in
-  // "DbasSqliteException factories enforce sqliteCode invariant"
-  // below. These end-to-end tests assert the current "primary-only"
-  // behaviour: any constraint violation collapses to
-  // [DbasSqliteSubCategory.constraintViolation]. When the native lib
-  // starts calling `sqlite3_extended_errcode()`, the assertions will
-  // need to be tightened to `duplicatedData` / `foreignKeyViolation`.
-  test('UNIQUE-index violation surfaces a constraint subCategory', () async {
+  // The bundled native binary exposes `GetExtendedErrorCode`, so
+  // constraint violations carry the extended rc (e.g.
+  // `SQLITE_CONSTRAINT_UNIQUE=2067`, `SQLITE_CONSTRAINT_FOREIGNKEY=787`)
+  // which the [DbasSqliteSubCategory] mapping turns into the
+  // specific `duplicatedData` / `foreignKeyViolation` values.
+  test('UNIQUE-index violation surfaces DbasSqliteSubCategory.duplicatedData', () async {
     final db = await _createTestDb('unique_dup.db');
     await _runSql(db,
         'CREATE TABLE u (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)');
@@ -5325,22 +5318,17 @@ void main() async {
             .having((e) => e.code, 'code',
                 DbasSqliteErrorCode.executeSqlStepFailed)
             .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_CONSTRAINT)', 19)
-            .having(
-                (e) => e.subCategory,
-                'subCategory',
-                anyOf(
-                  // What we'd see once extended codes are surfaced.
-                  DbasSqliteSubCategory.duplicatedData,
-                  // What the current native binary actually surfaces.
-                  DbasSqliteSubCategory.constraintViolation,
-                ))),
+            .having((e) => e.sqliteUniqueCode,
+                'sqliteUniqueCode (SQLITE_CONSTRAINT_UNIQUE)', 2067)
+            .having((e) => e.subCategory, 'subCategory',
+                DbasSqliteSubCategory.duplicatedData)),
       );
     } finally { await dup.close(); }
     await db.closeDb();
     await db.dropDb();
   });
 
-  test('FOREIGN KEY violation surfaces a constraint subCategory', () async {
+  test('FOREIGN KEY violation surfaces DbasSqliteSubCategory.foreignKeyViolation', () async {
     final db = await _createTestDb('fk_violation.db');
     await _runSql(db, 'PRAGMA foreign_keys = ON');
     await _runSql(db, 'CREATE TABLE parent (id INTEGER PRIMARY KEY)');
@@ -5356,13 +5344,10 @@ void main() async {
             .having((e) => e.code, 'code',
                 DbasSqliteErrorCode.executeSqlStepFailed)
             .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_CONSTRAINT)', 19)
-            .having(
-                (e) => e.subCategory,
-                'subCategory',
-                anyOf(
-                  DbasSqliteSubCategory.foreignKeyViolation,
-                  DbasSqliteSubCategory.constraintViolation,
-                ))),
+            .having((e) => e.sqliteUniqueCode,
+                'sqliteUniqueCode (SQLITE_CONSTRAINT_FOREIGNKEY)', 787)
+            .having((e) => e.subCategory, 'subCategory',
+                DbasSqliteSubCategory.foreignKeyViolation)),
       );
     } finally { await bad.close(); }
     await db.closeDb();
@@ -5398,28 +5383,38 @@ void main() async {
     final dartSide = DbasSqliteException.dart(
         DbasSqliteErrorCode.statementClosed, 'closed');
     expect(dartSide.sqliteCode, isNull);
+    expect(dartSide.sqliteUniqueCode, isNull);
     expect(dartSide.subCategory, DbasSqliteSubCategory.notApplicable);
     expect(dartSide.category, DbasSqliteErrorCategory.notOpened);
 
-    final native = DbasSqliteException.sqlite(
-        DbasSqliteErrorCode.executeSqlStepFailed, 2067, 'unique violation');
-    expect(native.sqliteCode, 2067);
-    expect(native.subCategory, DbasSqliteSubCategory.duplicatedData);
-    expect(native.category, DbasSqliteErrorCategory.executeFailed);
+    // .sqlite factory: primary-only (no extended rc).
+    final primaryOnly = DbasSqliteException.sqlite(
+        DbasSqliteErrorCode.commitFailed, 'busy',
+        sqliteCode: 5);
+    expect(primaryOnly.sqliteCode, 5);
+    expect(primaryOnly.sqliteUniqueCode, isNull);
+    expect(primaryOnly.subCategory, DbasSqliteSubCategory.databaseBusy);
 
-    // Primary SQLITE_BUSY rc maps to databaseBusy.
-    final busy = DbasSqliteException.sqlite(
-        DbasSqliteErrorCode.commitFailed, 5, 'busy');
-    expect(busy.subCategory, DbasSqliteSubCategory.databaseBusy);
+    // .sqlite factory: both primary AND extended — subCategory derives
+    // from the more specific extended rc.
+    final dup = DbasSqliteException.sqlite(
+        DbasSqliteErrorCode.executeSqlStepFailed, 'unique violation',
+        sqliteCode: 19, sqliteUniqueCode: 2067);
+    expect(dup.sqliteCode, 19);
+    expect(dup.sqliteUniqueCode, 2067);
+    expect(dup.subCategory, DbasSqliteSubCategory.duplicatedData);
+    expect(dup.category, DbasSqliteErrorCategory.executeFailed);
 
-    // Extended SQLITE_CONSTRAINT_FOREIGNKEY (787) preferred over primary 19.
     final fk = DbasSqliteException.sqlite(
-        DbasSqliteErrorCode.executeSqlStepFailed, 787, 'fk');
+        DbasSqliteErrorCode.executeSqlStepFailed, 'fk',
+        sqliteCode: 19, sqliteUniqueCode: 787);
     expect(fk.subCategory, DbasSqliteSubCategory.foreignKeyViolation);
 
-    // Unknown rc → DbasSqliteSubCategory.other.
+    // Unknown extended rc → DbasSqliteSubCategory.other (extended wins
+    // over primary as long as it's non-null).
     final unknown = DbasSqliteException.sqlite(
-        DbasSqliteErrorCode.executeSqlStepFailed, 99999, 'unknown');
+        DbasSqliteErrorCode.executeSqlStepFailed, 'unknown',
+        sqliteCode: 1, sqliteUniqueCode: 99999);
     expect(unknown.subCategory, DbasSqliteSubCategory.other);
 
     // cause + causeStackTrace flow through.

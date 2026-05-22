@@ -344,22 +344,30 @@ class DbasSqlite {
       final rc = await _platform.closeDb(_db!, checkpoint: false);
       if (rc == sqliteBusy) {
         final err = _platform.getLastDbError(_db!) ?? 'live handles';
+        // Capture both rcs BEFORE nulling _db — the helpers need the
+        // live connection to call sqlite3_errcode / sqlite3_extended_errcode.
+        // Fall back to the observed `rc` when the helpers return null
+        // (the C lib didn't queue an active error on the connection).
+        final primaryRc = _platform.getErrorCode(_db!) ?? rc;
+        final uniqueRc = _platform.getUniqueErrorCode(_db!) ?? primaryRc;
         _db = null;
         if (stmtCloseFailures > 0) {
           throw DbasSqliteException.sqlite(
             DbasSqliteErrorCode.closeDbBusyWithStmtFinalizeFailures,
-            rc,
             'Cannot close database "$dbName": $err. '
             '$stmtCloseFailures tracked statement(s) failed to finalize '
             '(see prior log entries for the underlying errors).',
+            sqliteCode: primaryRc,
+            sqliteUniqueCode: uniqueRc,
           );
         }
         throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.closeDbBusyLeakedHandle,
-          rc,
           'Cannot close database "$dbName": $err. '
           'A statement handle was leaked outside the tracked set; '
           'this is a bug — please report.',
+          sqliteCode: primaryRc,
+          sqliteUniqueCode: uniqueRc,
         );
       }
       _db = null;
@@ -459,10 +467,12 @@ class DbasSqlite {
     final rc = await _platform.setBusyTimeout(_db!, ms);
     if (rc != sqliteOk) {
       final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+      final primary = _platform.getErrorCode(_db!) ?? rc;
       throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.setBusyTimeoutWriterFailed,
-        rc,
         'setBusyTimeout failed on writer: $err',
+        sqliteCode: primary,
+        sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
       );
     }
 
@@ -491,13 +501,15 @@ class DbasSqlite {
         acquired.add(readerPtr);
       }
       for (final readerPtr in acquired) {
-        final rrc = await _platform.setBusyTimeout(
-            DbasSqliteDb(dbName, readerPtr), ms);
+        final readerDb = DbasSqliteDb(dbName, readerPtr);
+        final rrc = await _platform.setBusyTimeout(readerDb, ms);
         if (rrc != sqliteOk) {
+          final primary = _platform.getErrorCode(readerDb) ?? rrc;
           throw DbasSqliteException.sqlite(
             DbasSqliteErrorCode.setBusyTimeoutReaderFailed,
-            rrc,
             'setBusyTimeout failed on a pool reader: rc=$rrc',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(readerDb) ?? primary,
           );
         }
       }
@@ -531,10 +543,12 @@ class DbasSqlite {
     final rc = await _platform.enableWal(_db!);
     if (rc != sqliteOk) {
       final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+      final primary = _platform.getErrorCode(_db!) ?? rc;
       throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.enableWalFailed,
-        rc,
         'enableWal failed: $err',
+        sqliteCode: primary,
+        sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
       );
     }
   }
@@ -566,10 +580,12 @@ class DbasSqlite {
       final rc = await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        final primary = _platform.getErrorCode(_db!) ?? rc;
         throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.beginTransactionFailed,
-          rc,
           'BEGIN TRANSACTION failed: $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
         );
       }
       _transactionHasWrites = false;
@@ -587,10 +603,12 @@ class DbasSqlite {
       final rc = await _platform.executeSql(_db!, 'COMMIT');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        final primary = _platform.getErrorCode(_db!) ?? rc;
         throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.commitFailed,
-          rc,
           'COMMIT failed: $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
         );
       }
       _isInTransaction = false;
@@ -617,13 +635,16 @@ class DbasSqlite {
     if (!_isInTransaction) return;
     Object? rollbackCause;
     StackTrace? rollbackCauseStack;
-    int? rollbackRc;
+    int? rollbackPrimaryRc;
+    int? rollbackUniqueRc;
     String rollbackDetail = '';
     try {
       final rc = await _platform.executeSql(_db!, 'ROLLBACK');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        rollbackRc = rc;
+        rollbackPrimaryRc = _platform.getErrorCode(_db!) ?? rc;
+        rollbackUniqueRc =
+            _platform.getUniqueErrorCode(_db!) ?? rollbackPrimaryRc;
         rollbackDetail = 'ROLLBACK rc=$rc: $err';
         rollbackCauseStack = StackTrace.current;
       }
@@ -632,7 +653,8 @@ class DbasSqlite {
       rollbackCauseStack = st;
       rollbackDetail = e.toString();
       if (e is DbasSqliteException) {
-        rollbackRc = e.sqliteCode;
+        rollbackPrimaryRc = e.sqliteCode;
+        rollbackUniqueRc = e.sqliteUniqueCode;
       }
     } finally {
       _isInTransaction = false;
@@ -642,11 +664,12 @@ class DbasSqlite {
     if (rollbackCauseStack != null) {
       final msg =
           'ROLLBACK failed; database may still be in a transaction: $rollbackDetail';
-      final ex = rollbackRc != null
+      final ex = rollbackPrimaryRc != null
           ? DbasSqliteException.sqlite(
               DbasSqliteErrorCode.rollbackFailed,
-              rollbackRc,
               msg,
+              sqliteCode: rollbackPrimaryRc,
+              sqliteUniqueCode: rollbackUniqueRc,
               cause: rollbackCause,
               causeStackTrace: rollbackCauseStack,
             )
@@ -696,19 +719,27 @@ class DbasSqlite {
           error: rollbackError,
           stackTrace: rollbackStack,
         );
-        final liftedRc = originalError is DbasSqliteException
-            ? originalError.sqliteCode
-            : (rollbackError is DbasSqliteException
-                ? rollbackError.sqliteCode
-                : null);
+        // Lift the most specific rc/extended-rc pair we can find.
+        // Prefer originalError's codes since it's the proximate cause;
+        // fall back to the rollback failure's codes.
+        int? liftedPrimary;
+        int? liftedUnique;
+        if (originalError is DbasSqliteException) {
+          liftedPrimary = originalError.sqliteCode;
+          liftedUnique = originalError.sqliteUniqueCode;
+        } else if (rollbackError is DbasSqliteException) {
+          liftedPrimary = rollbackError.sqliteCode;
+          liftedUnique = rollbackError.sqliteUniqueCode;
+        }
         final msg = 'Transaction failed: $originalError. '
             'Additionally, rollback also failed: $rollbackError. '
             'The database may be in an inconsistent state.';
-        final ex = liftedRc != null
+        final ex = liftedPrimary != null
             ? DbasSqliteException.sqlite(
                 DbasSqliteErrorCode.transactionRollbackAlsoFailed,
-                liftedRc,
                 msg,
+                sqliteCode: liftedPrimary,
+                sqliteUniqueCode: liftedUnique,
                 cause: originalError,
                 causeStackTrace: originalStack,
               )
@@ -750,10 +781,12 @@ class DbasSqlite {
       final rc = await _platform.executeSql(_db!, 'VACUUM');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
+        final primary = _platform.getErrorCode(_db!) ?? rc;
         throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.vacuumFailed,
-          rc,
           'VACUUM failed: $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(_db!) ?? primary,
         );
       }
     } finally {

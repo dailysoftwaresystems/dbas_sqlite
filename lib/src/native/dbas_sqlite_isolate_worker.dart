@@ -98,6 +98,9 @@ dynamic _dispatch(_WorkerFfi ffi, IsolateCommand cmd) {
       final ptr = ffi.getLastDbError(_resolveDb(args['dbPtr'] as int));
       return (ptr == nullptr || ptr.address == 0) ? null : ptr.toDartString();
 
+    case 'getExtendedErrorCode':
+      return ffi.getExtendedErrorCode(_resolveDb(args['dbPtr'] as int));
+
     case 'getAffectedRows':
       return ffi.getAffectedRows(_resolveDb(args['dbPtr'] as int));
     case 'getLastInsertedId':
@@ -528,6 +531,7 @@ class _WorkerFfi {
   late final int Function(Pointer<DbasSqliteDbStruct>, Pointer<Utf8>) executeSql;
   late final int Function(Pointer<DbasSqliteDbStruct>, int) closeDb;
   late final Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>) getLastDbError;
+  late final int Function(Pointer<DbasSqliteDbStruct>) getExtendedErrorCode;
   late final int Function(Pointer<DbasSqliteDbStruct>) getAffectedRows;
   late final int Function(Pointer<DbasSqliteDbStruct>) getLastInsertedId;
   late final int Function(Pointer<DbasSqliteDbStruct>) getTotalChanges;
@@ -614,6 +618,9 @@ class _WorkerFfi {
     getLastDbError = lib.lookupFunction<
         Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>),
         Pointer<Utf8> Function(Pointer<DbasSqliteDbStruct>)>('GetLastDbError');
+    getExtendedErrorCode = lib.lookupFunction<
+        Int32 Function(Pointer<DbasSqliteDbStruct>),
+        int Function(Pointer<DbasSqliteDbStruct>)>('GetExtendedErrorCode');
     getAffectedRows = lib.lookupFunction<
         Int64 Function(Pointer<DbasSqliteDbStruct>),
         int Function(Pointer<DbasSqliteDbStruct>)>('GetAffectedRows');

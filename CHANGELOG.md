@@ -37,11 +37,14 @@ All notable changes to this project will be documented in this file.
     `foreignKeyViolation` (787), `notNullViolation` (1299),
     `checkViolation` (275), `corruptDatabase`, `diskFull`,
     `readOnlyDatabase`, `valueTooLarge`, `rangeError`, and ~20 more.
-    Available as `exception.subCategory`. Note: with the current
-    bundled native binary only primary rcs surface (constraint
-    violations collapse to `constraintViolation`); the mapping
-    handles extended codes correctly for any path that does provide
-    them.
+    Available as `exception.subCategory`. The native binary's
+    `GetExtendedErrorCode` FFI entry point is wired through the
+    platform layer so the specific extended rc (e.g. UNIQUE 2067 vs
+    FOREIGNKEY 787) flows all the way through to `sqliteCode` and
+    drives `subCategory`. Web returns `null` from
+    `getExtendedErrorCode` today and continues to surface the
+    primary rc — a follow-up will plumb the worker's `extendedRc`
+    through the web shim.
 
 - **`DbasSqlite.openDb()` is now idempotent.** A second call on an
   already-open instance is a no-op. Calling with a different

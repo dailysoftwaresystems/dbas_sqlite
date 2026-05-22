@@ -43,6 +43,8 @@ class DbasSqliteStatement {
   int _lastAffectedRows = -1;
   int _lastInsertedId = -1;
   String? _lastError;
+  int? _lastErrorCode;
+  int? _lastUniqueErrorCode;
 
   /// Internal — see [DbasSqlite.prepareQuery].
   DbasSqliteStatement.internal(
@@ -241,10 +243,12 @@ class DbasSqliteStatement {
         if (rc != sqliteOk && rc != sqliteRow && rc != sqliteDone) {
           final err = _platform.getLastStmtError(conn, handle) ??
               'Unknown error ($rc).';
+          final primary = _platform.getErrorCode(conn) ?? rc;
           throw DbasSqliteException.sqlite(
             DbasSqliteErrorCode.executeSqlStepFailed,
-            rc,
             'It was not possible to run the query ($rc): $err',
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
           );
         }
 
@@ -282,10 +286,12 @@ class DbasSqliteStatement {
       if (rc != sqliteOk) {
         final err = _platform.getLastStmtError(conn, handle) ??
             'Bind failed at positional index $index ($rc).';
+        final primary = _platform.getErrorCode(conn) ?? rc;
         throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.bindPositionalFailed,
-          rc,
           'Bind failed at positional index $index: $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
         );
       }
     }
@@ -297,10 +303,12 @@ class DbasSqliteStatement {
       final rc = await _bindNamed(conn, handle, name, entry.value);
       if (rc == sqliteRange) {
         if (_db.throwOnMissingNamedParams) {
+          final primary = _platform.getErrorCode(conn) ?? rc;
           throw DbasSqliteException.sqlite(
             DbasSqliteErrorCode.bindNamedParameterNotFound,
-            rc,
             "Named parameter '$name' not found in the prepared statement",
+            sqliteCode: primary,
+            sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
           );
         }
         continue;
@@ -308,10 +316,12 @@ class DbasSqliteStatement {
       if (rc != sqliteOk) {
         final err = _platform.getLastStmtError(conn, handle) ??
             'Bind failed for named parameter "$name" ($rc).';
+        final primary = _platform.getErrorCode(conn) ?? rc;
         throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.bindNamedFailed,
-          rc,
           'Bind failed for "$name": $err',
+          sqliteCode: primary,
+          sqliteUniqueCode: _platform.getUniqueErrorCode(conn) ?? primary,
         );
       }
     }
@@ -523,6 +533,9 @@ class DbasSqliteStatement {
             _lastAffectedRows = _platform.getStmtAffectedRows(conn, handle);
             _lastInsertedId = _platform.getStmtLastInsertedId(conn, handle);
             _lastError = _platform.getLastStmtError(conn, handle);
+            _lastErrorCode = _platform.getErrorCode(conn);
+            _lastUniqueErrorCode = _platform.getUniqueErrorCode(conn) ??
+                _lastErrorCode;
           } catch (e, st) {
             firstErr = e;
             firstStack = st;
@@ -651,6 +664,19 @@ class DbasSqliteStatement {
   /// Most recent statement-scoped error message. `null` when no
   /// error is pending.
   String? getLastError() => _lastError;
+
+  /// SQLite **primary** result code captured at the end of the most
+  /// recent reader iteration (e.g. `19` for `SQLITE_CONSTRAINT`, `5`
+  /// for `SQLITE_BUSY`). `null` when no error was observed or the
+  /// statement has never been stepped through a reader.
+  int? getLastErrorCode() => _lastErrorCode;
+
+  /// SQLite **extended** result code captured at the end of the most
+  /// recent reader iteration (e.g. `2067` for `SQLITE_CONSTRAINT_UNIQUE`,
+  /// `787` for `SQLITE_CONSTRAINT_FOREIGNKEY`). Falls back to the
+  /// primary rc when the platform doesn't expose an extended rc.
+  /// `null` when no error was observed.
+  int? getLastUniqueErrorCode() => _lastUniqueErrorCode;
 
   // ── Lifecycle ────────────────────────────────────────────────────────
 

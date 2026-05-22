@@ -105,6 +105,7 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   int nativeExecuteSql(Pointer<DbasSqliteDbStruct> dbPtr, Pointer<Utf8> sql);
   int nativeCloseDb(Pointer<DbasSqliteDbStruct> dbPtr, int checkpoint);
   Pointer<Utf8> nativeGetLastDbError(Pointer<DbasSqliteDbStruct> dbPtr);
+  int nativeGetExtendedErrorCode(Pointer<DbasSqliteDbStruct> dbPtr);
   int nativeGetAffectedRows(Pointer<DbasSqliteDbStruct> dbPtr);
   int nativeGetLastInsertedId(Pointer<DbasSqliteDbStruct> dbPtr);
   int nativeGetTotalChanges(Pointer<DbasSqliteDbStruct> dbPtr);
@@ -292,6 +293,27 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   String? getLastDbError(int dbPtr) {
     final ptr = nativeGetLastDbError(resolveDbPtr(dbPtr));
     return (ptr == nullptr || ptr.address == 0) ? null : ptr.toDartString();
+  }
+
+  @override
+  int? getUniqueErrorCode(int dbPtr) {
+    // Returns null (rather than 0) when the connection has no active
+    // error — some bind-time failures (e.g. SQLITE_RANGE from
+    // `sqlite3_bind_*`) propagate the rc to the caller without
+    // updating `sqlite3_extended_errcode`. Callers fall back to the
+    // primary rc they observed at the failing call site.
+    final ext = nativeGetExtendedErrorCode(resolveDbPtr(dbPtr));
+    return ext == 0 ? null : ext;
+  }
+
+  @override
+  int? getErrorCode(int dbPtr) {
+    // SQLite encodes the primary code in the low byte of the extended
+    // code, so deriving one from the other avoids a second FFI lookup
+    // for `sqlite3_errcode`. Returns null if the lib reports no error
+    // (extended == 0).
+    final ext = nativeGetExtendedErrorCode(resolveDbPtr(dbPtr));
+    return ext == 0 ? null : (ext & 0xFF);
   }
 
   @override

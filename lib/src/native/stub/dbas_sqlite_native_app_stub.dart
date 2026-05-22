@@ -50,6 +50,10 @@ class DbasSqliteNativeApp extends DbasSqliteNativeInterface {
   @override
   String? getLastDbError(int dbPtr) => throw UnsupportedError(_msg);
   @override
+  int? getErrorCode(int dbPtr) => throw UnsupportedError(_msg);
+  @override
+  int? getUniqueErrorCode(int dbPtr) => throw UnsupportedError(_msg);
+  @override
   int getAffectedRows(int dbPtr) => throw UnsupportedError(_msg);
   @override
   int getLastInsertedId(int dbPtr) => throw UnsupportedError(_msg);

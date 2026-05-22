@@ -84,10 +84,12 @@ class DbasSqliteReader {
         error = 'Misuse: possibly missing or invalid bind.';
       }
       error ??= 'Unknown error ($readResult).';
+      final primary = _platform.getErrorCode(_conn) ?? readResult;
       throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.readRowFailed,
-        readResult,
         'It was not possible to run the query ($readResult): $error',
+        sqliteCode: primary,
+        sqliteUniqueCode: _platform.getUniqueErrorCode(_conn) ?? primary,
       );
     }
 

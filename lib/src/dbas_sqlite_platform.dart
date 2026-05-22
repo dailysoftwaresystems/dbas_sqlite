@@ -59,6 +59,28 @@ final class DbasSqlitePlatform {
   Future<int> closeDb(DbasSqliteDb db, {bool checkpoint = false}) async =>
       await _delegate[db.name]!.closeDb(db.ptr, checkpoint: checkpoint);
 
+  /// SQLite **primary** result code for [db]'s last failed operation
+  /// (e.g. `19` for `SQLITE_CONSTRAINT`, `5` for `SQLITE_BUSY`). On
+  /// native this is the low byte of [getUniqueErrorCode]; on web
+  /// returns `null` until the worker's `rc` field is plumbed through.
+  ///
+  /// MUST be called right after observing a non-OK rc from a C call
+  /// against the same connection; otherwise the result may reflect a
+  /// different operation.
+  int? getErrorCode(DbasSqliteDb db) =>
+      _delegate[db.name]!.getErrorCode(db.ptr);
+
+  /// SQLite **extended** result code for [db]'s last failed operation
+  /// — the unique discriminator within a primary code (e.g. `2067` for
+  /// `SQLITE_CONSTRAINT_UNIQUE`, `787` for `SQLITE_CONSTRAINT_FOREIGNKEY`).
+  /// Returned by the native lib's `GetExtendedErrorCode` FFI entry
+  /// point. Web returns `null` (today).
+  ///
+  /// Same temporal constraint as [getErrorCode]: call right after the
+  /// failing rc is observed.
+  int? getUniqueErrorCode(DbasSqliteDb db) =>
+      _delegate[db.name]!.getUniqueErrorCode(db.ptr);
+
   // ── File operations ──────────────────────────────────────────────────
 
   Future<bool> databaseExists(String fileName) async {

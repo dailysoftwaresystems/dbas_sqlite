@@ -27,6 +27,55 @@ extension type _JSObj._(JSObject _) implements JSObject {
 @JS('Number')
 external JSNumber _jsToNumber(JSAny? value);
 
+/// Exception carrying the SQLite rc / extended rc reported by the
+/// worker's `postErr` envelope. Every error path through this pool
+/// rejects with one of these (with [sqliteCode] / [sqliteUniqueCode]
+/// being `null` only when the worker omitted them — e.g. internal
+/// protocol failures that never reached the C library).
+///
+/// Consumers (notably [DbasSqliteNativeWeb]) downcast to this type to
+/// surface the codes on the outgoing [DbasSqliteException] without
+/// substring-matching message text.
+class DbasSqliteWebWorkerError implements Exception {
+  final String message;
+  final int? sqliteCode;
+  final int? sqliteUniqueCode;
+
+  DbasSqliteWebWorkerError(this.message,
+      {this.sqliteCode, this.sqliteUniqueCode});
+
+  @override
+  String toString() {
+    if (sqliteCode == null && sqliteUniqueCode == null) return message;
+    final buf = StringBuffer(message)..write(' [');
+    if (sqliteCode != null) buf.write('rc=$sqliteCode');
+    if (sqliteUniqueCode != null) {
+      if (sqliteCode != null) buf.write(', ');
+      buf.write('extendedRc=$sqliteUniqueCode');
+    }
+    buf.write(']');
+    return buf.toString();
+  }
+}
+
+/// Builds a [DbasSqliteWebWorkerError] from the dartified `err` map
+/// returned in the worker's `error` envelope. The map shape is
+/// `{code, message, rc?, extendedRc?}` per `postErr` in the worker.
+/// Falls back to `err.toString()` when the shape is non-Map (defensive).
+DbasSqliteWebWorkerError _workerErrorFromJsError(Object? err) {
+  if (err is Map) {
+    final msg = (err['message'] ?? err.toString()).toString();
+    final rc = err['rc'];
+    final extRc = err['extendedRc'];
+    return DbasSqliteWebWorkerError(
+      msg,
+      sqliteCode: rc is num ? rc.toInt() : null,
+      sqliteUniqueCode: extRc is num ? extRc.toInt() : null,
+    );
+  }
+  return DbasSqliteWebWorkerError(err?.toString() ?? 'Unknown worker error');
+}
+
 /// Per-DB web pool backed by a single Web Worker running `dbas_sqlite_worker.js`.
 ///
 /// The worker loads the WASM module, initializes OPFS, and opens the database.
@@ -74,9 +123,7 @@ class DbasSqliteWebPool {
       final completer = _requests.remove(id);
       if (completer == null) return;
       if (data.containsKey('error') && data['error'] != null) {
-        final err = data['error'];
-        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(data['error']));
       } else {
         completer.complete(data['result']);
       }
@@ -188,8 +235,7 @@ class DbasSqliteWebPool {
       final errorProp = jsData['error'];
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         final err = (errorProp as JSObject).dartify();
-        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(err));
         return;
       }
       final resultProp = jsData['result'];
@@ -300,9 +346,7 @@ class DbasSqliteWebPool {
       final errorProp = jsData['error'];
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         final err = (errorProp as JSObject).dartify();
-        final msg =
-            err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(err));
         return;
       }
       final resultProp = jsData['result'];
@@ -404,14 +448,13 @@ class DbasSqliteWebPool {
       final errorProp = jsData['error'];
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         final err = (errorProp as JSObject).dartify();
-        final msg =
-            err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(err));
         return;
       }
       final resultProp = jsData['result'];
       if (resultProp == null || resultProp.isUndefinedOrNull) {
-        completer.completeError(Exception('readRow: empty result'));
+        completer.completeError(
+            DbasSqliteWebWorkerError('readRow: empty result'));
         return;
       }
       final result = resultProp as _JSObj;
@@ -481,14 +524,13 @@ class DbasSqliteWebPool {
       final errorProp = jsData['error'];
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         final err = (errorProp as JSObject).dartify();
-        final msg =
-            err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(err));
         return;
       }
       final resultProp = jsData['result'];
       if (resultProp == null || resultProp.isUndefinedOrNull) {
-        completer.completeError(Exception('readRows: empty result'));
+        completer.completeError(
+            DbasSqliteWebWorkerError('readRows: empty result'));
         return;
       }
       final result = resultProp as _JSObj;
@@ -579,9 +621,7 @@ class DbasSqliteWebPool {
       final errorProp = jsData['error'];
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         final err = (errorProp as JSObject).dartify();
-        final msg =
-            err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(err));
         return;
       }
       final resultProp = jsData['result'];
@@ -618,9 +658,7 @@ class DbasSqliteWebPool {
       final errorProp = jsData['error'];
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         final err = (errorProp as JSObject).dartify();
-        final msg =
-            err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        completer.completeError(Exception(msg.toString()));
+        completer.completeError(_workerErrorFromJsError(err));
         return;
       }
       final resultProp = jsData['result'];
@@ -730,8 +768,7 @@ class DbasSqliteWebPool {
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         _streamHandlers.remove(id);
         final err = (errorProp as JSObject).dartify();
-        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        final exception = Exception(msg.toString());
+        final exception = _workerErrorFromJsError(err);
         if (!readyCompleter.isCompleted) readyCompleter.completeError(exception);
         ackCompleter?.completeError(exception);
         if (!endCompleter.isCompleted) endCompleter.completeError(exception);
@@ -832,8 +869,7 @@ class DbasSqliteWebPool {
       if (errorProp != null && !errorProp.isUndefinedOrNull) {
         _streamHandlers.remove(id);
         final err = (errorProp as JSObject).dartify();
-        final msg = err is Map ? (err['message'] ?? err.toString()) : err.toString();
-        if (!completer.isCompleted) completer.completeError(Exception(msg.toString()));
+        if (!completer.isCompleted) completer.completeError(_workerErrorFromJsError(err));
         return;
       }
 
