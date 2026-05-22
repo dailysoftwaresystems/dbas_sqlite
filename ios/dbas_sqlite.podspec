@@ -14,12 +14,13 @@ Pod::Spec.new do |s|
   s.license          = { :type => 'Apache-2.0', :file => '../LICENSE' }
   s.author           = { pubspec['author_name'] => pubspec['author_email'] }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  s.source_files = 'dbas_sqlite/Sources/dbas_sqlite/**/*.swift'
+  s.resource_bundles = {'dbas_sqlite_privacy' => ['dbas_sqlite/Sources/dbas_sqlite/PrivacyInfo.xcprivacy']}
   s.dependency 'Flutter'
   s.platform = :ios, '16.0'
 
   s.swift_version = '5.0'
-  s.vendored_frameworks = 'ios/dbas_sqlite.xcframework'
+  s.vendored_frameworks = 'dbas_sqlite/dbas_sqlite.xcframework'
   s.libraries = 'c++'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
@@ -30,10 +31,4 @@ Pod::Spec.new do |s|
     'OTHER_LDFLAGS' => '-all_load'
   }
   s.static_framework = true
-
-  # If your plugin requires a privacy manifest, for example if it uses any
-  # required reason APIs, update the PrivacyInfo.xcprivacy file to describe your
-  # plugin's privacy impact, and then uncomment this line. For more information,
-  # see https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
-  # s.resource_bundles = {'dbas_sqlite_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
 end

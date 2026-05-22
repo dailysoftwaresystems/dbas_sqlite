@@ -1,6 +1,6 @@
 add_library(dbas_sqlite_native STATIC IMPORTED GLOBAL)
 set_target_properties(dbas_sqlite_native PROPERTIES
-    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/dbas_sqlite.xcframework/macos-arm64_x86_64/dbas_sqlite.a"
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/dbas_sqlite/dbas_sqlite.xcframework/macos-arm64_x86_64/dbas_sqlite.a"
 )
 
 # `dbas_sqlite` is the plugin target Flutter injects (matches `name:` in

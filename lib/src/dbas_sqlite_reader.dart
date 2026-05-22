@@ -46,16 +46,13 @@ class DbasSqliteReader {
   /// This makes [getColumnCount] / [getColumnName] return correct
   /// values BEFORE the first [readRow] call.
   DbasSqliteReader.internal({
-    required DbasSqliteDb conn,
-    required int handle,
-    required DbasSqlitePlatform platform,
-    required Future<void> Function() onClose,
+    required this._conn,
+    required this._handle,
+    required this._platform,
+    required this._onClose,
     int initialColumnCount = 0,
     List<String> initialColumnNames = const [],
-  })  : _conn = conn,
-        _handle = handle,
-        _platform = platform,
-        _onClose = onClose {
+  }) {
     _rowCache.columnCount = initialColumnCount;
     _rowCache.columnNames = initialColumnNames;
   }

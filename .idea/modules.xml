@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/DBAS.SQLite.Flutter.iml" filepath="$PROJECT_DIR$/.idea/DBAS.SQLite.Flutter.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/dbas_sqlite.iml" filepath="$PROJECT_DIR$/.idea/dbas_sqlite.iml" />
     </modules>
   </component>
 </project>
