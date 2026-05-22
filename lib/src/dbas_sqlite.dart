@@ -6,6 +6,7 @@ import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
     if (dart.library.js_interop) 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_statement.dart';
+import 'package:dbas_sqlite/src/exceptions/dbas_sqlite_exception.dart';
 import 'package:dbas_sqlite/src/helpers/paths/dbas_sqlite_paths.dart' as paths;
 import 'package:dbas_sqlite/src/helpers/dbas_sqlite_platform_util.dart';
 import 'package:dbas_sqlite/src/native/dbas_sqlite_native_interface.dart';
@@ -307,13 +308,17 @@ class DbasSqlite {
         final err = _platform.getLastDbError(_db!) ?? 'live handles';
         _db = null;
         if (stmtCloseFailures > 0) {
-          throw StateError(
+          throw DbasSqliteException(
+            DbasSqliteErrorCode.closeDbBusyWithStmtFinalizeFailures,
+            rc,
             'Cannot close database "$dbName": $err. '
             '$stmtCloseFailures tracked statement(s) failed to finalize '
             '(see prior log entries for the underlying errors).',
           );
         }
-        throw StateError(
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.closeDbBusyLeakedHandle,
+          rc,
           'Cannot close database "$dbName": $err. '
           'A statement handle was leaked outside the tracked set; '
           'this is a bug — please report.',
@@ -340,8 +345,11 @@ class DbasSqlite {
   /// auto-closes any still-open statements as a safety net.
   Future<DbasSqliteStatement> prepareQuery(String sql) async {
     if (!isOpened()) {
-      throw StateError(
-          'Database is not opened. Please open the database before preparing.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.prepareQueryDatabaseNotOpened,
+        null,
+        'Database is not opened. Please open the database before preparing.',
+      );
     }
     final stmt = DbasSqliteStatement.internal(this, _platform, sql);
     _activeStatements.add(stmt);
@@ -394,7 +402,11 @@ class DbasSqlite {
   /// must not depend on this call to apply it.
   Future<void> setBusyTimeout(int ms) async {
     if (_db == null) {
-      throw StateError('Database is not opened.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.setBusyTimeoutDatabaseNotOpened,
+        null,
+        'Database is not opened.',
+      );
     }
     if (kIsWeb) {
       // The JS pool does not expose a per-connection busy_timeout
@@ -406,7 +418,11 @@ class DbasSqlite {
     final rc = await _platform.setBusyTimeout(_db!, ms);
     if (rc != sqliteOk) {
       final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-      throw Exception('setBusyTimeout failed on writer: $err');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.setBusyTimeoutWriterFailed,
+        rc,
+        'setBusyTimeout failed on writer: $err',
+      );
     }
 
     if (_poolPtr == null || _readerPoolSize == 0) return;
@@ -425,7 +441,9 @@ class DbasSqlite {
         final readerPtr =
             await delegate.poolAcquireReaderBlocking(_poolPtr!, acquireMs);
         if (readerPtr == 0) {
-          throw StateError(
+          throw DbasSqliteException(
+            DbasSqliteErrorCode.setBusyTimeoutReaderBusy,
+            null,
             'setBusyTimeout: pool reader $i was busy for '
             '${acquireMs}ms — close in-flight readers first.',
           );
@@ -436,7 +454,11 @@ class DbasSqlite {
         final rrc = await _platform.setBusyTimeout(
             DbasSqliteDb(dbName, readerPtr), ms);
         if (rrc != sqliteOk) {
-          throw Exception('setBusyTimeout failed on a pool reader: rc=$rrc');
+          throw DbasSqliteException(
+            DbasSqliteErrorCode.setBusyTimeoutReaderFailed,
+            rrc,
+            'setBusyTimeout failed on a pool reader: rc=$rrc',
+          );
         }
       }
     } finally {
@@ -461,12 +483,20 @@ class DbasSqlite {
   /// failing to set WAL).
   Future<void> enableWal() async {
     if (_db == null) {
-      throw StateError('Database is not opened.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.enableWalDatabaseNotOpened,
+        null,
+        'Database is not opened.',
+      );
     }
     final rc = await _platform.enableWal(_db!);
     if (rc != sqliteOk) {
       final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-      throw Exception('enableWal failed: $err');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.enableWalFailed,
+        rc,
+        'enableWal failed: $err',
+      );
     }
   }
 
@@ -479,20 +509,31 @@ class DbasSqlite {
   /// already inside a transaction.
   Future<void> beginTransaction() async {
     if (!isOpened()) {
-      throw StateError(
-          'Database is not opened. Please open the database before starting a transaction.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.beginTransactionDatabaseNotOpened,
+        null,
+        'Database is not opened. Please open the database before starting a transaction.',
+      );
     }
     if (_isInTransaction) return;
 
     await _acquireWriterLock();
     try {
       if (!isOpened()) {
-        throw StateError('Database was closed while waiting for writer lock.');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.beginTransactionDatabaseClosedWaitingLock,
+          null,
+          'Database was closed while waiting for writer lock.',
+        );
       }
       final rc = await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        throw Exception('BEGIN TRANSACTION failed: $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.beginTransactionFailed,
+          rc,
+          'BEGIN TRANSACTION failed: $err',
+        );
       }
       _transactionHasWrites = false;
       _isInTransaction = true;
@@ -509,7 +550,11 @@ class DbasSqlite {
       final rc = await _platform.executeSql(_db!, 'COMMIT');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        throw Exception('COMMIT failed: $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.commitFailed,
+          rc,
+          'COMMIT failed: $err',
+        );
       }
       _isInTransaction = false;
       _transactionHasWrites = false;
@@ -532,12 +577,14 @@ class DbasSqlite {
     if (!_isInTransaction) return;
     Object? rollbackErr;
     StackTrace? rollbackStack;
+    int? rollbackRc;
     try {
       final rc = await _platform.executeSql(_db!, 'ROLLBACK');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        rollbackErr = Exception('ROLLBACK rc=$rc: $err');
+        rollbackErr = 'ROLLBACK rc=$rc: $err';
         rollbackStack = StackTrace.current;
+        rollbackRc = rc;
       }
     } catch (e, st) {
       rollbackErr = e;
@@ -549,7 +596,9 @@ class DbasSqlite {
     }
     if (rollbackErr != null) {
       Error.throwWithStackTrace(
-        StateError(
+        DbasSqliteException(
+          DbasSqliteErrorCode.rollbackFailed,
+          rollbackRc,
           'ROLLBACK failed; database may still be in a transaction at '
           'the SQLite layer: $rollbackErr',
         ),
@@ -563,7 +612,11 @@ class DbasSqlite {
   /// rolled back and the exception is rethrown.
   Future<void> transaction(Future<void> Function(DbasSqlite db) action) async {
     if (_isInTransaction) {
-      throw StateError('A transaction is already active. Cannot nest transactions.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.transactionAlreadyActive,
+        null,
+        'A transaction is already active. Cannot nest transactions.',
+      );
     }
     await beginTransaction();
     try {
@@ -573,7 +626,9 @@ class DbasSqlite {
       try {
         await rollback();
       } catch (rollbackError) {
-        throw StateError(
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.transactionRollbackAlsoFailed,
+          null,
           'Transaction failed: $originalError. '
           'Additionally, rollback also failed: $rollbackError. '
           'The database may be in an inconsistent state.',
@@ -587,20 +642,36 @@ class DbasSqlite {
   /// transaction.
   Future<void> vacuum() async {
     if (!isOpened()) {
-      throw StateError('Database is not opened.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.vacuumDatabaseNotOpened,
+        null,
+        'Database is not opened.',
+      );
     }
     if (_isInTransaction) {
-      throw StateError('Cannot run VACUUM inside a transaction.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.vacuumInsideTransaction,
+        null,
+        'Cannot run VACUUM inside a transaction.',
+      );
     }
     await _acquireWriterLock();
     try {
       if (!isOpened()) {
-        throw StateError('Database was closed while waiting for writer lock.');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.vacuumDatabaseClosedWaitingLock,
+          null,
+          'Database was closed while waiting for writer lock.',
+        );
       }
       final rc = await _platform.executeSql(_db!, 'VACUUM');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        throw Exception('VACUUM failed: $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.vacuumFailed,
+          rc,
+          'VACUUM failed: $err',
+        );
       }
     } finally {
       _releaseWriterLock();
@@ -630,7 +701,11 @@ class DbasSqlite {
   void _cancelWriterWaitQueue() {
     while (_writerWaitQueue.isNotEmpty) {
       _writerWaitQueue.removeFirst().completeError(
-        StateError('Database was closed while waiting for writer lock.'),
+        DbasSqliteException(
+          DbasSqliteErrorCode.writerLockWaitCancelled,
+          null,
+          'Database was closed while waiting for writer lock.',
+        ),
       );
     }
     _writerLockHeld = false;
@@ -655,7 +730,9 @@ class DbasSqlite {
       timer = Timer(Duration(milliseconds: timeoutMs), () {
         if (waiter.isCompleted) return;
         _readerSlotWaitQueue.remove(waiter);
-        waiter.completeError(TimeoutException(
+        waiter.completeError(DbasSqliteException(
+          DbasSqliteErrorCode.readerSlotWaitTimeout,
+          null,
           'Dart-side reader-slot wait timed out after ${timeoutMs}ms — '
           'all pool readers are busy. Close in-flight readers or raise '
           'DbasSqlite.kPoolAcquireTimeoutMs.',
@@ -680,7 +757,11 @@ class DbasSqlite {
   void _cancelReaderSlotWaitQueue() {
     while (_readerSlotWaitQueue.isNotEmpty) {
       _readerSlotWaitQueue.removeFirst().completeError(
-        StateError('Database was closed while waiting for reader slot.'),
+        DbasSqliteException(
+          DbasSqliteErrorCode.readerSlotWaitCancelled,
+          null,
+          'Database was closed while waiting for reader slot.',
+        ),
       );
     }
     _readerSlotsAvailable = 0;
@@ -714,8 +795,11 @@ class DbasSqlite {
   /// [StateError] if the database is closed while waiting.
   Future<int> acquireReaderConnectionInternal(int timeoutMs) async {
     if (_poolPtr == null) {
-      throw StateError(
-          'No reader pool — single-connection mode does not use this path.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.acquireReaderConnectionNoPool,
+        null,
+        'No reader pool — single-connection mode does not use this path.',
+      );
     }
     final stopwatch = Stopwatch()..start();
     await _acquireReaderSlot(timeoutMs);

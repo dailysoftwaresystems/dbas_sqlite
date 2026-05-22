@@ -10,6 +10,7 @@ import 'package:dbas_sqlite/src/dbas_sqlite_db.dart'
 import 'package:dbas_sqlite/src/dbas_sqlite_platform.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_reader.dart';
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
+import 'package:dbas_sqlite/src/exceptions/dbas_sqlite_exception.dart';
 
 /// A prepared SQL statement.
 ///
@@ -226,7 +227,11 @@ class DbasSqliteStatement {
       handle = prepared.handle;
       if (handle == sqliteInvalidStmtHandle) {
         final err = _platform.getLastDbError(conn) ?? 'Unknown error.';
-        throw Exception('It was not possible to prepare the query: $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.executeSqlPrepareFailed,
+          null,
+          'It was not possible to prepare the query: $err',
+        );
       }
 
       try {
@@ -237,7 +242,11 @@ class DbasSqliteStatement {
         if (rc != sqliteOk && rc != sqliteRow && rc != sqliteDone) {
           final err = _platform.getLastStmtError(conn, handle) ??
               'Unknown error ($rc).';
-          throw Exception('It was not possible to run the query ($rc): $err');
+          throw DbasSqliteException(
+            DbasSqliteErrorCode.executeSqlStepFailed,
+            rc,
+            'It was not possible to run the query ($rc): $err',
+          );
         }
 
         // Counters MUST be read BEFORE finalize. After finalize the
@@ -274,7 +283,11 @@ class DbasSqliteStatement {
       if (rc != sqliteOk) {
         final err = _platform.getLastStmtError(conn, handle) ??
             'Bind failed at positional index $index ($rc).';
-        throw Exception('Bind failed at positional index $index: $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.bindPositionalFailed,
+          rc,
+          'Bind failed at positional index $index: $err',
+        );
       }
     }
     for (final entry in _namedBinds.entries) {
@@ -285,14 +298,22 @@ class DbasSqliteStatement {
       final rc = await _bindNamed(conn, handle, name, entry.value);
       if (rc == sqliteRange) {
         if (_db.throwOnMissingNamedParams) {
-          throw Exception("Named parameter '$name' not found in the prepared statement");
+          throw DbasSqliteException(
+            DbasSqliteErrorCode.bindNamedParameterNotFound,
+            rc,
+            "Named parameter '$name' not found in the prepared statement",
+          );
         }
         continue;
       }
       if (rc != sqliteOk) {
         final err = _platform.getLastStmtError(conn, handle) ??
             'Bind failed for named parameter "$name" ($rc).';
-        throw Exception('Bind failed for "$name": $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.bindNamedFailed,
+          rc,
+          'Bind failed for "$name": $err',
+        );
       }
     }
   }
@@ -324,7 +345,11 @@ class DbasSqliteStatement {
     if (value is Enum) {
       return _platform.bindInt(conn, handle, index, value.index);
     }
-    throw UnsupportedError('Unsupported type to SQLite bind: ${value.runtimeType}');
+    throw DbasSqliteException(
+      DbasSqliteErrorCode.unsupportedPositionalBindType,
+      null,
+      'Unsupported type to SQLite bind: ${value.runtimeType}',
+    );
   }
 
   Future<int> _bindNamed(
@@ -357,7 +382,11 @@ class DbasSqliteStatement {
     if (value is Enum) {
       return _platform.bindNameInt(conn, handle, name, value.index);
     }
-    throw UnsupportedError('Unsupported type to SQLite named bind: ${value.runtimeType}');
+    throw DbasSqliteException(
+      DbasSqliteErrorCode.unsupportedNamedBindType,
+      null,
+      'Unsupported type to SQLite named bind: ${value.runtimeType}',
+    );
   }
 
   // ── Execution: reader ────────────────────────────────────────────────
@@ -401,7 +430,11 @@ class DbasSqliteStatement {
   }) async {
     _checkUsable();
     if (_activeReader != null && !_activeReader!.isClosed) {
-      throw StateError('A reader from this statement is still active.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.readerAlreadyActive,
+        null,
+        'A reader from this statement is still active.',
+      );
     }
     // Snapshot for restore-on-failure — same rationale as executeSql.
     final positionalSnapshot = List<Object?>.of(_positionalBinds);
@@ -438,7 +471,9 @@ class DbasSqliteStatement {
       final timeout = _db.poolAcquireTimeoutMsInternal;
       final readerPtr = await _db.acquireReaderConnectionInternal(timeout);
       if (readerPtr == 0) {
-        throw TimeoutException(
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.executeReaderPoolAcquireTimeout,
+          null,
           'No pool reader became available within ${timeout}ms — '
           'all readers busy. Close in-flight readers or raise '
           'DbasSqlite.kPoolAcquireTimeoutMs.',
@@ -464,7 +499,11 @@ class DbasSqliteStatement {
       handle = prepared.handle;
       if (handle == sqliteInvalidStmtHandle) {
         final err = _platform.getLastDbError(conn) ?? 'Unknown error.';
-        throw Exception('It was not possible to prepare the query: $err');
+        throw DbasSqliteException(
+          DbasSqliteErrorCode.executeReaderPrepareFailed,
+          null,
+          'It was not possible to prepare the query: $err',
+        );
       }
 
       await _replayBinds(conn, handle);
@@ -643,9 +682,19 @@ class DbasSqliteStatement {
   }
 
   void _checkUsable() {
-    if (_closed) throw StateError('Statement is closed.');
+    if (_closed) {
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.statementClosed,
+        null,
+        'Statement is closed.',
+      );
+    }
     if (!_db.isOpened()) {
-      throw StateError('Database is not opened.');
+      throw DbasSqliteException(
+        DbasSqliteErrorCode.statementDatabaseNotOpened,
+        null,
+        'Database is not opened.',
+      );
     }
   }
 }

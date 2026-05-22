@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -233,19 +232,21 @@ void main() async {
   // Error handling
   // ──────────────────────────────────────────────────────────────────────
 
-  test('executeSql throws StateError when database is not opened', () async {
+  test('executeSql throws DbasSqliteException when database is not opened', () async {
     final db = await DbasSqlite.getInstance(dbName: 'not_opened.db');
     expect(
       () => db.prepareQuery('SELECT 1'),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.prepareQueryDatabaseNotOpened)),
     );
   });
 
-  test('executeReader throws StateError when database is not opened', () async {
+  test('executeReader throws DbasSqliteException when database is not opened', () async {
     final db = await DbasSqlite.getInstance(dbName: 'not_opened_reader.db');
     expect(
       () => db.prepareQuery('SELECT 1'),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.prepareQueryDatabaseNotOpened)),
     );
   });
 
@@ -1424,7 +1425,8 @@ void main() async {
 
     expect(
       () => reader.getColumnEnum(0, TestStatus.values),
-      throwsA(isA<ArgumentError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidEnumIndex)),
     );
 
     await reader.close();
@@ -1917,11 +1919,12 @@ void main() async {
   // Transaction: StateError when DB not opened
   // ──────────────────────────────────────────────────────────────────────
 
-  test('beginTransaction throws StateError when database is not opened', () async {
+  test('beginTransaction throws DbasSqliteException when database is not opened', () async {
     final db = await DbasSqlite.getInstance(dbName: 'txn_not_opened.db');
     expect(
       () => db.beginTransaction(),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.beginTransactionDatabaseNotOpened)),
     );
   });
 
@@ -1929,7 +1932,7 @@ void main() async {
   // Transaction: transaction() throws StateError when nested
   // ──────────────────────────────────────────────────────────────────────
 
-  test('transaction() throws StateError when already in transaction', () async {
+  test('transaction() throws DbasSqliteException when already in transaction', () async {
     final db = await _createTestDb('txn_nested.db');
 
     {
@@ -1955,7 +1958,8 @@ void main() async {
           }
         }
       }),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.transactionAlreadyActive)),
     );
 
     // Original transaction should still be active
@@ -2522,15 +2526,18 @@ void main() async {
 
     expect(
       () => db.prepareQuery('SELECT 1'),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.prepareQueryDatabaseNotOpened)),
     );
     expect(
       () => db.prepareQuery('SELECT 1'),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.prepareQueryDatabaseNotOpened)),
     );
     expect(
       () => db.beginTransaction(),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.beginTransactionDatabaseNotOpened)),
     );
 
     await db.dropDb();
@@ -3406,7 +3413,11 @@ void main() async {
 
     final reader = await (await db.prepareQuery('SELECT val FROM d_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
-    expect(() => reader.getColumnDecimal(0), throwsFormatException);
+    expect(
+      () => reader.getColumnDecimal(0),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidDecimalFormat)),
+    );
     await reader.close();
 
     await db.closeDb();
@@ -3434,7 +3445,11 @@ void main() async {
 
     final reader = await (await db.prepareQuery('SELECT val FROM t_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
-    expect(() => reader.getColumnTime(0), throwsFormatException);
+    expect(
+      () => reader.getColumnTime(0),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidTimeFormat)),
+    );
     await reader.close();
 
     await db.closeDb();
@@ -3593,7 +3608,12 @@ void main() async {
             await stmt.close();
           }
         },
-        throwsA(isA<TimeoutException>()),
+        // The Dart-side reader-slot semaphore gates the C-side
+        // blocking-acquire; with the pool saturated by an in-flight
+        // reader the slot wait expires first, before the C-side
+        // poolAcquireReaderBlocking ever runs.
+        throwsA(isA<DbasSqliteException>().having(
+          (e) => e.code, 'code', DbasSqliteErrorCode.readerSlotWaitTimeout)),
       );
 
       // Closing the first reader frees the slot — a fresh reader works.
@@ -3903,10 +3923,11 @@ void main() async {
       try {
         await expectLater(
           db.setBusyTimeout(10000),
-          throwsA(predicate<StateError>(
-            (e) => e.toString().contains('200ms') &&
-                   e.toString().contains('reader 0'),
-            'message names the slot index and timeout',
+          throwsA(predicate<DbasSqliteException>(
+            (e) => e.code == DbasSqliteErrorCode.setBusyTimeoutReaderBusy &&
+                   e.message.contains('200ms') &&
+                   e.message.contains('reader 0'),
+            'exception names the slot index and timeout',
           )),
         );
       } finally {
@@ -4101,9 +4122,10 @@ void main() async {
         // Second reader on same statement → StateError.
         await expectLater(
           stmt.executeReader(),
-          throwsA(predicate<StateError>(
-            (e) => e.toString().contains('reader from this statement is still active'),
-            'message names the active-reader invariant',
+          throwsA(predicate<DbasSqliteException>(
+            (e) => e.code == DbasSqliteErrorCode.readerAlreadyActive &&
+                   e.message.contains('reader from this statement is still active'),
+            'exception names the active-reader invariant',
           )),
         );
       } finally { await r1.close(); }
@@ -4193,7 +4215,8 @@ void main() async {
     // A subsequent execute on a closed statement must throw.
     await expectLater(
       orphan2.executeSql(params: [2]),
-      throwsA(isA<StateError>()),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.statementClosed)),
     );
 
     await db.dropDb();
@@ -4294,9 +4317,21 @@ void main() async {
     expect(v, 1);
     expect(stmt.isClosed, isTrue);
 
-    await expectLater(stmt.executeScalar(), throwsA(isA<StateError>()));
-    await expectLater(stmt.executeSql(), throwsA(isA<StateError>()));
-    await expectLater(stmt.executeReader(), throwsA(isA<StateError>()));
+    await expectLater(
+      stmt.executeScalar(),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.statementClosed)),
+    );
+    await expectLater(
+      stmt.executeSql(),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.statementClosed)),
+    );
+    await expectLater(
+      stmt.executeReader(),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.statementClosed)),
+    );
 
     await db.closeDb();
     await db.dropDb();
@@ -4884,7 +4919,7 @@ void main() async {
 
   test(
       'pool: closeDb cancels surplus Dart-side reader-slot waiters with '
-      'StateError', () async {
+      'DbasSqliteException', () async {
     // Park two reader-slot waiters behind a single held slot, then
     // close the database. closeDb sweeps active statements first; the
     // held reader's onClose releases the slot and grants ONE parked
@@ -4925,17 +4960,17 @@ void main() async {
 
       await db.closeDb();
 
-      // One of the two parked reads will be cancelled with StateError;
-      // the other will fail downstream at prepareQuery once its slot
-      // is granted mid-close. Assert that AT LEAST one threw the
-      // cancellation-specific StateError so the cancel path is
-      // exercised.
+      // One of the two parked reads will be cancelled with the
+      // readerSlotWaitCancelled code; the other will fail downstream
+      // at prepareQuery once its slot is granted mid-close. Assert
+      // that AT LEAST one threw the cancellation-specific code so the
+      // cancel path is exercised.
       final err1 = await parked1Outcome;
       final err2 = await parked2Outcome;
-      const stateErrorMsg = 'Database was closed while waiting for reader slot';
-      final sawCancellation =
-          (err1 is StateError && err1.message.contains(stateErrorMsg)) ||
-          (err2 is StateError && err2.message.contains(stateErrorMsg));
+      bool isCancellation(Object? e) =>
+          e is DbasSqliteException &&
+          e.code == DbasSqliteErrorCode.readerSlotWaitCancelled;
+      final sawCancellation = isCancellation(err1) || isCancellation(err2);
       expect(sawCancellation, isTrue,
           reason: 'expected at least one waiter to be cancelled by '
               '_cancelReaderSlotWaitQueue, got err1=$err1 err2=$err2');
