@@ -238,7 +238,27 @@ class DbasSqlite {
   /// Creates one writer connection and [readerPoolSize] read-only
   /// readers. Falls back to a single connection if pool creation
   /// fails.
+  ///
+  /// **Idempotent.** Calling `openDb()` on an already-open instance is
+  /// a no-op and returns immediately. Calling it with a different
+  /// [readerPoolSize] than the original open throws a
+  /// [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize] — pool
+  /// resizing isn't supported; close the database first if you need to
+  /// change the pool size.
   Future<void> openDb({int readerPoolSize = 4}) async {
+    if (isOpened()) {
+      if (readerPoolSize != _readerPoolSize) {
+        throw DbasSqliteException.dart(
+          DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize,
+          'openDb("$dbName") was called with readerPoolSize=$readerPoolSize '
+          'but the database is already opened with readerPoolSize=$_readerPoolSize. '
+          'Close the database before re-opening with a different pool size.',
+        );
+      }
+      return;
+    }
+
     final fileName = await getAppDatabasePath(dbName: dbName);
 
     if (readerPoolSize > 0) {
@@ -264,8 +284,26 @@ class DbasSqlite {
   /// Closes the database connection and removes the instance from
   /// the cache. Active readers and statements are closed first.
   /// Active transactions are rolled back.
+  ///
+  /// If the in-flight `rollback()` itself fails (e.g. the connection
+  /// is already in a corrupt state at the SQLite layer), the failure
+  /// is logged via `dart:developer` and teardown continues — otherwise
+  /// a single rollback failure would skip statement cleanup, queue
+  /// cancellation, and pool close, leaving the cache and OS resources
+  /// dangling. Code that needs to react to a failed rollback must call
+  /// `rollback()` explicitly before `closeDb()`.
   Future<void> closeDb() async {
-    await rollback();
+    try {
+      await rollback();
+    } catch (e, st) {
+      developer.log(
+        'closeDb: rollback of in-flight transaction failed; '
+        'continuing teardown',
+        name: 'dbas_sqlite.DbasSqlite',
+        error: e,
+        stackTrace: st,
+      );
+    }
 
     // Close every still-open statement (which closes its active reader
     // if any). List.of() snapshots the set since close() mutates it.
@@ -308,7 +346,7 @@ class DbasSqlite {
         final err = _platform.getLastDbError(_db!) ?? 'live handles';
         _db = null;
         if (stmtCloseFailures > 0) {
-          throw DbasSqliteException(
+          throw DbasSqliteException.sqlite(
             DbasSqliteErrorCode.closeDbBusyWithStmtFinalizeFailures,
             rc,
             'Cannot close database "$dbName": $err. '
@@ -316,7 +354,7 @@ class DbasSqlite {
             '(see prior log entries for the underlying errors).',
           );
         }
-        throw DbasSqliteException(
+        throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.closeDbBusyLeakedHandle,
           rc,
           'Cannot close database "$dbName": $err. '
@@ -345,9 +383,8 @@ class DbasSqlite {
   /// auto-closes any still-open statements as a safety net.
   Future<DbasSqliteStatement> prepareQuery(String sql) async {
     if (!isOpened()) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.prepareQueryDatabaseNotOpened,
-        null,
         'Database is not opened. Please open the database before preparing.',
       );
     }
@@ -391,8 +428,13 @@ class DbasSqlite {
   /// pool reader.
   ///
   /// **Native:** holds each reader slot in turn for
-  /// [kSetBusyTimeoutAcquireMs] before reconfiguring; throws
-  /// [StateError] if any one slot is still busy after the timeout.
+  /// [kSetBusyTimeoutAcquireMs] before reconfiguring; throws a
+  /// [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.setBusyTimeoutReaderBusy] if any one slot is
+  /// still busy after the timeout. Other failure codes from this method:
+  /// [DbasSqliteErrorCode.setBusyTimeoutDatabaseNotOpened],
+  /// [DbasSqliteErrorCode.setBusyTimeoutWriterFailed],
+  /// [DbasSqliteErrorCode.setBusyTimeoutReaderFailed].
   /// Recommended: call at openDb time before any reads, or inside a
   /// `db.transaction(...)` block where readers are quiescent.
   ///
@@ -402,9 +444,8 @@ class DbasSqlite {
   /// must not depend on this call to apply it.
   Future<void> setBusyTimeout(int ms) async {
     if (_db == null) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.setBusyTimeoutDatabaseNotOpened,
-        null,
         'Database is not opened.',
       );
     }
@@ -418,7 +459,7 @@ class DbasSqlite {
     final rc = await _platform.setBusyTimeout(_db!, ms);
     if (rc != sqliteOk) {
       final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-      throw DbasSqliteException(
+      throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.setBusyTimeoutWriterFailed,
         rc,
         'setBusyTimeout failed on writer: $err',
@@ -441,9 +482,8 @@ class DbasSqlite {
         final readerPtr =
             await delegate.poolAcquireReaderBlocking(_poolPtr!, acquireMs);
         if (readerPtr == 0) {
-          throw DbasSqliteException(
+          throw DbasSqliteException.dart(
             DbasSqliteErrorCode.setBusyTimeoutReaderBusy,
-            null,
             'setBusyTimeout: pool reader $i was busy for '
             '${acquireMs}ms — close in-flight readers first.',
           );
@@ -454,7 +494,7 @@ class DbasSqlite {
         final rrc = await _platform.setBusyTimeout(
             DbasSqliteDb(dbName, readerPtr), ms);
         if (rrc != sqliteOk) {
-          throw DbasSqliteException(
+          throw DbasSqliteException.sqlite(
             DbasSqliteErrorCode.setBusyTimeoutReaderFailed,
             rrc,
             'setBusyTimeout failed on a pool reader: rc=$rrc',
@@ -483,16 +523,15 @@ class DbasSqlite {
   /// failing to set WAL).
   Future<void> enableWal() async {
     if (_db == null) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.enableWalDatabaseNotOpened,
-        null,
         'Database is not opened.',
       );
     }
     final rc = await _platform.enableWal(_db!);
     if (rc != sqliteOk) {
       final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-      throw DbasSqliteException(
+      throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.enableWalFailed,
         rc,
         'enableWal failed: $err',
@@ -509,9 +548,8 @@ class DbasSqlite {
   /// already inside a transaction.
   Future<void> beginTransaction() async {
     if (!isOpened()) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.beginTransactionDatabaseNotOpened,
-        null,
         'Database is not opened. Please open the database before starting a transaction.',
       );
     }
@@ -520,16 +558,15 @@ class DbasSqlite {
     await _acquireWriterLock();
     try {
       if (!isOpened()) {
-        throw DbasSqliteException(
+        throw DbasSqliteException.dart(
           DbasSqliteErrorCode.beginTransactionDatabaseClosedWaitingLock,
-          null,
           'Database was closed while waiting for writer lock.',
         );
       }
       final rc = await _platform.executeSql(_db!, 'BEGIN TRANSACTION');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        throw DbasSqliteException(
+        throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.beginTransactionFailed,
           rc,
           'BEGIN TRANSACTION failed: $err',
@@ -550,7 +587,7 @@ class DbasSqlite {
       final rc = await _platform.executeSql(_db!, 'COMMIT');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        throw DbasSqliteException(
+        throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.commitFailed,
           rc,
           'COMMIT failed: $err',
@@ -570,51 +607,77 @@ class DbasSqlite {
   /// If the underlying ROLLBACK fails (corrupt connection, lock loss),
   /// the Dart-side transaction flag is still cleared and the writer
   /// lock is released — but the failure is rethrown wrapped in a
-  /// [StateError] so the caller knows the C connection's autocommit
-  /// state may be inconsistent. Don't silently let a failed rollback
-  /// look like success.
+  /// [DbasSqliteException] with code [DbasSqliteErrorCode.rollbackFailed]
+  /// so the caller knows the C connection's autocommit state may be
+  /// inconsistent. When the underlying cause is itself a
+  /// [DbasSqliteException] its [DbasSqliteException.sqliteCode] is
+  /// lifted onto the outer exception; the original error is attached
+  /// as [DbasSqliteException.cause] for programmatic inspection.
   Future<void> rollback() async {
     if (!_isInTransaction) return;
-    Object? rollbackErr;
-    StackTrace? rollbackStack;
+    Object? rollbackCause;
+    StackTrace? rollbackCauseStack;
     int? rollbackRc;
+    String rollbackDetail = '';
     try {
       final rc = await _platform.executeSql(_db!, 'ROLLBACK');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        rollbackErr = 'ROLLBACK rc=$rc: $err';
-        rollbackStack = StackTrace.current;
         rollbackRc = rc;
+        rollbackDetail = 'ROLLBACK rc=$rc: $err';
+        rollbackCauseStack = StackTrace.current;
       }
     } catch (e, st) {
-      rollbackErr = e;
-      rollbackStack = st;
+      rollbackCause = e;
+      rollbackCauseStack = st;
+      rollbackDetail = e.toString();
+      if (e is DbasSqliteException) {
+        rollbackRc = e.sqliteCode;
+      }
     } finally {
       _isInTransaction = false;
       _transactionHasWrites = false;
       _releaseWriterLock();
     }
-    if (rollbackErr != null) {
-      Error.throwWithStackTrace(
-        DbasSqliteException(
-          DbasSqliteErrorCode.rollbackFailed,
-          rollbackRc,
-          'ROLLBACK failed; database may still be in a transaction at '
-          'the SQLite layer: $rollbackErr',
-        ),
-        rollbackStack!,
-      );
+    if (rollbackCauseStack != null) {
+      final msg =
+          'ROLLBACK failed; database may still be in a transaction: $rollbackDetail';
+      final ex = rollbackRc != null
+          ? DbasSqliteException.sqlite(
+              DbasSqliteErrorCode.rollbackFailed,
+              rollbackRc,
+              msg,
+              cause: rollbackCause,
+              causeStackTrace: rollbackCauseStack,
+            )
+          : DbasSqliteException.dart(
+              DbasSqliteErrorCode.rollbackFailed,
+              msg,
+              cause: rollbackCause,
+              causeStackTrace: rollbackCauseStack,
+            );
+      Error.throwWithStackTrace(ex, rollbackCauseStack);
     }
   }
 
   /// Executes [action] within a database transaction with automatic
   /// commit and rollback. If [action] throws, the transaction is
   /// rolled back and the exception is rethrown.
+  ///
+  /// When BOTH [action] (or `commit`) and the subsequent `rollback`
+  /// fail, a [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.transactionRollbackAlsoFailed] is thrown.
+  /// The original error is preserved on
+  /// [DbasSqliteException.cause] with its stack trace on
+  /// [DbasSqliteException.causeStackTrace]; the rollback failure is
+  /// logged via `dart:developer` (its stack would otherwise be lost in
+  /// the wrapper). When the original error is itself a
+  /// [DbasSqliteException], its [DbasSqliteException.sqliteCode] is
+  /// lifted onto the outer exception.
   Future<void> transaction(Future<void> Function(DbasSqlite db) action) async {
     if (_isInTransaction) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.transactionAlreadyActive,
-        null,
         'A transaction is already active. Cannot nest transactions.',
       );
     }
@@ -622,17 +685,40 @@ class DbasSqlite {
     try {
       await action(this);
       await commit();
-    } catch (originalError) {
+    } catch (originalError, originalStack) {
       try {
         await rollback();
-      } catch (rollbackError) {
-        throw DbasSqliteException(
-          DbasSqliteErrorCode.transactionRollbackAlsoFailed,
-          null,
-          'Transaction failed: $originalError. '
-          'Additionally, rollback also failed: $rollbackError. '
-          'The database may be in an inconsistent state.',
+      } catch (rollbackError, rollbackStack) {
+        developer.log(
+          'transaction: rollback failed after action/commit failure; '
+          'wrapping into transactionRollbackAlsoFailed',
+          name: 'dbas_sqlite.DbasSqlite',
+          error: rollbackError,
+          stackTrace: rollbackStack,
         );
+        final liftedRc = originalError is DbasSqliteException
+            ? originalError.sqliteCode
+            : (rollbackError is DbasSqliteException
+                ? rollbackError.sqliteCode
+                : null);
+        final msg = 'Transaction failed: $originalError. '
+            'Additionally, rollback also failed: $rollbackError. '
+            'The database may be in an inconsistent state.';
+        final ex = liftedRc != null
+            ? DbasSqliteException.sqlite(
+                DbasSqliteErrorCode.transactionRollbackAlsoFailed,
+                liftedRc,
+                msg,
+                cause: originalError,
+                causeStackTrace: originalStack,
+              )
+            : DbasSqliteException.dart(
+                DbasSqliteErrorCode.transactionRollbackAlsoFailed,
+                msg,
+                cause: originalError,
+                causeStackTrace: originalStack,
+              );
+        Error.throwWithStackTrace(ex, originalStack);
       }
       rethrow;
     }
@@ -642,32 +728,29 @@ class DbasSqlite {
   /// transaction.
   Future<void> vacuum() async {
     if (!isOpened()) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.vacuumDatabaseNotOpened,
-        null,
         'Database is not opened.',
       );
     }
     if (_isInTransaction) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.vacuumInsideTransaction,
-        null,
         'Cannot run VACUUM inside a transaction.',
       );
     }
     await _acquireWriterLock();
     try {
       if (!isOpened()) {
-        throw DbasSqliteException(
+        throw DbasSqliteException.dart(
           DbasSqliteErrorCode.vacuumDatabaseClosedWaitingLock,
-          null,
           'Database was closed while waiting for writer lock.',
         );
       }
       final rc = await _platform.executeSql(_db!, 'VACUUM');
       if (rc != sqliteOk) {
         final err = _platform.getLastDbError(_db!) ?? 'rc=$rc';
-        throw DbasSqliteException(
+        throw DbasSqliteException.sqlite(
           DbasSqliteErrorCode.vacuumFailed,
           rc,
           'VACUUM failed: $err',
@@ -701,9 +784,8 @@ class DbasSqlite {
   void _cancelWriterWaitQueue() {
     while (_writerWaitQueue.isNotEmpty) {
       _writerWaitQueue.removeFirst().completeError(
-        DbasSqliteException(
+        DbasSqliteException.dart(
           DbasSqliteErrorCode.writerLockWaitCancelled,
-          null,
           'Database was closed while waiting for writer lock.',
         ),
       );
@@ -730,9 +812,8 @@ class DbasSqlite {
       timer = Timer(Duration(milliseconds: timeoutMs), () {
         if (waiter.isCompleted) return;
         _readerSlotWaitQueue.remove(waiter);
-        waiter.completeError(DbasSqliteException(
+        waiter.completeError(DbasSqliteException.dart(
           DbasSqliteErrorCode.readerSlotWaitTimeout,
-          null,
           'Dart-side reader-slot wait timed out after ${timeoutMs}ms — '
           'all pool readers are busy. Close in-flight readers or raise '
           'DbasSqlite.kPoolAcquireTimeoutMs.',
@@ -757,9 +838,8 @@ class DbasSqlite {
   void _cancelReaderSlotWaitQueue() {
     while (_readerSlotWaitQueue.isNotEmpty) {
       _readerSlotWaitQueue.removeFirst().completeError(
-        DbasSqliteException(
+        DbasSqliteException.dart(
           DbasSqliteErrorCode.readerSlotWaitCancelled,
-          null,
           'Database was closed while waiting for reader slot.',
         ),
       );
@@ -790,14 +870,17 @@ class DbasSqlite {
   /// the reader pointer on success, or `0` if the C-side acquire
   /// timed out.
   ///
-  /// Throws [TimeoutException] when the Dart-side wait exceeds
-  /// [timeoutMs] (i.e. no slot freed in time). Also throws
-  /// [StateError] if the database is closed while waiting.
+  /// Throws a [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.readerSlotWaitTimeout] when the Dart-side
+  /// wait exceeds [timeoutMs] (i.e. no slot freed in time), code
+  /// [DbasSqliteErrorCode.readerSlotWaitCancelled] if the database is
+  /// closed while waiting, or code
+  /// [DbasSqliteErrorCode.acquireReaderConnectionNoPool] when called
+  /// against a single-connection (non-pool) database.
   Future<int> acquireReaderConnectionInternal(int timeoutMs) async {
     if (_poolPtr == null) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.acquireReaderConnectionNoPool,
-        null,
         'No reader pool — single-connection mode does not use this path.',
       );
     }

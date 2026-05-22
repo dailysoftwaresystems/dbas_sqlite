@@ -1,12 +1,14 @@
-/// Stable identifiers for every throw site in DbasSqlite,
-/// DbasSqliteStatement, and DbasSqliteReader. Each value is used by
-/// exactly one throw so callers can branch on a specific failure
-/// without parsing message text.
+/// Stable identifiers for every throw site in [DbasSqlite],
+/// [DbasSqliteStatement], and [DbasSqliteReader]. Each value is used
+/// by exactly one throw so callers can branch on a specific failure
+/// without parsing message text. For coarse-grained branching prefer
+/// the [DbasSqliteErrorCategory] returned by [DbasSqliteErrorCodeX.category].
 enum DbasSqliteErrorCode {
   // DbasSqlite — lifecycle
   closeDbBusyWithStmtFinalizeFailures,
   closeDbBusyLeakedHandle,
   prepareQueryDatabaseNotOpened,
+  openDbReopenWithDifferentPoolSize,
 
   // DbasSqlite — busy timeout
   setBusyTimeoutDatabaseNotOpened,
@@ -61,26 +63,386 @@ enum DbasSqliteErrorCode {
   invalidEnumIndex,
 }
 
+/// High-level grouping of [DbasSqliteErrorCode] values. Use this for
+/// `switch`-based recovery decisions; use the underlying [DbasSqliteErrorCode]
+/// for test assertions and telemetry IDs.
+enum DbasSqliteErrorCategory {
+  /// Caller tried to use an unopened, closed, or closing database / statement.
+  notOpened,
+
+  /// A connection / writer-lock / reader-slot wait timed out or was cancelled.
+  busyOrCancelled,
+
+  /// `sqlite3_prepare_v2` (or equivalent) refused the SQL.
+  prepareFailed,
+
+  /// Step (DDL/DML/SELECT) returned a non-OK / non-row / non-done rc.
+  executeFailed,
+
+  /// A bind call rejected the value (range, type mismatch, or unknown name
+  /// when `throwOnMissingNamedParams` is enabled).
+  bindFailed,
+
+  /// BEGIN/COMMIT/ROLLBACK/VACUUM failed at the SQL or wrapper layer.
+  transactionFailed,
+
+  /// A reader-lifecycle invariant was violated (e.g. two readers per stmt).
+  readerStateFailed,
+
+  /// Column accessor could not decode the raw value (decimal, time, enum).
+  decodeFailed,
+
+  /// Generic / wrapper-internal — should be rare.
+  internal,
+}
+
+/// Maps each [DbasSqliteErrorCode] to its [DbasSqliteErrorCategory].
+extension DbasSqliteErrorCodeX on DbasSqliteErrorCode {
+  DbasSqliteErrorCategory get category {
+    switch (this) {
+      case DbasSqliteErrorCode.prepareQueryDatabaseNotOpened:
+      case DbasSqliteErrorCode.setBusyTimeoutDatabaseNotOpened:
+      case DbasSqliteErrorCode.enableWalDatabaseNotOpened:
+      case DbasSqliteErrorCode.beginTransactionDatabaseNotOpened:
+      case DbasSqliteErrorCode.beginTransactionDatabaseClosedWaitingLock:
+      case DbasSqliteErrorCode.vacuumDatabaseNotOpened:
+      case DbasSqliteErrorCode.vacuumDatabaseClosedWaitingLock:
+      case DbasSqliteErrorCode.statementClosed:
+      case DbasSqliteErrorCode.statementDatabaseNotOpened:
+      case DbasSqliteErrorCode.acquireReaderConnectionNoPool:
+        return DbasSqliteErrorCategory.notOpened;
+
+      case DbasSqliteErrorCode.closeDbBusyWithStmtFinalizeFailures:
+      case DbasSqliteErrorCode.closeDbBusyLeakedHandle:
+      case DbasSqliteErrorCode.setBusyTimeoutReaderBusy:
+      case DbasSqliteErrorCode.readerSlotWaitTimeout:
+      case DbasSqliteErrorCode.readerSlotWaitCancelled:
+      case DbasSqliteErrorCode.writerLockWaitCancelled:
+      case DbasSqliteErrorCode.executeReaderPoolAcquireTimeout:
+        return DbasSqliteErrorCategory.busyOrCancelled;
+
+      case DbasSqliteErrorCode.executeSqlPrepareFailed:
+      case DbasSqliteErrorCode.executeReaderPrepareFailed:
+        return DbasSqliteErrorCategory.prepareFailed;
+
+      case DbasSqliteErrorCode.executeSqlStepFailed:
+      case DbasSqliteErrorCode.readRowFailed:
+        return DbasSqliteErrorCategory.executeFailed;
+
+      case DbasSqliteErrorCode.bindPositionalFailed:
+      case DbasSqliteErrorCode.bindNamedParameterNotFound:
+      case DbasSqliteErrorCode.bindNamedFailed:
+      case DbasSqliteErrorCode.unsupportedPositionalBindType:
+      case DbasSqliteErrorCode.unsupportedNamedBindType:
+        return DbasSqliteErrorCategory.bindFailed;
+
+      case DbasSqliteErrorCode.setBusyTimeoutWriterFailed:
+      case DbasSqliteErrorCode.setBusyTimeoutReaderFailed:
+      case DbasSqliteErrorCode.enableWalFailed:
+      case DbasSqliteErrorCode.beginTransactionFailed:
+      case DbasSqliteErrorCode.commitFailed:
+      case DbasSqliteErrorCode.rollbackFailed:
+      case DbasSqliteErrorCode.transactionAlreadyActive:
+      case DbasSqliteErrorCode.transactionRollbackAlsoFailed:
+      case DbasSqliteErrorCode.vacuumInsideTransaction:
+      case DbasSqliteErrorCode.vacuumFailed:
+        return DbasSqliteErrorCategory.transactionFailed;
+
+      case DbasSqliteErrorCode.readerAlreadyActive:
+        return DbasSqliteErrorCategory.readerStateFailed;
+
+      case DbasSqliteErrorCode.invalidDecimalFormat:
+      case DbasSqliteErrorCode.invalidTimeFormat:
+      case DbasSqliteErrorCode.invalidTimeComponent:
+      case DbasSqliteErrorCode.invalidEnumIndex:
+        return DbasSqliteErrorCategory.decodeFailed;
+
+      case DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize:
+        return DbasSqliteErrorCategory.internal;
+    }
+  }
+}
+
+/// Fine-grained semantic interpretation of the underlying SQLite
+/// result code. Derived from [DbasSqliteException.sqliteCode] when
+/// it is non-null; otherwise [DbasSqliteSubCategory.notApplicable].
+///
+/// Both primary result codes (e.g. `SQLITE_BUSY=5`, `SQLITE_CONSTRAINT=19`)
+/// and extended result codes (e.g. `SQLITE_CONSTRAINT_UNIQUE=2067`)
+/// are mapped — extended codes take precedence over their primary
+/// counterpart so a UNIQUE-index violation surfaces as [duplicatedData]
+/// rather than the coarser [constraintViolation].
+///
+/// Use this to write `switch`-style recovery code that doesn't depend
+/// on raw integer rc literals at the call site.
+enum DbasSqliteSubCategory {
+  /// The exception has no `sqliteCode` (Dart-side failure) — the
+  /// semantic interpretation does not apply.
+  notApplicable,
+
+  /// `SQLITE_ERROR` (1) — generic catch-all from the SQLite layer.
+  genericError,
+
+  /// `SQLITE_INTERNAL` (2) — an internal SQLite invariant was violated.
+  internalError,
+
+  /// `SQLITE_PERM` (3) — requested access mode not allowed.
+  permissionDenied,
+
+  /// `SQLITE_ABORT` (4) — operation aborted by callback.
+  aborted,
+
+  /// `SQLITE_BUSY` (5) — the database file is locked by another
+  /// connection. Typically resolvable by retrying after a backoff.
+  databaseBusy,
+
+  /// `SQLITE_LOCKED` (6) — a table within the same connection is
+  /// locked (often by an open reader).
+  tableLocked,
+
+  /// `SQLITE_NOMEM` (7) — malloc() failure inside SQLite.
+  outOfMemory,
+
+  /// `SQLITE_READONLY` (8) — write attempted on a read-only DB.
+  readOnlyDatabase,
+
+  /// `SQLITE_INTERRUPT` (9) — `sqlite3_interrupt()` cancelled the call.
+  interrupted,
+
+  /// `SQLITE_IOERR` (10) and any of its extended codes — disk I/O
+  /// failed.
+  ioError,
+
+  /// `SQLITE_CORRUPT` (11) — the database file is malformed.
+  corruptDatabase,
+
+  /// `SQLITE_NOTFOUND` (12) — internal opcode/parameter not found.
+  notFound,
+
+  /// `SQLITE_FULL` (13) — disk is full (or a temp-store limit was hit).
+  diskFull,
+
+  /// `SQLITE_CANTOPEN` (14) and extended codes — could not open the
+  /// DB file (path missing, permission denied, etc).
+  cannotOpen,
+
+  /// `SQLITE_PROTOCOL` (15) — WAL protocol violation; typically a
+  /// retryable transient.
+  protocolError,
+
+  /// `SQLITE_EMPTY` (16) — historical; unused by modern SQLite.
+  emptyDatabase,
+
+  /// `SQLITE_SCHEMA` (17) — the database schema changed underneath a
+  /// prepared statement.
+  schemaChanged,
+
+  /// `SQLITE_TOOBIG` (18) — a string/BLOB exceeded `SQLITE_MAX_LENGTH`.
+  valueTooLarge,
+
+  /// `SQLITE_CONSTRAINT` (19) — a constraint failed but the extended
+  /// code didn't narrow it further (or wasn't reported). Use the
+  /// other `constraint*`/`*Violation` values for specific cases.
+  constraintViolation,
+
+  /// `SQLITE_CONSTRAINT_UNIQUE` (2067), `_PRIMARYKEY` (1555), or
+  /// `_ROWID` (2579) — a row with the same key already exists. This
+  /// covers UNIQUE column constraints, explicit UNIQUE indexes, and
+  /// PRIMARY KEY duplicates.
+  duplicatedData,
+
+  /// `SQLITE_CONSTRAINT_FOREIGNKEY` (787) — a FOREIGN KEY constraint
+  /// would be violated.
+  foreignKeyViolation,
+
+  /// `SQLITE_CONSTRAINT_NOTNULL` (1299) — NULL written to a NOT NULL
+  /// column.
+  notNullViolation,
+
+  /// `SQLITE_CONSTRAINT_CHECK` (275) — a CHECK constraint failed.
+  checkViolation,
+
+  /// `SQLITE_CONSTRAINT_TRIGGER` (1811) — a trigger raised RAISE(ABORT).
+  triggerAborted,
+
+  /// `SQLITE_CONSTRAINT_DATATYPE` (3091) — STRICT-table type check failed.
+  dataTypeViolation,
+
+  /// Other `SQLITE_CONSTRAINT_*` extended codes (`_FUNCTION` 1043,
+  /// `_COMMITHOOK` 531, `_VTAB` 2323, `_PINNED` 2835).
+  otherConstraintViolation,
+
+  /// `SQLITE_MISMATCH` (20) — datatype mismatch (e.g. text→integer
+  /// affinity coercion failed).
+  typeMismatch,
+
+  /// `SQLITE_MISUSE` (21) — wrapper-level API misuse (e.g. bind on a
+  /// finalized statement). Indicates a bug, not a transient.
+  misuse,
+
+  /// `SQLITE_NOLFS` (22) — large-file support missing at OS level.
+  noLargeFileSupport,
+
+  /// `SQLITE_AUTH` (23) — authorization callback denied access.
+  authorizationDenied,
+
+  /// `SQLITE_FORMAT` (24) — historical; unused.
+  formatError,
+
+  /// `SQLITE_RANGE` (25) — bind index/name was out of range.
+  rangeError,
+
+  /// `SQLITE_NOTADB` (26) — file is not a SQLite database (bad header).
+  notADatabase,
+
+  /// `SQLITE_ROW` (100) / `SQLITE_DONE` (101) — these are success codes
+  /// and should not normally surface on a `DbasSqliteException`, but if
+  /// they ever do, they map here.
+  stepStatus,
+
+  /// `sqliteCode` is non-null but didn't match any known SQLite rc.
+  other,
+}
+
+/// Internal: maps a SQLite primary or extended result code to a
+/// [DbasSqliteSubCategory]. Pure function — exposed only via
+/// [DbasSqliteException.subCategory].
+DbasSqliteSubCategory _subCategoryFromRc(int rc) {
+  // Extended-code mapping (always check first — extended codes share
+  // their low byte with the primary code).
+  switch (rc) {
+    case 275: return DbasSqliteSubCategory.checkViolation;
+    case 531: return DbasSqliteSubCategory.otherConstraintViolation;
+    case 787: return DbasSqliteSubCategory.foreignKeyViolation;
+    case 1043: return DbasSqliteSubCategory.otherConstraintViolation;
+    case 1299: return DbasSqliteSubCategory.notNullViolation;
+    case 1555: return DbasSqliteSubCategory.duplicatedData;
+    case 1811: return DbasSqliteSubCategory.triggerAborted;
+    case 2067: return DbasSqliteSubCategory.duplicatedData;
+    case 2323: return DbasSqliteSubCategory.otherConstraintViolation;
+    case 2579: return DbasSqliteSubCategory.duplicatedData;
+    case 2835: return DbasSqliteSubCategory.otherConstraintViolation;
+    case 3091: return DbasSqliteSubCategory.dataTypeViolation;
+  }
+  // Primary code mapping (low byte of any extended code is the primary
+  // code; extended codes for SQLITE_IOERR / SQLITE_CANTOPEN fall through
+  // to their primary categories below).
+  final primary = rc & 0xFF;
+  switch (primary) {
+    case 1: return DbasSqliteSubCategory.genericError;
+    case 2: return DbasSqliteSubCategory.internalError;
+    case 3: return DbasSqliteSubCategory.permissionDenied;
+    case 4: return DbasSqliteSubCategory.aborted;
+    case 5: return DbasSqliteSubCategory.databaseBusy;
+    case 6: return DbasSqliteSubCategory.tableLocked;
+    case 7: return DbasSqliteSubCategory.outOfMemory;
+    case 8: return DbasSqliteSubCategory.readOnlyDatabase;
+    case 9: return DbasSqliteSubCategory.interrupted;
+    case 10: return DbasSqliteSubCategory.ioError;
+    case 11: return DbasSqliteSubCategory.corruptDatabase;
+    case 12: return DbasSqliteSubCategory.notFound;
+    case 13: return DbasSqliteSubCategory.diskFull;
+    case 14: return DbasSqliteSubCategory.cannotOpen;
+    case 15: return DbasSqliteSubCategory.protocolError;
+    case 16: return DbasSqliteSubCategory.emptyDatabase;
+    case 17: return DbasSqliteSubCategory.schemaChanged;
+    case 18: return DbasSqliteSubCategory.valueTooLarge;
+    case 19: return DbasSqliteSubCategory.constraintViolation;
+    case 20: return DbasSqliteSubCategory.typeMismatch;
+    case 21: return DbasSqliteSubCategory.misuse;
+    case 22: return DbasSqliteSubCategory.noLargeFileSupport;
+    case 23: return DbasSqliteSubCategory.authorizationDenied;
+    case 24: return DbasSqliteSubCategory.formatError;
+    case 25: return DbasSqliteSubCategory.rangeError;
+    case 26: return DbasSqliteSubCategory.notADatabase;
+    case 100: case 101: return DbasSqliteSubCategory.stepStatus;
+  }
+  return DbasSqliteSubCategory.other;
+}
+
 /// Single exception type thrown by the public API of [DbasSqlite],
 /// [DbasSqliteStatement], and [DbasSqliteReader].
 ///
-/// [code] identifies the throw site uniquely. [sqliteCode] carries the
-/// underlying SQLite result code (or step rc) when one is available;
-/// it is `null` for purely Dart-side conditions (e.g. closed database,
-/// invalid format, timeouts).
+/// Choose the factory at the call site to encode the invariant:
+///   * [DbasSqliteException.dart] — Dart-side failure with no native
+///     SQLite result code (closed-state guards, format errors, timeouts,
+///     queue cancellations). [sqliteCode] is always `null`.
+///   * [DbasSqliteException.sqlite] — native SQLite layer returned a
+///     non-OK rc; the rc is passed through as [sqliteCode].
+///
+/// [cause] / [causeStackTrace] are non-null when this exception wraps
+/// an underlying failure (the rollback-after-failed-transaction path
+/// and the rollback's own catch branch). Callers can inspect [cause]
+/// to recover the original error's type and structured fields.
 class DbasSqliteException implements Exception {
   final DbasSqliteErrorCode code;
   final int? sqliteCode;
   final String message;
+  final Object? cause;
+  final StackTrace? causeStackTrace;
 
-  const DbasSqliteException(this.code, this.sqliteCode, this.message);
+  const DbasSqliteException._(
+    this.code,
+    this.sqliteCode,
+    this.message, {
+    this.cause,
+    this.causeStackTrace,
+  });
+
+  /// Dart-side failure: no native rc available. [sqliteCode] is `null`.
+  factory DbasSqliteException.dart(
+    DbasSqliteErrorCode code,
+    String message, {
+    Object? cause,
+    StackTrace? causeStackTrace,
+  }) =>
+      DbasSqliteException._(
+        code,
+        null,
+        message,
+        cause: cause,
+        causeStackTrace: causeStackTrace,
+      );
+
+  /// Native SQLite failure: [sqliteCode] carries the rc from the
+  /// underlying C call (or the step rc returned by `sqlite3_step`).
+  factory DbasSqliteException.sqlite(
+    DbasSqliteErrorCode code,
+    int sqliteCode,
+    String message, {
+    Object? cause,
+    StackTrace? causeStackTrace,
+  }) =>
+      DbasSqliteException._(
+        code,
+        sqliteCode,
+        message,
+        cause: cause,
+        causeStackTrace: causeStackTrace,
+      );
+
+  /// Coarse-grained category for `switch`-based recovery branching.
+  /// Equivalent to `code.category`.
+  DbasSqliteErrorCategory get category => code.category;
+
+  /// Fine-grained semantic interpretation of [sqliteCode] — e.g.
+  /// `duplicatedData` for a UNIQUE-index violation, `foreignKeyViolation`
+  /// for a FOREIGN KEY breach, `databaseBusy` for SQLITE_BUSY. Returns
+  /// [DbasSqliteSubCategory.notApplicable] when [sqliteCode] is `null`.
+  DbasSqliteSubCategory get subCategory => sqliteCode == null
+      ? DbasSqliteSubCategory.notApplicable
+      : _subCategoryFromRc(sqliteCode!);
 
   @override
   String toString() {
-    final base = 'DbasSqliteException(${code.name})';
+    final buf = StringBuffer('DbasSqliteException(${code.name})');
     if (sqliteCode != null) {
-      return '$base [sqliteCode=$sqliteCode]: $message';
+      buf.write(' [sqliteCode=$sqliteCode, ${subCategory.name}]');
     }
-    return '$base: $message';
+    buf.write(': $message');
+    if (cause != null) {
+      buf.write(' (cause: $cause)');
+    }
+    return buf.toString();
   }
 }

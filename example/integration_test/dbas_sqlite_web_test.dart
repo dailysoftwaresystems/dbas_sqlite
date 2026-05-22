@@ -580,7 +580,11 @@ void main() {
 
     final reader = await (await db.prepareQuery('SELECT val FROM d_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
-    expect(() => reader.getColumnDecimal(0), throwsFormatException);
+    expect(
+      () => reader.getColumnDecimal(0),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidDecimalFormat)),
+    );
     await reader.close();
 
     await db.closeDb();
@@ -608,7 +612,11 @@ void main() {
 
     final reader = await (await db.prepareQuery('SELECT val FROM t_tbl WHERE id = 1')).executeReader();
     expect(await reader.readRow(), isTrue);
-    expect(() => reader.getColumnTime(0), throwsFormatException);
+    expect(
+      () => reader.getColumnTime(0),
+      throwsA(isA<DbasSqliteException>().having(
+        (e) => e.code, 'code', DbasSqliteErrorCode.invalidTimeFormat)),
+    );
     await reader.close();
 
     await db.closeDb();

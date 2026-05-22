@@ -1066,7 +1066,12 @@ void main() async {
         'INSERT INTO throw_tbl (id, name) VALUES (:id, :name)',
         nameParams: {'id': 1, 'name': 'Alice', 'extra': 'boom'},
       ),
-      throwsA(isA<Exception>()),
+      throwsA(isA<DbasSqliteException>()
+          .having((e) => e.code, 'code',
+              DbasSqliteErrorCode.bindNamedParameterNotFound)
+          .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_RANGE)', 25)
+          .having((e) => e.subCategory, 'subCategory',
+              DbasSqliteSubCategory.rangeError)),
     );
 
     // Verify the row was NOT inserted (exception aborted the bind)
@@ -1151,7 +1156,8 @@ void main() async {
         'INSERT INTO toggle_tbl (id, name) VALUES (:id, :name)',
         nameParams: {'id': 2, 'name': 'second', 'extra': 'boom'},
       ),
-      throwsA(isA<Exception>()),
+      throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+          DbasSqliteErrorCode.bindNamedParameterNotFound)),
     );
 
     // Turn back off — extra params silently skipped again
@@ -1400,7 +1406,7 @@ void main() async {
   // getColumnEnum throws on out-of-range index
   // ──────────────────────────────────────────────────────────────────────
 
-  test('getColumnEnum throws ArgumentError for invalid enum index', () async {
+  test('getColumnEnum throws DbasSqliteException(invalidEnumIndex) for out-of-range index', () async {
     final db = await _createTestDb('enum_error.db');
 
     {
@@ -1916,7 +1922,7 @@ void main() async {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // Transaction: StateError when DB not opened
+  // Transaction: DbasSqliteException when DB not opened
   // ──────────────────────────────────────────────────────────────────────
 
   test('beginTransaction throws DbasSqliteException when database is not opened', () async {
@@ -1929,7 +1935,7 @@ void main() async {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // Transaction: transaction() throws StateError when nested
+  // Transaction: transaction() throws DbasSqliteException(transactionAlreadyActive) when nested
   // ──────────────────────────────────────────────────────────────────────
 
   test('transaction() throws DbasSqliteException when already in transaction', () async {
@@ -3392,7 +3398,7 @@ void main() async {
   // Issue fixes: regression tests
   // ──────────────────────────────────────────────────────────────────────
 
-  test('getColumnDecimal throws FormatException on non-numeric text', () async {
+  test('getColumnDecimal throws DbasSqliteException(invalidDecimalFormat) on non-numeric text', () async {
     final db = await _createTestDb('decimal_err.db');
     {
       final stmt = await db.prepareQuery("CREATE TABLE d_tbl (id INTEGER PRIMARY KEY, val TEXT)");
@@ -3424,7 +3430,7 @@ void main() async {
     await db.dropDb();
   });
 
-  test('getColumnTime throws FormatException on garbage input', () async {
+  test('getColumnTime throws DbasSqliteException(invalidTimeFormat) on garbage input', () async {
     final db = await _createTestDb('time_err.db');
     {
       final stmt = await db.prepareQuery("CREATE TABLE t_tbl (id INTEGER PRIMARY KEY, val TEXT)");
@@ -3578,7 +3584,7 @@ void main() async {
     // v2.4 contract: pool exhaustion no longer silently falls back
     // to the writer. Instead the second reader blocks up to
     // [DbasSqlite.kPoolAcquireTimeoutMs] (default 30s) and then
-    // throws TimeoutException. We use the test-only override to
+    // throws DbasSqliteException(readerSlotWaitTimeout). We use the test-only override to
     // shorten the timeout so the test completes quickly.
     final db = await _createTestDb('pool_exhaust.db', readerPoolSize: 1);
     DbasSqlite.debugPoolAcquireTimeoutMs = 200;
@@ -3817,9 +3823,13 @@ void main() async {
     try {
       await expectLater(
         stmt.executeSql(params: [1, 'extra']),
-        throwsA(predicate<Exception>(
-          (e) => e.toString().contains('positional index 2'),
-          'exception message identifies the offending bind index',
+        throwsA(predicate<DbasSqliteException>(
+          (e) =>
+              e.code == DbasSqliteErrorCode.bindPositionalFailed &&
+              e.sqliteCode == 25 /* SQLITE_RANGE */ &&
+              e.subCategory == DbasSqliteSubCategory.rangeError &&
+              e.message.contains('positional index 2'),
+          'exception carries bindPositionalFailed + SQLITE_RANGE rc and identifies the offending bind index',
         )),
       );
     } finally { await stmt.close(); }
@@ -3848,10 +3858,21 @@ void main() async {
 
       // Override with bad params. NULL into NOT NULL → SQLITE_CONSTRAINT
       // at step time. The execute throws and the buffer must be
-      // restored to [100, 'good'].
+      // restored to [100, 'good']. The thrown exception carries the
+      // step rc and the NOT NULL sub-category so callers can branch on
+      // the specific constraint that fired.
       await expectLater(
         stmt.executeSql(params: [101, null]),
-        throwsA(isA<Exception>()),
+        throwsA(isA<DbasSqliteException>()
+            .having((e) => e.code, 'code', DbasSqliteErrorCode.executeSqlStepFailed)
+            .having((e) => e.sqliteCode, 'sqliteCode is non-null', isNotNull)
+            .having(
+                (e) => e.subCategory,
+                'subCategory',
+                anyOf(
+                  DbasSqliteSubCategory.notNullViolation,
+                  DbasSqliteSubCategory.constraintViolation,
+                ))),
       );
 
       // No params on this call — must use the restored buffer.
@@ -3900,9 +3921,9 @@ void main() async {
   // ── 6. setBusyTimeout throws when a reader is in flight ──────────────
   // The contract is best-effort with strict failure mode: if any
   // reader slot is busy beyond kSetBusyTimeoutAcquireMs, throw a
-  // clear StateError naming the slot. Uses the test-only
+  // clear DbasSqliteException(setBusyTimeoutReaderBusy) naming the slot. Uses the test-only
   // debugSetBusyTimeoutAcquireMs override to keep the test fast.
-  test('setBusyTimeout throws StateError when a reader is in flight', () async {
+  test('setBusyTimeout throws DbasSqliteException(setBusyTimeoutReaderBusy) when a reader is in flight', () async {
     final db = await _createTestDb('busy_timeout_busy.db', readerPoolSize: 1);
     DbasSqlite.debugSetBusyTimeoutAcquireMs = 200;
     try {
@@ -4098,7 +4119,7 @@ void main() async {
     await db.dropDb();
   });
 
-  // ── 13. Two readers on the same statement throws StateError ──────────
+  // ── 13. Two readers on the same statement throws DbasSqliteException(readerAlreadyActive) ──
   // Per-statement invariant: only one DbasSqliteReader may be active
   // per DbasSqliteStatement at a time. Closing the first reader
   // releases the slot for the next.
@@ -4119,7 +4140,7 @@ void main() async {
       try {
         expect(await r1.readRow(), isTrue);
 
-        // Second reader on same statement → StateError.
+        // Second reader on same statement → DbasSqliteException(readerAlreadyActive).
         await expectLater(
           stmt.executeReader(),
           throwsA(predicate<DbasSqliteException>(
@@ -4926,7 +4947,7 @@ void main() async {
     // waiter (which then fails downstream at prepareQuery because the
     // pool is mid-tear-down). The SECOND parked waiter never gets a
     // slot — it must be drained by `_cancelReaderSlotWaitQueue` and
-    // reject with StateError. Without that drain the waiter would
+    // reject with DbasSqliteException(readerSlotWaitCancelled). Without that drain the waiter would
     // hang forever.
     final db = await _createTestDb('pool_close_cancels_surplus_waiter.db',
         readerPoolSize: 1);
@@ -5206,5 +5227,212 @@ void main() async {
 
     await db.closeDb();
     await db.dropDb();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // DbasSqliteException — coverage for codes that the rest of the suite
+  // doesn't reach incidentally, plus the new factory / cause / category
+  // / subCategory surface introduced in this PR.
+  // ──────────────────────────────────────────────────────────────────────
+
+  test('vacuum throws DbasSqliteException(vacuumInsideTransaction)', () async {
+    final db = await _createTestDb('vacuum_in_tx.db');
+    await db.beginTransaction();
+    try {
+      await expectLater(
+        db.vacuum(),
+        throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+            DbasSqliteErrorCode.vacuumInsideTransaction)),
+      );
+    } finally {
+      await db.rollback();
+      await db.closeDb();
+      await db.dropDb();
+    }
+  });
+
+  test('setBusyTimeout / enableWal / vacuum / statement-not-opened guard codes',
+      () async {
+    final db =
+        await DbasSqlite.getInstance(dbName: 'closed_guards.db');
+    // Not yet opened.
+    await expectLater(
+      db.setBusyTimeout(1000),
+      throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+          DbasSqliteErrorCode.setBusyTimeoutDatabaseNotOpened)),
+    );
+    await expectLater(
+      db.enableWal(),
+      throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+          DbasSqliteErrorCode.enableWalDatabaseNotOpened)),
+    );
+    await expectLater(
+      db.vacuum(),
+      throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+          DbasSqliteErrorCode.vacuumDatabaseNotOpened)),
+    );
+  });
+
+  test('bindXxx with unsupported types throws DbasSqliteException(unsupportedPositionalBindType)',
+      () async {
+    final db = await _createTestDb('unsupported_bind.db');
+    {
+      final stmt = await db.prepareQuery('CREATE TABLE t (id INTEGER, v TEXT)');
+      try { await stmt.executeSql(); } finally { await stmt.close(); }
+    }
+    final stmt = await db.prepareQuery('INSERT INTO t (id, v) VALUES (?, ?)');
+    try {
+      await expectLater(
+        // DateTime has no bind path — caller must convert.
+        stmt.executeSql(params: [1, DateTime.now()]),
+        throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+            DbasSqliteErrorCode.unsupportedPositionalBindType)),
+      );
+      await expectLater(
+        stmt.executeSql(nameParams: {'foo': DateTime.now()}),
+        throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+            DbasSqliteErrorCode.unsupportedNamedBindType)),
+      );
+    } finally { await stmt.close(); }
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  // The native binary currently surfaces only the PRIMARY SQLite
+  // result code (e.g. `SQLITE_CONSTRAINT=19`) rather than the
+  // EXTENDED code (e.g. `SQLITE_CONSTRAINT_UNIQUE=2067`,
+  // `SQLITE_CONSTRAINT_FOREIGNKEY=787`). The
+  // [DbasSqliteSubCategory] mapping handles both — extended codes
+  // are tested directly in
+  // "DbasSqliteException factories enforce sqliteCode invariant"
+  // below. These end-to-end tests assert the current "primary-only"
+  // behaviour: any constraint violation collapses to
+  // [DbasSqliteSubCategory.constraintViolation]. When the native lib
+  // starts calling `sqlite3_extended_errcode()`, the assertions will
+  // need to be tightened to `duplicatedData` / `foreignKeyViolation`.
+  test('UNIQUE-index violation surfaces a constraint subCategory', () async {
+    final db = await _createTestDb('unique_dup.db');
+    await _runSql(db,
+        'CREATE TABLE u (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)');
+    await _runSql(db,
+        "INSERT INTO u (id, email) VALUES (1, 'a@b')");
+    final dup = await db.prepareQuery(
+        "INSERT INTO u (id, email) VALUES (2, 'a@b')");
+    try {
+      await expectLater(
+        dup.executeSql(),
+        throwsA(isA<DbasSqliteException>()
+            .having((e) => e.code, 'code',
+                DbasSqliteErrorCode.executeSqlStepFailed)
+            .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_CONSTRAINT)', 19)
+            .having(
+                (e) => e.subCategory,
+                'subCategory',
+                anyOf(
+                  // What we'd see once extended codes are surfaced.
+                  DbasSqliteSubCategory.duplicatedData,
+                  // What the current native binary actually surfaces.
+                  DbasSqliteSubCategory.constraintViolation,
+                ))),
+      );
+    } finally { await dup.close(); }
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('FOREIGN KEY violation surfaces a constraint subCategory', () async {
+    final db = await _createTestDb('fk_violation.db');
+    await _runSql(db, 'PRAGMA foreign_keys = ON');
+    await _runSql(db, 'CREATE TABLE parent (id INTEGER PRIMARY KEY)');
+    await _runSql(db,
+        'CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL '
+        'REFERENCES parent(id))');
+    final bad = await db.prepareQuery(
+        'INSERT INTO child (id, parent_id) VALUES (1, 999)');
+    try {
+      await expectLater(
+        bad.executeSql(),
+        throwsA(isA<DbasSqliteException>()
+            .having((e) => e.code, 'code',
+                DbasSqliteErrorCode.executeSqlStepFailed)
+            .having((e) => e.sqliteCode, 'sqliteCode (SQLITE_CONSTRAINT)', 19)
+            .having(
+                (e) => e.subCategory,
+                'subCategory',
+                anyOf(
+                  DbasSqliteSubCategory.foreignKeyViolation,
+                  DbasSqliteSubCategory.constraintViolation,
+                ))),
+      );
+    } finally { await bad.close(); }
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('openDb is idempotent — second call with the same pool size is a no-op',
+      () async {
+    final db = await DbasSqlite.getInstance(dbName: 'idempotent_open.db');
+    await db.dropDb();
+    await db.openDb(readerPoolSize: 0);
+    expect(db.isOpened(), isTrue);
+    final fileBefore = db.getDbFileName();
+
+    // Second call with the same pool size: silent no-op, same connection.
+    await db.openDb(readerPoolSize: 0);
+    expect(db.isOpened(), isTrue);
+    expect(db.getDbFileName(), fileBefore,
+        reason: 'idempotent openDb must not swap the underlying connection');
+
+    // Different pool size: throws.
+    await expectLater(
+      db.openDb(readerPoolSize: 2),
+      throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+          DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize)),
+    );
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('DbasSqliteException factories enforce sqliteCode invariant', () {
+    final dartSide = DbasSqliteException.dart(
+        DbasSqliteErrorCode.statementClosed, 'closed');
+    expect(dartSide.sqliteCode, isNull);
+    expect(dartSide.subCategory, DbasSqliteSubCategory.notApplicable);
+    expect(dartSide.category, DbasSqliteErrorCategory.notOpened);
+
+    final native = DbasSqliteException.sqlite(
+        DbasSqliteErrorCode.executeSqlStepFailed, 2067, 'unique violation');
+    expect(native.sqliteCode, 2067);
+    expect(native.subCategory, DbasSqliteSubCategory.duplicatedData);
+    expect(native.category, DbasSqliteErrorCategory.executeFailed);
+
+    // Primary SQLITE_BUSY rc maps to databaseBusy.
+    final busy = DbasSqliteException.sqlite(
+        DbasSqliteErrorCode.commitFailed, 5, 'busy');
+    expect(busy.subCategory, DbasSqliteSubCategory.databaseBusy);
+
+    // Extended SQLITE_CONSTRAINT_FOREIGNKEY (787) preferred over primary 19.
+    final fk = DbasSqliteException.sqlite(
+        DbasSqliteErrorCode.executeSqlStepFailed, 787, 'fk');
+    expect(fk.subCategory, DbasSqliteSubCategory.foreignKeyViolation);
+
+    // Unknown rc → DbasSqliteSubCategory.other.
+    final unknown = DbasSqliteException.sqlite(
+        DbasSqliteErrorCode.executeSqlStepFailed, 99999, 'unknown');
+    expect(unknown.subCategory, DbasSqliteSubCategory.other);
+
+    // cause + causeStackTrace flow through.
+    final inner = StateError('inner');
+    final stack = StackTrace.current;
+    final wrapped = DbasSqliteException.dart(
+      DbasSqliteErrorCode.transactionRollbackAlsoFailed,
+      'wrapped',
+      cause: inner,
+      causeStackTrace: stack,
+    );
+    expect(wrapped.cause, same(inner));
+    expect(wrapped.causeStackTrace, same(stack));
+    expect(wrapped.toString(), contains('cause: Bad state: inner'));
   });
 }

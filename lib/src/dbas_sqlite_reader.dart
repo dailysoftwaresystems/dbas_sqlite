@@ -69,7 +69,10 @@ class DbasSqliteReader {
   /// been read. The reader is automatically closed when there are no
   /// more rows.
   ///
-  /// Throws an [Exception] if the query execution fails.
+  /// Throws a [DbasSqliteException] with code
+  /// [DbasSqliteErrorCode.readRowFailed] (and a non-null
+  /// [DbasSqliteException.sqliteCode] carrying the step rc) if the
+  /// query execution fails.
   Future<bool> readRow() async {
     if (_closed) return false;
 
@@ -81,7 +84,7 @@ class DbasSqliteReader {
         error = 'Misuse: possibly missing or invalid bind.';
       }
       error ??= 'Unknown error ($readResult).';
-      throw DbasSqliteException(
+      throw DbasSqliteException.sqlite(
         DbasSqliteErrorCode.readRowFailed,
         readResult,
         'It was not possible to run the query ($readResult): $error',
@@ -153,9 +156,8 @@ class DbasSqliteReader {
     final text = _column(idx)?.value?.toString() ?? '';
     final v = Decimal.tryParse(text);
     if (v == null) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.invalidDecimalFormat,
-        null,
         'getColumnDecimal: cannot parse column $idx value as Decimal: "$text"',
       );
     }
@@ -179,9 +181,8 @@ class DbasSqliteReader {
     final raw = _column(idx)?.value?.toString() ?? '';
     final parts = raw.split(':');
     if (parts.length < 2) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.invalidTimeFormat,
-        null,
         'getColumnTime: column $idx value "$raw" is not in HH:MM or HH:MM:SS[.mmm] format',
       );
     }
@@ -189,9 +190,8 @@ class DbasSqliteReader {
     int parsePart(String s, String label) {
       final v = int.tryParse(s);
       if (v == null) {
-        throw DbasSqliteException(
+        throw DbasSqliteException.dart(
           DbasSqliteErrorCode.invalidTimeComponent,
-          null,
           'getColumnTime: column $idx value "$raw" has invalid $label component "$s"',
         );
       }
@@ -228,9 +228,8 @@ class DbasSqliteReader {
   T getColumnEnum<T extends Enum>(int idx, List<T> values) {
     final intValue = getColumnInt(idx);
     if (intValue < 0 || intValue >= values.length) {
-      throw DbasSqliteException(
+      throw DbasSqliteException.dart(
         DbasSqliteErrorCode.invalidEnumIndex,
-        null,
         'No enum value found for index $intValue in ${T.toString()}',
       );
     }

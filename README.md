@@ -95,7 +95,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite: ^2.6.0
+  dbas_sqlite: ^2.7.0
 ```
 
 Or install with the Dart CLI:
@@ -295,6 +295,64 @@ await db.openDb(readerPoolSize: 0);
 // Copy database to a backup
 await db.streamCopyDb('myapp_backup.db');
 ```
+
+### Error Handling
+
+All public API calls on `DbasSqlite`, `DbasSqliteStatement`, and
+`DbasSqliteReader` throw a single `DbasSqliteException` on failure
+(implements `Exception`). It carries:
+
+- `DbasSqliteErrorCode code` — stable, one unique value per throw
+  site (e.g. `bindPositionalFailed`, `statementClosed`,
+  `transactionAlreadyActive`). Useful for telemetry IDs and test
+  assertions.
+- `int? sqliteCode` — non-`null` when the failure came from the
+  native SQLite layer (the rc returned by `sqlite3_prepare_v2`,
+  `sqlite3_step`, etc.).
+- `String message` — human-readable description.
+- `Object? cause` / `StackTrace? causeStackTrace` — non-`null` when
+  the exception wraps an underlying failure (the rollback-failed
+  paths of `rollback()` / `transaction()`).
+
+Two derived enums make recovery branching ergonomic:
+
+- **`DbasSqliteErrorCategory`** (coarse) — `notOpened`,
+  `busyOrCancelled`, `prepareFailed`, `executeFailed`,
+  `bindFailed`, `transactionFailed`, `readerStateFailed`,
+  `decodeFailed`, `internal`.
+- **`DbasSqliteSubCategory`** (fine, SQLite-aware) — derived from
+  `sqliteCode`. Maps both primary and extended SQLite result codes
+  to semantic values: `databaseBusy`, `tableLocked`,
+  `duplicatedData` (UNIQUE/PRIMARY KEY/ROWID violations),
+  `foreignKeyViolation`, `notNullViolation`, `checkViolation`,
+  `corruptDatabase`, `diskFull`, `readOnlyDatabase`, `rangeError`,
+  `valueTooLarge`, and ~20 more.
+
+```dart
+try {
+  await stmt.executeSql(params: ['alice@example.com']);
+} on DbasSqliteException catch (e) {
+  switch (e.subCategory) {
+    case DbasSqliteSubCategory.duplicatedData:
+      // Email already exists — show "use a different address".
+      break;
+    case DbasSqliteSubCategory.foreignKeyViolation:
+      // Referenced row missing — abort or repair.
+      break;
+    case DbasSqliteSubCategory.databaseBusy:
+      // Transient — retry after a backoff.
+      break;
+    default:
+      // Inspect e.code, e.sqliteCode, e.message, e.cause for the rest.
+      rethrow;
+  }
+}
+```
+
+`openDb()` is idempotent — a second call on an already-open
+instance is a no-op. Calling it with a different `readerPoolSize`
+than the original throws `DbasSqliteException` with code
+`openDbReopenWithDifferentPoolSize`.
 
 ## Minimum Platform Versions
 

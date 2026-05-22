@@ -2,6 +2,100 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.0 - 2026-05-21
+
+### Added
+
+- **`DbasSqliteException`** — single exception type thrown by the
+  public API of `DbasSqlite`, `DbasSqliteStatement`, and
+  `DbasSqliteReader`. Carries a stable `DbasSqliteErrorCode code`
+  (one unique value per throw site), an optional `int? sqliteCode`
+  (the underlying SQLite result code when available), a `String
+  message`, plus optional `Object? cause` and `StackTrace?
+  causeStackTrace` for chained failures (rollback-after-failure,
+  transaction-rollback-also-failed).
+
+  Choose the factory at the throw site:
+  - `DbasSqliteException.dart(code, message)` — Dart-side condition
+    (closed DB, format/range errors, timeouts, queue cancellations).
+    `sqliteCode` is `null`.
+  - `DbasSqliteException.sqlite(code, rc, message)` — native SQLite
+    layer returned a non-OK rc; `sqliteCode` carries it.
+
+  Two derived enums help consumers branch:
+  - **`DbasSqliteErrorCategory`** (coarse) — `notOpened`,
+    `busyOrCancelled`, `prepareFailed`, `executeFailed`,
+    `bindFailed`, `transactionFailed`, `readerStateFailed`,
+    `decodeFailed`, `internal`. Available as `code.category` or
+    `exception.category`.
+  - **`DbasSqliteSubCategory`** (fine, SQLite-aware) — derived from
+    `sqliteCode`. Maps both primary and extended SQLite result codes:
+    `databaseBusy` (SQLITE_BUSY=5), `tableLocked` (SQLITE_LOCKED=6),
+    `duplicatedData` (SQLITE_CONSTRAINT_UNIQUE=2067,
+    `_PRIMARYKEY`=1555, `_ROWID`=2579 — covers UNIQUE column
+    constraints, UNIQUE indexes, and PRIMARY KEY duplicates),
+    `foreignKeyViolation` (787), `notNullViolation` (1299),
+    `checkViolation` (275), `corruptDatabase`, `diskFull`,
+    `readOnlyDatabase`, `valueTooLarge`, `rangeError`, and ~20 more.
+    Available as `exception.subCategory`. Note: with the current
+    bundled native binary only primary rcs surface (constraint
+    violations collapse to `constraintViolation`); the mapping
+    handles extended codes correctly for any path that does provide
+    them.
+
+- **`DbasSqlite.openDb()` is now idempotent.** A second call on an
+  already-open instance is a no-op. Calling with a different
+  `readerPoolSize` throws `DbasSqliteException` with code
+  `openDbReopenWithDifferentPoolSize` — pool resizing isn't
+  supported; close the database first.
+
+### Changed (breaking)
+
+- Every previously-exposed `StateError`, `Exception`,
+  `TimeoutException`, `FormatException`, `ArgumentError`, and
+  `UnsupportedError` thrown by `DbasSqlite`, `DbasSqliteStatement`,
+  and `DbasSqliteReader` is now a `DbasSqliteException`. Code that
+  caught a specific type (e.g. `on TimeoutException catch`,
+  `on FormatException catch`) will no longer match — catch
+  `DbasSqliteException` (or any supertype like `Exception`) and
+  branch on `e.code`, `e.category`, or `e.subCategory`.
+
+  - `getColumnDecimal` / `getColumnTime` previously threw
+    `FormatException`; now `DbasSqliteException` with
+    `invalidDecimalFormat` / `invalidTimeFormat` /
+    `invalidTimeComponent`.
+  - `getColumnEnum` previously threw `ArgumentError`; now
+    `invalidEnumIndex`.
+  - The two `bindXxx` paths that hit an unsupported type previously
+    threw `UnsupportedError`; now `unsupportedPositionalBindType`
+    / `unsupportedNamedBindType`.
+  - The pool-saturated reader-acquire previously threw
+    `TimeoutException`; now `readerSlotWaitTimeout` (Dart-side
+    semaphore wait) or `executeReaderPoolAcquireTimeout` (C-side
+    pool wait).
+  - All "database is not opened" / "statement is closed" guards
+    previously threw `StateError`; now various `…DatabaseNotOpened`
+    and `statementClosed` codes.
+
+### Fixed
+
+- **`closeDb()` no longer aborts teardown when `rollback()` fails.**
+  Previously a failed in-flight ROLLBACK skipped statement cleanup,
+  queue cancellation, and pool close, leaving the cache and OS
+  resources dangling. The rollback failure is now logged via
+  `dart:developer` and teardown continues.
+
+- **`rollback()` and `transaction()` preserve the underlying error.**
+  When ROLLBACK fails (or when both `action`/`commit` and the
+  subsequent rollback fail), the inner exception is now attached as
+  `DbasSqliteException.cause` with its stack trace on
+  `causeStackTrace`. When the inner failure is itself a
+  `DbasSqliteException`, its `sqliteCode` is lifted onto the outer
+  exception so programmatic recovery on `sqliteCode` /
+  `subCategory` keeps working across the wrap. Previously both
+  errors were string-interpolated into the message and the stack
+  trace was destroyed.
+
 ## 2.6.0 - 2026-05-07
 
 ### Added
