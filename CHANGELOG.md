@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.1 - 2026-05-22
+
+### Added
+
+- **Swift Package Manager manifests** — `ios/dbas_sqlite/Package.swift`
+  and `macos/dbas_sqlite/Package.swift`, completing the SPM scaffolding
+  shipped in 2.7.0. Both declare a `FlutterFramework` package
+  dependency and a `.binaryTarget` pointing at the in-tree
+  `dbas_sqlite.xcframework`; the `-all_load` linker flag preserves the
+  static-xcframework workaround previously provided by the example
+  app's `Podfile` post_install.
+
+  Plan in `.plans/spm-followup.md` was overridden — Flutter
+  [#186934](https://github.com/flutter/flutter/pull/186934) is still
+  open upstream. The plugin-identity mismatch the PR fixes is
+  side-stepped here by renaming the repo and source root to
+  `dbas_sqlite` (matching the declared `Package(name:)`). Local
+  development and direct git consumers build cleanly; pub.dev
+  consumers whose pub-cache extraction directory carries a
+  `dbas_sqlite-<version>` suffix may still hit the
+  `unable to override package` error until the upstream fix lands.
+
+### Changed
+
+- **Minimum Flutter / Dart** — `environment.flutter` bumped to
+  `>=3.44.0` and `environment.sdk` to `^3.12.0`. CI's pinned
+  `flutter-version` follows.
+- **Example app migrated to SPM-only** — `pod deintegrate` ran for
+  both `example/ios` and `example/macos`; `Podfile`, `Podfile.lock`,
+  the `Pods` reference in each `Runner.xcworkspace`, and the
+  `Pods/.../Pods-Runner.{debug,release}.xcconfig` includes in the
+  `Flutter/*.xcconfig` files are gone. The post_install
+  `-force_load` workaround now lives in `Package.swift`'s
+  `linkerSettings`. CocoaPods consumers of the plugin itself are
+  unaffected — both podspecs still pass `pod lib lint`.
+- **Repository rename follow-up** — `homepage:` in both pubspecs,
+  the security-advisory URL in `SECURITY.md`, and the GitHub App
+  token's `repositories:` field in the release workflow all
+  switched from `DBAS.SQLite.Flutter` to `dbas_sqlite`. README
+  title and Claude skill descriptor still carry the old display
+  name (kept intentionally — those are human-facing branding, not
+  GitHub-API surface).
+- Refreshed `example/pubspec.lock` (transitive `meta`, `test_api`
+  bumps Flutter 3.44.0 allows) and the Flutter-generated SPM
+  integration entries in `example/{ios,macos}/Runner.xcodeproj`.
+
 ## 2.7.0 - 2026-05-22
 
 ### Added

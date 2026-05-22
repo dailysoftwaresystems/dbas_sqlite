@@ -46,7 +46,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.41.4'
+          flutter-version: '3.44.0'
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -81,7 +81,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.41.4'
+          flutter-version: '3.44.0'
 
       - name: Install Linux desktop build deps
         run: |
@@ -136,7 +136,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.41.4'
+          flutter-version: '3.44.0'
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -186,7 +186,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.41.4'
+          flutter-version: '3.44.0'
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -197,6 +197,9 @@ jobs:
 
       - name: Enable macOS desktop
         run: flutter config --enable-macos-desktop
+
+      - name: Enable Swift Package Manager
+        run: flutter config --enable-swift-package-manager
 
       - name: Run macOS integration tests (plugin_integration_test)
         working-directory: example
@@ -233,7 +236,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.41.4'
+          flutter-version: '3.44.0'
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -325,7 +328,7 @@ jobs:
           client-id: ${{ secrets.DSS_PUBLIC_BOTS_APP_ID }}
           private-key: ${{ secrets.DSS_PUBLIC_BOTS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: DBAS.SQLite.Flutter
+          repositories: dbas_sqlite
 
       - uses: actions/checkout@v6
         with:

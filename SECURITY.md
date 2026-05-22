@@ -28,7 +28,7 @@ You will receive an acknowledgement within **5 business days**. If
 the report is confirmed, we will work with you on coordinated
 disclosure: a fix will be prepared, a patched version published to
 pub.dev, and a GitHub Security Advisory issued under
-[github.com/dailysoftwaresystems/DBAS.SQLite.Flutter/security/advisories](https://github.com/dailysoftwaresystems/DBAS.SQLite.Flutter/security/advisories).
+[github.com/dailysoftwaresystems/dbas_sqlite/security/advisories](https://github.com/dailysoftwaresystems/dbas_sqlite/security/advisories).
 
 We aim to ship a patched release within **30 days** of confirming
 a high-severity report. Lower-severity issues may be rolled into the
