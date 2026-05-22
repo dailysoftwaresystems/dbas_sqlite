@@ -9,11 +9,16 @@ let package = Package(
   products: [
     .library(name: "dbas-sqlite", targets: ["dbas_sqlite"])
   ],
-  dependencies: [],
+  dependencies: [
+    .package(name: "FlutterFramework", path: "../FlutterFramework")
+  ],
   targets: [
     .target(
       name: "dbas_sqlite",
-      dependencies: ["dbas_sqlite_native"],
+      dependencies: [
+        .product(name: "FlutterFramework", package: "FlutterFramework"),
+        "dbas_sqlite_native"
+      ],
       resources: [
         .process("PrivacyInfo.xcprivacy")
       ],
