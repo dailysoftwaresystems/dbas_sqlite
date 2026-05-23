@@ -121,6 +121,14 @@ class DbasSqliteWebPool {
   final Map<int, void Function(_JSObj)> _streamHandlers = {};
   bool _closed = false;
 
+  /// True after [close] has been called. Surfaces pool liveness so the
+  /// platform shim can detect when a long-lived pool was torn down
+  /// externally (e.g. a sibling probe path created the same pool via
+  /// the shared [_pools] map and then closed it) and trigger a fresh
+  /// `create` on the next operation instead of dispatching through a
+  /// dead worker.
+  bool get isClosed => _closed;
+
   DbasSqliteWebPool._(this.dbName, this._worker) {
     _worker.onmessage = ((web.MessageEvent e) {
       final jsData = e.data;
