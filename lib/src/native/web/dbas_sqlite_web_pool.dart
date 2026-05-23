@@ -455,6 +455,46 @@ class DbasSqliteWebPool {
     return completer.future;
   }
 
+  /// Binds a single [param] (positional `int` index or named `String`
+  /// placeholder, e.g. `':name'` / `'@name'` / `r'$name'`) on the
+  /// prepared [rawHandle]. One worker round-trip per bind, returning
+  /// the actual SQLite rc so the statement layer's `_replayBinds` can
+  /// honour the per-call rc contract — matching native FFI's
+  /// `sqlite3_bind_*` semantics 1:1, including the
+  /// `SQLITE_RANGE`-on-missing-named-parameter behaviour that the
+  /// `bindNameParameters` docstring promises ("silently skipped …
+  /// matching Microsoft.Data.Sqlite").
+  ///
+  /// Throws on worker / protocol errors. SQLite-level non-OK rcs are
+  /// surfaced as a thrown [DbasSqliteWebWorkerError] whose
+  /// [DbasSqliteWebWorkerError.sqliteCode] carries the rc; the platform
+  /// shim catches and converts to a returned rc to match the native
+  /// interface signature.
+  Future<void> bindParam(JSAny rawHandle, Object param, Object? value) {
+    if (_closed) throw StateError('Pool is closed for "$dbName"');
+    final id = _nextId++;
+    final completer = Completer<void>();
+    _requests[id] = completer;
+
+    final payload = <String, dynamic>{
+      'handle': rawHandle,
+      'param': param,
+      'value': value,
+    };
+
+    try {
+      _worker.postMessage(<String, dynamic>{
+        'id': id,
+        'action': 'bindParam',
+        'payload': payload,
+      }.jsify());
+    } catch (e) {
+      _requests.remove(id);
+      completer.completeError(e);
+    }
+    return completer.future;
+  }
+
   /// Steps the prepared [rawHandle] one row.
   ///
   /// Returns `(rc: 100, columns: [...])` on `SQLITE_ROW` (with one

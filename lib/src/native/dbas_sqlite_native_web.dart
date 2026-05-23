@@ -5,6 +5,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'package:web/web.dart' as web;
 
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
@@ -146,38 +147,82 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<bool> databaseExists(String fileName) async {
-    // Read-only probe: just asks the worker whether the OPFS file
-    // exists. When a live pool is already running for this dbName,
-    // dispatch through it directly — do NOT call
-    // `DbasSqliteWebPool.create()` to obtain a "throwaway" pool. That
-    // factory is a get-or-create against the shared `_pools` map
-    // keyed by dbName, so it would return the live pool and the
-    // subsequent `pool.close()` here would tear it down — corrupting
-    // every other operation in flight on that database. Only spin up
-    // (and close) a transient pool when no live pool exists.
+    // Native FFI parity: `databaseExists` is a no-side-effect probe —
+    // it reports whether the DB file is present on disk, and a `false`
+    // return MUST NOT cause the file to materialize. The Dart-VM impl
+    // is a one-line `File(path).existsSync()`.
     //
-    // TOCTOU: between the `isClosed` check and `send`, a concurrent
-    // caller could close the live pool. `send` then throws a raw
-    // `StateError('Pool is closed for ...')`. Catch it and fall
-    // through to the transient-pool path so the probe still succeeds
-    // — and the caller never sees a raw `StateError` from this
-    // platform shim.
+    // The previous web implementation routed through the worker —
+    // `DbasSqliteWebPool.create()` → `pool.send('exists')` — which
+    // forced an `init` round-trip on the worker. `init` calls the
+    // WASM lib's `initPersistentFS`, which opens the SQLite DB with
+    // create-or-open semantics AND walks `openOpfsHandles` to call
+    // `opfsDir.getFileHandle(name, {create: true})` for the four
+    // SQLite files (`name.db`, `-journal`, `-wal`, `-shm`). That
+    // creates the file as a side-effect, so the immediately-following
+    // `exists` action always returned `true` — and any caller that
+    // used `databaseExists` as a "should I run the first-time
+    // bootstrap?" gate (e.g. `SessionLifecycle._defaultSessionWriter`
+    // upserting a row before the migrator has had a chance to create
+    // the schema) silently skipped the bootstrap and then crashed on
+    // a downstream "no such table" prepare. Symptom seen in consumers:
+    // "no such table: dbas_Session" on first-ever login.
+    //
+    // The fix is to bypass the worker for the probe and check OPFS
+    // directly from Dart — no init, no file creation, no side effects
+    // — matching native FFI's semantics 1:1.
+    //
+    // Live-pool short-circuit: if our own [_pool] is alive, the file
+    // is loaded into the worker and definitionally exists. Skip the
+    // OPFS round-trip in that case (covers the hot path where the DB
+    // is already open).
     final live = _pool;
-    if (live != null && !live.isClosed) {
-      try {
-        return await live.send('exists') == true;
-      } on StateError catch (e, st) {
-        developer.log(
-          'DbasSqliteNativeWeb.databaseExists: live pool closed mid-probe '
-          'for "$dbName"; retrying via transient pool',
-          name: 'dbas_sqlite.DbasSqliteNativeWeb',
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
-    return await _withTempPool((pool) async => await pool.send('exists') == true);
+    if (live != null && !live.isClosed) return true;
+    return await _opfsFileExists(_normalizedDbName);
   }
+
+  /// OPFS-direct existence probe, no worker / WASM involved. Looks
+  /// for the SQLite file at the exact path the WASM lib's
+  /// `initPersistentFS` mounts: `dbas_data/<dbName>` under
+  /// `navigator.storage.getDirectory()`. The `create: false` options
+  /// guarantee a NotFoundError throw when the file (or the parent
+  /// `dbas_data` directory) is missing, which we catch and convert to
+  /// a `false` return.
+  Future<bool> _opfsFileExists(String fileName) async {
+    try {
+      final root = await web.window.navigator.storage.getDirectory().toDart;
+      final dir = await root
+          .getDirectoryHandle(
+            _opfsDataDirName,
+            web.FileSystemGetDirectoryOptions(create: false),
+          )
+          .toDart;
+      await dir
+          .getFileHandle(
+            fileName,
+            web.FileSystemGetFileOptions(create: false),
+          )
+          .toDart;
+      return true;
+    } catch (_) {
+      // NotFoundError (or any other resolution failure) → file is not
+      // present from this Dart context's perspective. Match native's
+      // bare-bones `File.existsSync()` swallow-and-return-false.
+      return false;
+    }
+  }
+
+  /// dbName normalized to the on-disk filename the WASM lib uses.
+  /// Mirrors `initialize()` in `dbas_sqlite.js`:
+  /// `this.dbName = e.endsWith(".db") ? e : "${e}.db"`.
+  String get _normalizedDbName =>
+      dbName.endsWith('.db') ? dbName : '$dbName.db';
+
+  /// OPFS subdirectory the WASM lib creates inside
+  /// `navigator.storage.getDirectory()` and where it puts every
+  /// SQLite file. Mirrors the literal in `initialize()`:
+  /// `r.getDirectoryHandle("dbas_data", {create: true})`.
+  static const String _opfsDataDirName = 'dbas_data';
 
   @override
   bool isOpened(int dbPtr) => _pool != null && !_pool!.isClosed;
@@ -415,39 +460,10 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     cache.columnCount = state.columnCount;
     cache.columnNames = state.columnNames;
 
-    // Flush buffered binds on the first call. Subsequent calls reuse
-    // the already-bound parameters on the worker stmt — the worker
-    // doesn't auto-reset between `readRow`/`readRows` calls.
-    //
-    // Statements that mix `?N` (positional) and `:name` (named)
-    // markers need TWO `bindParams` round-trips because the worker's
-    // wrapper accepts either an array or an object per call, not
-    // both. SQLite bind slots are independent so the two calls
-    // accumulate; this matches native FFI's per-slot bind semantics
-    // for the same statement shape.
-    if (!state.bindsFlushed) {
-      // Set the flag in a finally so a partial bind failure (one
-      // shape succeeded, the other threw) doesn't cause a retry on
-      // the next `readRowAndCache` — the worker handle is in an
-      // ambiguous bind state and the caller must finalize and
-      // re-prepare to recover.
-      try {
-        final params = state.mergedParams();
-        if (params.positional != null) {
-          await _pool!.bindParams(state.rawHandle, params.positional);
-        }
-        if (params.named != null) {
-          await _pool!.bindParams(state.rawHandle, params.named);
-        }
-      } catch (e) {
-        state.lastError = e.toString();
-        _captureError(e);
-        state.bindsFlushed = true;
-        cache.columns = null;
-        return 1; // SQLITE_ERROR — caller propagates
-      }
-      state.bindsFlushed = true;
-    }
+    // Binds were applied eagerly by [_bindOne] (one worker round-trip
+    // per `bind*` / `bindName*` call) — no deferred flush is needed
+    // here, and the statement layer's `_replayBinds` already saw the
+    // per-call rc on each bind. Proceed straight to the row machinery.
 
     // Pop a buffered row if we have one.
     if (state.chunk.isNotEmpty) {
@@ -569,71 +585,89 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int getStmtLastInsertedId(int dbPtr, int handle) =>
       _stmts[handle]?.lastInsertedId ?? -1;
 
-  // ── Bindings (positional) ─────────────────────────────────────────────
-  // All bind methods buffer Dart-side and return SQLITE_OK synchronously
-  // (well, via Future). The buffer is flushed in one `bindParams` worker
-  // round-trip on the first `readRowAndCache` call, mirroring how native
-  // FFI replays one bind call per slot — except batched into a single
-  // postMessage for round-trip efficiency.
+  // ── Bindings ─────────────────────────────────────────────────────────
+  // Every bind method makes ONE worker round-trip via [DbasSqliteWebPool.bindParam]
+  // and returns the actual SQLite rc — matching native FFI's per-call
+  // `sqlite3_bind_*` semantics 1:1. The statement layer's `_replayBinds`
+  // then sees the same rc behaviour on both platforms, including the
+  // `SQLITE_RANGE` skip on missing named parameters that the
+  // `bindNameParameters` docstring promises ("silently skipped …
+  // matching Microsoft.Data.Sqlite").
+  //
+  // The previous shim buffered Dart-side and flushed in one batched
+  // `bindParams` postMessage. That broke the contract: the WASM
+  // `bindParams` is all-or-nothing, so one missing named slot threw
+  // `SQLITE_RANGE` for the whole batch and surfaced as
+  // `executeSqlStepFailed` instead of being silently skipped.
 
-  Future<int> _bindPositional(int handle, int index, Object? value) async {
+  Future<int> _bindOne(int handle, Object param, Object? value) async {
     final state = _stmts[handle];
     if (state == null) return sqliteMisuse;
-    state.setPositional(index, value);
-    return sqliteOk;
-  }
-
-  Future<int> _bindNamed(int handle, String name, Object? value) async {
-    final state = _stmts[handle];
-    if (state == null) return sqliteMisuse;
-    state.setNamed(name, value);
-    return sqliteOk;
+    await _ensurePool();
+    try {
+      await _pool!.bindParam(state.rawHandle, param, _jsifyBindValue(value));
+      return sqliteOk;
+    } on DbasSqliteWebWorkerError catch (e) {
+      // Worker reported a non-OK rc. Surface it to the statement
+      // layer's `_replayBinds`, which decides per-rc whether to skip
+      // (default for `SQLITE_RANGE` on named binds) or throw.
+      state.lastError = e.message;
+      _captureError(e);
+      return e.sqliteCode ?? 1;
+    } catch (e) {
+      // Worker / protocol-level failure (not a SQLite rc). Surface as
+      // generic SQLITE_ERROR so the statement layer's error path picks
+      // it up via [getLastStmtError] / [getErrorCode].
+      state.lastError = e.toString();
+      _captureError(e);
+      return 1; // SQLITE_ERROR
+    }
   }
 
   @override
   Future<int> bindNull(int dbPtr, int handle, int index) =>
-      _bindPositional(handle, index, null);
+      _bindOne(handle, index, null);
   @override
   Future<int> bindInt(int dbPtr, int handle, int index, int value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindInt64(int dbPtr, int handle, int index, int value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindFloat(int dbPtr, int handle, int index, double value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindDouble(int dbPtr, int handle, int index, double value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindText(int dbPtr, int handle, int index, String value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindBlob(int dbPtr, int handle, int index, List<int> value) =>
-      _bindPositional(
-          handle, index, value is Uint8List ? value : Uint8List.fromList(value));
+      _bindOne(handle, index,
+          value is Uint8List ? value : Uint8List.fromList(value));
 
   @override
   Future<int> bindNameNull(int dbPtr, int handle, String name) =>
-      _bindNamed(handle, name, null);
+      _bindOne(handle, name, null);
   @override
   Future<int> bindNameInt(int dbPtr, int handle, String name, int value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameInt64(int dbPtr, int handle, String name, int value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameFloat(int dbPtr, int handle, String name, double value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameDouble(int dbPtr, int handle, String name, double value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameText(int dbPtr, int handle, String name, String value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value) =>
-      _bindNamed(handle, name,
+      _bindOne(handle, name,
           value is Uint8List ? value : Uint8List.fromList(value));
 
   // ── Per-handle column accessors ──────────────────────────────────────
@@ -814,11 +848,6 @@ class _WebStmtState {
   final int columnCount;
   final List<String> columnNames;
 
-  // Pending binds — flushed before first step.
-  final Map<int, Object?> _positional = {};
-  final Map<String, Object?> _named = {};
-  bool bindsFlushed = false;
-
   // Step machinery.
   final Queue<List<ColumnData>> chunk = Queue();
   bool hasMore = true;
@@ -839,75 +868,21 @@ class _WebStmtState {
     required this.columnCount,
     required this.columnNames,
   });
+}
 
-  void setPositional(int index, Object? value) {
-    _positional[index] = value;
-  }
-
-  void setNamed(String name, Object? value) {
-    _named[name] = value;
-  }
-
-  /// Build the parameter payloads for `bindParams`. Returns whichever
-  /// of the two shapes the worker's `bindParams` accepts (positional
-  /// list, named map) are non-empty.
-  ///
-  /// The worker's wrapper splits on `Array.isArray(params)` and
-  /// dispatches each entry to `bindParam(dbPtr, h, key, value)` —
-  /// arrays bind by index, objects bind by name. SQLite's
-  /// `sqlite3_bind_*` slots are independent, so calling `bindParams`
-  /// twice on the same handle (once per shape) accumulates the binds
-  /// rather than overwriting them, matching native FFI's per-slot
-  /// bind semantics for statements that mix `?N` and `:name` markers.
-  ({List<Object?>? positional, Map<String, dynamic>? named})
-      mergedParams() {
-    List<Object?>? positional;
-    if (_positional.isNotEmpty) {
-      // Build a dense list indexed by 1-based position. Sparse binds
-      // (e.g. only slot 1 and 3 set) leave intermediate entries as
-      // `null`, which binds SQLite NULL to those slots — matching
-      // native FFI's behaviour where unbound slots are NULL by
-      // default.
-      final maxIndex =
-          _positional.keys.fold<int>(0, (a, b) => a > b ? a : b);
-      final list = List<Object?>.filled(maxIndex, null);
-      for (final entry in _positional.entries) {
-        list[entry.key - 1] = _jsifyBindValue(entry.value);
-      }
-      positional = list;
-    }
-    Map<String, dynamic>? named;
-    if (_named.isNotEmpty) {
-      final out = <String, dynamic>{};
-      for (final e in _named.entries) {
-        String name = e.key;
-        if (!name.startsWith(':') &&
-            !name.startsWith('@') &&
-            !name.startsWith(r'$')) {
-          name = ':$name';
-        }
-        out[name] = _jsifyBindValue(e.value);
-      }
-      named = out;
-    }
-    return (positional: positional, named: named);
-  }
-
-  /// Adapt a Dart bind value into the JS shape the worker's
-  /// `bindParams` expects. Mirrors the conversion previously done in
-  /// `DbasSqliteStatement._jsifyBindValue` — kept here so the platform
-  /// layer can be the single converter for web.
-  static Object? _jsifyBindValue(Object? value) {
-    if (value == null) return null;
-    if (value is bool) return value ? 1 : 0;
-    if (value is Enum) return value.index;
-    // Blobs MUST cross the postMessage boundary as a typed-array so
-    // the JS wrapper's bindParams recognises them via
-    // `instanceof Uint8Array` and routes through bindBlob. A raw
-    // `List<int>` jsifies to a regular JS Array and gets stringified
-    // by the bindText fallback, silently corrupting the bytes.
-    if (value is Uint8List) return value;
-    if (value is List<int>) return Uint8List.fromList(value);
-    return value;
-  }
+/// Adapts a Dart bind value into the JS shape the worker's
+/// `bindParam` expects. The conversions mirror what the native FFI's
+/// per-type `bind*` functions do implicitly:
+///   - `bool` → 0/1 (native uses `bindInt` with `value ? 1 : 0`),
+///   - `Enum` → `index` (native uses `bindInt(enum.index)`),
+///   - `List<int>` → `Uint8List` so the postMessage layer routes the
+///     bytes through `bindBlob` rather than stringifying them via
+///     `bindText` (which would silently corrupt the payload).
+Object? _jsifyBindValue(Object? value) {
+  if (value == null) return null;
+  if (value is bool) return value ? 1 : 0;
+  if (value is Enum) return value.index;
+  if (value is Uint8List) return value;
+  if (value is List<int>) return Uint8List.fromList(value);
+  return value;
 }

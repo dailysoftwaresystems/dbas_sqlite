@@ -2,6 +2,76 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.5 - 2026-05-23
+
+### Fixed
+
+- **Web: `databaseExists` was a creating probe, breaking native
+  parity** — the implementation routed through the worker
+  (`DbasSqliteWebPool.create()` → `pool.send('exists')`), which forced
+  an `init` round-trip. `init` calls the WASM lib's
+  `initPersistentFS`, which both opens the SQLite DB (create-or-open)
+  and walks `openOpfsHandles` calling `opfsDir.getFileHandle(name,
+  {create: true})` for the four SQLite files (`name.db`, `-journal`,
+  `-wal`, `-shm`). Net effect: every `databaseExists` invocation
+  materialised the file in OPFS, and the very next `exists` action
+  returned `true`. Native FFI's `databaseExists` is a no-side-effect
+  `File(path).existsSync()` — calling it on a non-existent file
+  leaves it non-existent. The web behaviour broke any consumer that
+  used `databaseExists` as a "first-time bootstrap?" gate, e.g.
+  `SessionLifecycle._defaultSessionWriter` upserting a row before the
+  migrator created the schema. Symptom seen in consumers: "no such
+  table: dbas_Session" on first-ever login.
+
+### Changed
+
+- **Web: `databaseExists` now probes OPFS directly from Dart** via
+  `navigator.storage.getDirectory().getDirectoryHandle("dbas_data",
+  {create: false}).getFileHandle("<dbName>", {create: false})`. The
+  WASM lib is not involved, no worker is spun up, no file is created
+  — matching native FFI's "is the file on disk?" semantics 1:1. A
+  live `_pool` short-circuits to `true` (file is loaded by
+  definition) so the hot path stays cheap.
+
+## 2.7.4 - 2026-05-23
+
+### Fixed
+
+- **Web: `executeSqlStepFailed [SQLITE_BIND_RANGE]` when a named bind
+  isn't present in the prepared SQL** — `DbasSqliteStatement.bindNameParameters`
+  documents that missing named params are silently skipped to match
+  `Microsoft.Data.Sqlite`, and `_replayBinds` implements that skip per
+  rc on every native FFI bind. On web the contract was broken because
+  the shim's `bindName*` methods buffered Dart-side and always returned
+  `sqliteOk`; the real bind happened later in `readRowAndCache` via one
+  batched `bindParams` call against the worker. The WASM `bindParams`
+  is all-or-nothing, so a single missing named slot threw
+  `SQLITE_RANGE` for the entire batch and surfaced as
+  `executeSqlStepFailed` instead of being skipped. Consumers whose
+  query builder emits a named param that doesn't appear in the SQL
+  (e.g. a recursive-join column auto-added by a higher-level ORM) hit
+  the failure on every read; downstream the failing read could cascade
+  into "no such table" errors when a migration ledger probe couldn't
+  complete and the schema wasn't created.
+
+### Changed
+
+- **Web: per-call bind round-trips, eager rc** — `DbasSqliteNativeWeb`'s
+  positional and named `bind*` methods now each make ONE worker
+  round-trip via the new `DbasSqliteWebPool.bindParam` (singular)
+  action and return the SQLite rc the worker reported, exactly mirroring
+  native FFI's per-call `sqlite3_bind_*` semantics. The statement
+  layer's `_replayBinds` therefore sees the same per-bind rcs on both
+  platforms (including `SQLITE_RANGE` on missing named params, which it
+  silently skips or throws based on `throwOnMissingNamedParams`). The
+  Dart-side bind buffer in `_WebStmtState` (`setPositional` / `setNamed`
+  / `mergedParams` / `bindsFlushed`) and the buffered flush block at
+  the top of `readRowAndCache` are gone — the binds are already on the
+  worker by the time the first row is fetched.
+- **Web: `DbasSqliteWebPool.bindParam` (singular) added** — wraps the
+  worker's `bindParam` action so the platform shim can bind one slot
+  at a time and surface per-call rcs.
+
 ## 2.7.3 - 2026-05-23
 
 ### Fixed
