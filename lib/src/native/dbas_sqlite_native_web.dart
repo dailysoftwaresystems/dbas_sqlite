@@ -132,13 +132,14 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   Future<int> openDb(String path) async {
     // Single-connection fallback path (`DbasSqlite.openDb` calls this
-    // when `readerPoolSize == 0`, or when `createPool` returned 0).
-    // Web has no "no-pool" mode — every worker call routes through a
-    // [DbasSqliteWebPool] — so ensure one exists. Without this, the
-    // fallback would leave `_pool == null` while [isOpened] (derived
-    // from pool liveness) reported false, and the next `openDb()` on
-    // the same instance would re-enter this path instead of being a
-    // no-op as the idempotent contract promises.
+    // when the caller opts out of pool creation — `readerPoolSize <= 0`
+    // — or when `createPool` returned 0). Web has no "no-pool" mode —
+    // every worker call routes through a [DbasSqliteWebPool] — so
+    // ensure one exists. Without this, the fallback would leave
+    // `_pool == null` while [isOpened] (derived from pool liveness)
+    // reported false, and the next `openDb()` on the same instance
+    // would re-enter this path instead of being a no-op as the
+    // idempotent contract promises.
     await _ensurePool();
     return 1;
   }
@@ -154,9 +155,26 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     // subsequent `pool.close()` here would tear it down — corrupting
     // every other operation in flight on that database. Only spin up
     // (and close) a transient pool when no live pool exists.
+    //
+    // TOCTOU: between the `isClosed` check and `send`, a concurrent
+    // caller could close the live pool. `send` then throws a raw
+    // `StateError('Pool is closed for ...')`. Catch it and fall
+    // through to the transient-pool path so the probe still succeeds
+    // — and the caller never sees a raw `StateError` from this
+    // platform shim.
     final live = _pool;
     if (live != null && !live.isClosed) {
-      return await live.send('exists') == true;
+      try {
+        return await live.send('exists') == true;
+      } on StateError catch (e, st) {
+        developer.log(
+          'DbasSqliteNativeWeb.databaseExists: live pool closed mid-probe '
+          'for "$dbName"; retrying via transient pool',
+          name: 'dbas_sqlite.DbasSqliteNativeWeb',
+          error: e,
+          stackTrace: st,
+        );
+      }
     }
     return await _withTempPool((pool) async => await pool.send('exists') == true);
   }
@@ -200,11 +218,12 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<List<int>> getContent(String fileName) async {
-    // Snapshot export: closing the live pool first guarantees WAL is
-    // checkpointed and no concurrent writer can race the export. The
-    // bytes are read against a transient pool; the live pool stays
-    // torn down (caller re-opens via `DbasSqlite.openDb` if it wants
-    // to keep using the database).
+    // Snapshot export: closing the live pool first lets the worker
+    // checkpoint and release the OPFS file before the transient pool
+    // reads it, and prevents a concurrent writer from racing the
+    // export. The bytes are read against a transient pool; the live
+    // pool stays torn down (caller re-opens via `DbasSqlite.openDb`
+    // if it wants to keep using the database).
     await _teardownLivePool();
     return await _withTempPool((pool) => pool.exportContentStream());
   }
@@ -698,9 +717,20 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   Future<void> _ensurePool() async {
     final existing = _pool;
     if (existing != null && !existing.isClosed) return;
-    // `existing` is either null or stale-closed (a probe-side close
-    // happened on a previous shared-pool grab). Drop the reference so
-    // the next worker action runs against the fresh pool.
+    // `existing` is either null or stale-closed. Stale-closed happens
+    // when another `DbasSqliteNativeWeb` instance for the same dbName
+    // closed the shared pool object that this instance's `_pool` field
+    // still references — `_pools` is keyed by dbName and a sibling's
+    // `_teardownLivePool` flips `_closed` on the object we hold. No
+    // in-tree caller produces this from a single instance after the
+    // probe-side teardown bug was fixed; the branch survives as a
+    // defensive guard against multi-instance use of the same dbName.
+    //
+    // Clear `_stmts` symmetrically with [_teardownLivePool] so cached
+    // raw JS BigInt handles bound to the dead worker's WASM heap don't
+    // leak into the fresh worker (which would reject them with
+    // UNKNOWN_HANDLE on next use).
+    if (existing != null) _stmts.clear();
     _pool = await DbasSqliteWebPool.create(
       dbName: dbName,
       readerCount: DbasSqliteNativeInterface.workerPoolSize,
@@ -716,34 +746,52 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   ///
   /// Safe to call when no pool is live — becomes a no-op so destructive
   /// callers do not have to guard.
+  ///
+  /// Note: `pool.close()` already removes the entry from
+  /// `DbasSqliteWebPool._pools` synchronously (before its own await),
+  /// so an explicit `removePool(dbName)` here would be a no-op.
   Future<void> _teardownLivePool() async {
     final pool = _pool;
     _pool = null;
     _stmts.clear();
-    if (pool != null) {
-      await pool.close();
-      DbasSqliteWebPool.removePool(dbName);
-    }
+    if (pool != null) await pool.close();
   }
 
   /// Runs [action] against a transient pool that is NOT shared with
   /// [_pool]. Used by destructive file operations and by
   /// [databaseExists] when no live pool exists. The transient pool is
-  /// closed and removed from the shared `_pools` map afterwards so a
-  /// subsequent [_ensurePool] / [createPool] creates a fresh worker.
+  /// closed afterwards so a subsequent [_ensurePool] / [createPool]
+  /// creates a fresh worker. (`pool.close()` removes itself from
+  /// `DbasSqliteWebPool._pools` synchronously, so no follow-up
+  /// `removePool` is needed.)
   ///
   /// Pre-condition: caller has already torn down the live pool via
-  /// [_teardownLivePool] if the action mutates the file, since
-  /// `DbasSqliteWebPool.create` is get-or-create and would otherwise
-  /// hand back the live pool.
+  /// [_teardownLivePool] if the action requires exclusive file access
+  /// — mutation, full-file export, or any other operation incompatible
+  /// with a concurrent live writer — since `DbasSqliteWebPool.create`
+  /// is get-or-create and would otherwise hand back the live pool.
+  ///
+  /// If [action] throws, the original exception is preserved: a
+  /// failure inside the finally-block `close()` is logged via
+  /// `dart:developer` rather than rethrown, so callers see the real
+  /// root cause instead of a downstream cleanup error.
   Future<T> _withTempPool<T>(
       Future<T> Function(DbasSqliteWebPool pool) action) async {
     final pool = await DbasSqliteWebPool.create(dbName: dbName);
     try {
       return await action(pool);
     } finally {
-      await pool.close();
-      DbasSqliteWebPool.removePool(dbName);
+      try {
+        await pool.close();
+      } catch (e, st) {
+        developer.log(
+          'DbasSqliteNativeWeb._withTempPool: transient pool close '
+          'failed for "$dbName"',
+          name: 'dbas_sqlite.DbasSqliteNativeWeb',
+          error: e,
+          stackTrace: st,
+        );
+      }
     }
   }
 }

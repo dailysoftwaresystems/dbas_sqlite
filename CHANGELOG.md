@@ -38,6 +38,22 @@ All notable changes to this project will be documented in this file.
 - **Web: `DbasSqliteWebPool.isClosed` getter added** so the platform
   shim can detect externally-torn-down pools and trigger a fresh
   `create` on the next operation.
+- **Web: `_ensurePool` now clears `_stmts` when overwriting a
+  stale-closed pool**, symmetrically with `_teardownLivePool`. Without
+  this, cached prepared-statement handles bound to the dead worker's
+  WASM heap would leak into the fresh worker and be rejected with
+  `UNKNOWN_HANDLE` on next use.
+- **Web: `_withTempPool` finally-block now preserves the original
+  error.** If the action throws and the cleanup `pool.close()` also
+  throws, the close failure is logged via `dart:developer` instead of
+  masking the root cause.
+- **Web: `databaseExists` retries via a transient pool if the live
+  pool is closed mid-probe**, so callers never see a raw `StateError`
+  bubble out of the platform shim from a concurrent teardown race.
+- **Tests: regression integration test added** to
+  `example/integration_test/dbas_sqlite_web_test.dart` (`databaseExists
+  on a live pool does not tear it down`) covering the exact pre-fix
+  symptom.
 
 ## 2.7.2 - 2026-05-22
 

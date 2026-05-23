@@ -122,11 +122,13 @@ class DbasSqliteWebPool {
   bool _closed = false;
 
   /// True after [close] has been called. Surfaces pool liveness so the
-  /// platform shim can detect when a long-lived pool was torn down
-  /// externally (e.g. a sibling probe path created the same pool via
-  /// the shared [_pools] map and then closed it) and trigger a fresh
-  /// `create` on the next operation instead of dispatching through a
-  /// dead worker.
+  /// platform shim can detect when another holder closed the pool
+  /// object this instance still references — `_pools` is keyed by
+  /// `dbName`, so a sibling `DbasSqliteNativeWeb` for the same DB can
+  /// call `close()` on the pool, leaving the original holder's `_pool`
+  /// field pointing at a dead worker. Reading `isClosed` lets the shim
+  /// detect this and trigger a fresh `create` on the next operation
+  /// instead of dispatching through a worker that has been terminated.
   bool get isClosed => _closed;
 
   DbasSqliteWebPool._(this.dbName, this._worker) {

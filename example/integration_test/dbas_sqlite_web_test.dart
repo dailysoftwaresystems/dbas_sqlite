@@ -801,6 +801,72 @@ void main() {
     await db.dropDb();
   });
 
+  // Regression for v2.7.3: pre-fix, `databaseExists()` called
+  // `DbasSqliteWebPool.create(dbName: ...)` to grab a "throwaway"
+  // pool. That factory is get-or-create against the shared `_pools`
+  // map keyed by dbName, so when a live pool was already running it
+  // returned the live pool and the trailing `pool.close()` tore the
+  // live pool down. The next `executeSql` / `executeReader` on the
+  // same instance then failed with
+  // `DbasSqliteException(executeReaderPrepareFailed)` wrapping
+  // `StateError: Pool is closed for "exists_live_pool.db"`.
+  testWidgets('databaseExists on a live pool does not tear it down',
+      (tester) async {
+    final db = await createWebDb('exists_live_pool.db');
+    {
+      final stmt = await db.prepareQuery(
+          'CREATE TABLE t (id INTEGER PRIMARY KEY)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+
+    // Probe while the pool is live — must not tear the pool down.
+    expect(await db.databaseExists(), isTrue);
+
+    // Post-fix: subsequent writes on the same instance still work.
+    // Pre-fix: throws StateError("Pool is closed for ...").
+    {
+      final stmt =
+          await db.prepareQuery('INSERT INTO t (id) VALUES (1)');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+
+    {
+      final reader = await (await db.prepareQuery('SELECT COUNT(*) FROM t'))
+          .executeReader();
+      try {
+        expect(await reader.readRow(), isTrue);
+        expect(reader.getColumnInt(0), 1);
+      } finally {
+        await reader.close();
+      }
+    }
+
+    // Probe again, then read again — confirms the no-teardown invariant
+    // holds across multiple probes, not just the first one.
+    expect(await db.databaseExists(), isTrue);
+    {
+      final reader =
+          await (await db.prepareQuery('SELECT id FROM t')).executeReader();
+      try {
+        expect(await reader.readRow(), isTrue);
+        expect(reader.getColumnInt(0), 1);
+      } finally {
+        await reader.close();
+      }
+    }
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   // ── Full lifecycle: create → close → export → attach → vacuum ─────────
 
   testWidgets('full export-import-vacuum lifecycle', (tester) async {
