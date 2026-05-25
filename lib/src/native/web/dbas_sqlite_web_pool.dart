@@ -8,6 +8,8 @@ import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
     show sqliteRow, sqliteDone;
 
+import 'dbas_sqlite_web_columns.dart';
+
 const _workerUrl = 'assets/packages/dbas_sqlite/web/libs/dbas_sqlite_worker.js';
 // Relative to the worker script location (same directory), not the page root.
 // importScripts() inside the worker resolves URLs relative to the worker URL.
@@ -20,12 +22,6 @@ extension type _JSObj._(JSObject _) implements JSObject {
   external JSAny? operator [](String key);
   external void operator []=(String key, JSAny? value);
 }
-
-/// JS `Number(value)` — converts BigInt, strings, etc. to a JS Number.
-/// Used to safely extract int64 return values from Emscripten WASM exports
-/// which may arrive as BigInt.
-@JS('Number')
-external JSNumber _jsToNumber(JSAny? value);
 
 /// **Internal** — implementation detail of the web shim. Carries the
 /// SQLite rc / extended rc reported by the worker's `postErr` envelope.
@@ -894,64 +890,12 @@ class DbasSqliteWebPool {
     return completer.future;
   }
 
-  /// Inspect a raw JS value pulled out of a `readRow` row payload and
-  /// produce a typed [ColumnData]. The classification mirrors what the
-  /// native FFI `readRowAndCache` produces:
-  ///
-  ///   - `bigint` JS values (SQLite INTEGER outside int32 range) →
-  ///     INTEGER, materialised via `BigInt.toInt()` (clamped to the
-  ///     53-bit Dart-on-web int range).
-  ///   - `number` JS values: integral and within the safe int range →
-  ///     INTEGER; otherwise → FLOAT. SQLite FLOAT columns whose value
-  ///     happens to be exactly integral collapse to INTEGER on this
-  ///     side — this is a JS-side precision loss that the worker can't
-  ///     avoid without an extra getColumnType round-trip.
-  ///   - `string` → TEXT.
-  ///   - `Uint8Array` / `ArrayBuffer` → BLOB.
-  ///   - `null` / `undefined` → NULL.
-  static ColumnData _classifyJsColumnValue(JSAny? raw) {
-    if (raw == null || raw.isUndefinedOrNull) {
-      return ColumnData(type: 5, isNull: true);
-    }
-    if (raw.typeofEquals('bigint')) {
-      // Convert via JS `Number(bigint)` — exact within the 53-bit safe
-      // integer range (which is also Dart-on-web's `int` range), and
-      // truncates beyond that. Equivalent to `BigInt.toInt()` on the
-      // web Dart runtime; we use the JS path because the
-      // `JSBigInt.toDart` extension isn't available in the Dart SDK
-      // shipped with this Flutter version (3.11.4).
-      final n = _jsToNumber(raw).toDartDouble;
-      return ColumnData(type: 1, isNull: false, value: n.toInt());
-    }
-    if (raw.typeofEquals('number')) {
-      final n = (raw as JSNumber).toDartDouble;
-      if (n.isFinite &&
-          n.truncateToDouble() == n &&
-          n.abs() <= 9007199254740992.0 /* 2^53 — Dart-on-web safe int */) {
-        return ColumnData(type: 1, isNull: false, value: n.toInt());
-      }
-      return ColumnData(type: 2, isNull: false, value: n);
-    }
-    if (raw.typeofEquals('string')) {
-      return ColumnData(
-          type: 3, isNull: false, value: (raw as JSString).toDart);
-    }
-    if (raw.isA<JSUint8Array>()) {
-      return ColumnData(
-          type: 4, isNull: false, value: (raw as JSUint8Array).toDart);
-    }
-    if (raw.isA<JSArrayBuffer>()) {
-      return ColumnData(
-          type: 4,
-          isNull: false,
-          value: (raw as JSArrayBuffer).toDart.asUint8List());
-    }
-    // Defensive — the worker only emits the typed forms above. If a
-    // future worker version adds another type, surface it as TEXT
-    // rather than NULL so the caller can at least see the value.
-    return ColumnData(
-        type: 3, isNull: false, value: 'unsupported:${raw.runtimeType}');
-  }
+  /// Classify a raw JS column value into a typed [ColumnData]. Thin
+  /// delegator to the canonical implementation in
+  /// `dbas_sqlite_web_columns.dart`, shared with the multi-worker
+  /// `DbasSqliteWebReaderPool` so both pools produce identical row shapes.
+  static ColumnData _classifyJsColumnValue(JSAny? raw) =>
+      classifyJsColumnValue(raw);
 
   /// Drop the database (removes all OPFS files).
   Future<void> drop() async {
@@ -1198,18 +1142,9 @@ class DbasSqliteWebPool {
     return builder.toBytes();
   }
 
-  /// Convert a JS value (Number, BigInt, or null) to a Dart int.
-  /// Uses JS `Number()` to handle BigInt from Emscripten `long long` returns.
-  static int _jsToInt(JSAny? v) {
-    if (v == null || v.isUndefinedOrNull) return 0;
-    // Use JS Number() to convert any numeric JS type (Number, BigInt, etc.)
-    // to a standard JS Number, then convert to Dart int.
-    try {
-      return _jsToNumber(v).toDartDouble.toInt();
-    } catch (_) {
-      return 0;
-    }
-  }
+  /// Convert a JS value (Number, BigInt, or null) to a Dart int. Thin
+  /// delegator to the canonical [jsAnyToInt] in `dbas_sqlite_web_columns.dart`.
+  static int _jsToInt(JSAny? v) => jsAnyToInt(v);
 
   /// Copy the database to a new OPFS file.
   Future<void> streamCopy(String destName) async {

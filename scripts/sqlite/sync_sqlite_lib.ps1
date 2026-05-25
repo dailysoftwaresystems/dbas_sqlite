@@ -77,6 +77,16 @@ Copy-Item "$OUT_DIR/windows/*" -Destination "$SCRIPT_DIR/../../windows/libs" -Re
 Copy-Item "$OUT_DIR/linux/*" -Destination "$SCRIPT_DIR/../../linux/libs" -Recurse -Force
 Copy-Item "$OUT_DIR/web/*" -Destination "$SCRIPT_DIR/../../web/libs" -Recurse -Force
 
+# The cross-origin-isolation service worker must also sit at the example's
+# web ROOT, not just in web/libs: a service worker only controls its own URL
+# path, so to isolate the document (required for SharedArrayBuffer / the
+# multi-worker DB pool) it has to be served from "/". Guarded so the sync
+# still works against an older dist that predates coi-serviceworker.js.
+if (Test-Path "$OUT_DIR/web/coi-serviceworker.js") {
+    New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../example/web" | Out-Null
+    Copy-Item "$OUT_DIR/web/coi-serviceworker.js" -Destination "$SCRIPT_DIR/../../example/web/" -Force
+}
+
 Write-Host "Copying ios binaries..."
 New-Item -ItemType Directory -Force -Path "$SCRIPT_DIR/../../ios/dbas_sqlite" | Out-Null
 Copy-Item "$OUT_DIR/ios/dbas_sqlite.xcframework" -Destination "$SCRIPT_DIR/../../ios/dbas_sqlite" -Recurse -Force

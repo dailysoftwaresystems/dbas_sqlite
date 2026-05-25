@@ -336,6 +336,12 @@ extern "C" {
     DLL_EXPORT char* GetColumnName(SQLiteDb* db, SQLiteStmtHandle h, int index);
     DLL_EXPORT int GetColumnCount(SQLiteDb* db, SQLiteStmtHandle h);
 
+    /* Non-zero (1) if the prepared statement makes no direct changes to
+     * the database (sqlite3_stmt_readonly). Web-pool writer worker uses
+     * it to choose a streaming cursor's cross-handle fence (SHARED for
+     * reads, EXCLUSIVE for writes). Returns 1 on a stale handle. */
+    DLL_EXPORT int GetStmtReadonly(SQLiteDb* db, SQLiteStmtHandle h);
+
     /* Statement-level error message. NULL when none, also NULL on a
      * stale handle. Buffer is owned by the statement — do not free. */
     DLL_EXPORT const char* GetLastStmtError(SQLiteDb* db, SQLiteStmtHandle h);

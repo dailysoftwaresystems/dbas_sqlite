@@ -16,7 +16,9 @@ import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
         sqliteMisuse,
         sqliteInvalidStmtHandle;
 import 'dbas_sqlite_native_interface.dart';
+import 'web/dbas_sqlite_web_live_pool.dart';
 import 'web/dbas_sqlite_web_pool.dart';
+import 'web/dbas_sqlite_web_reader_pool.dart';
 
 /// Web implementation of [DbasSqliteNativeInterface].
 ///
@@ -65,7 +67,20 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   /// values increase per-chunk memory. The worker caps at 10000.
   static const int _readRowsChunkSize = 50;
 
-  DbasSqliteWebPool? _pool;
+  /// Connection-role tokens handed to the statement layer as opaque
+  /// "pointers". The layer stores one as a `DbasSqliteDb.ptr` and passes
+  /// it back as `dbPtr` on every per-statement call; [prepareQuery] routes
+  /// reads vs. writes on it. The writer token doubles as the
+  /// single-connection / fallback pointer returned by [openDb].
+  static const int _writerConn = 1;
+  static const int _readerConn = 2;
+
+  /// The live read/write pool. A multi-worker [DbasSqliteWebReaderPool]
+  /// (reads on reader connections, writes on the writer connection — true
+  /// concurrency) when the page is cross-origin isolated; otherwise a
+  /// single-worker fallback. Destructive file operations use a separate
+  /// transient [DbasSqliteWebPool] (see [_withTempPool]), never this.
+  WebLivePool? _pool;
   bool _initialized = false;
   String _sqliteVersion = '';
   final int _abiVersion = 0;
@@ -410,13 +425,16 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   Future<void> streamCopyDb(String sourceFileName, String destFileName) async {
     String destName = destFileName;
     if (destFileName.contains('/')) destName = destFileName.split('/').last;
-    await _enterGated();
-    try {
-      await _ensurePool();
-      await _pool!.streamCopy(destName);
-    } finally {
-      _exitGated();
-    }
+    // Whole-file copy needs exclusive access to a consistent on-disk DB.
+    // Like attach / export / drop, tear the live pool down first (so its
+    // writer flushes and releases the OPFS file), then copy against a
+    // transient single-worker pool — the multi-worker live pool exposes
+    // no streamCopy. The live pool is re-created lazily on the next
+    // operation via [_ensurePool].
+    await _runExclusive(() async {
+      await _teardownLivePool();
+      await _withTempPool((pool) => pool.streamCopy(destName));
+    });
   }
 
   @override
@@ -550,10 +568,17 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     await _enterGated();
     try {
       await _ensurePool();
-      final prep = await _pool!.prepareQueryStream(sql);
+      // Route the prepare to the connection role the statement layer
+      // picked: the reader token → a reader connection; anything else
+      // (the writer token, and the single-connection fallback pointer
+      // from [openDb]) → the writer connection. The pool holds the
+      // matching cross-handle fence for the cursor's lifetime — SHARED
+      // for reads, EXCLUSIVE for writes (decided in the worker via
+      // sqlite3_stmt_readonly).
+      final prep = await _pool!.streamPrepare(dbPtr != _readerConn, sql);
       final handle = _nextStmtId++;
       _stmts[handle] = _WebStmtState(
-        rawHandle: prep.rawHandle,
+        cursor: prep.cursor,
         columnCount: prep.columnCount,
         columnNames: prep.columnNames,
       );
@@ -585,7 +610,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     final state = _stmts.remove(handle);
     if (state == null) return sqliteOk; // already finalized / unknown
     try {
-      await _pool!.finalizeStmt(state.rawHandle);
+      await _pool!.streamFinalize(state.cursor);
       return sqliteOk;
     } catch (e, st) {
       developer.log(
@@ -653,7 +678,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         // an all-bulk approach for multi-row scans.
         state.firstFetchDone = true;
         final result =
-            await _pool!.readRow(state.rawHandle, state.columnNames);
+            await _pool!.streamReadRow(state.cursor, state.columnNames);
         if (result.rc == sqliteRow) {
           cache.columns = result.columns;
           return sqliteRow;
@@ -666,8 +691,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       }
 
       // Subsequent steps: bulk-fetch up to chunkSize rows.
-      final result = await _pool!.readRows(
-          state.rawHandle, state.columnNames, _readRowsChunkSize);
+      final result = await _pool!.streamReadRows(
+          state.cursor, state.columnNames, _readRowsChunkSize);
       state.hasMore = result.hasMore;
       for (final row in result.rows) {
         state.chunk.add(row);
@@ -707,7 +732,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     state.countersFetched = true;
     try {
       state.affectedRows =
-          await _pool!.getStmtAffectedRows(state.rawHandle);
+          await _pool!.streamAffectedRows(state.cursor);
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb: getStmtAffectedRows failed at SQLITE_DONE',
@@ -723,7 +748,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     }
     try {
       state.lastInsertedId =
-          await _pool!.getStmtLastInsertedId(state.rawHandle);
+          await _pool!.streamLastInsertedId(state.cursor);
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb: getStmtLastInsertedId failed at SQLITE_DONE',
@@ -767,14 +792,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     final state = _stmts[handle];
     if (state == null) return sqliteMisuse;
     await _ensurePool();
-    developer.log(
-      'instance id=$_instanceId(dbName=$dbName) _bindOne handle=$handle '
-      'param=$param → posting on pool id=${_pool!.poolId} '
-      'closed=${_pool!.isClosed}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     try {
-      await _pool!.bindParam(state.rawHandle, param, _jsifyBindValue(value));
+      await _pool!.streamBind(state.cursor, param, _jsifyBindValue(value));
       return sqliteOk;
     } on DbasSqliteWebWorkerError catch (e) {
       // Worker reported a non-OK rc. Surface it to the statement
@@ -907,28 +926,22 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<int> createPool(String path, int readerCount) async {
-    developer.log(
-      'instance id=$_instanceId(dbName=$dbName) createPool(path=$path, '
-      'readerCount=$readerCount) entry',
-      name: 'dbas_sqlite.lifecycle',
-    );
-    _pool = await DbasSqliteWebPool.create(
-        dbName: dbName, readerCount: readerCount);
-    developer.log(
-      'instance id=$_instanceId(dbName=$dbName) createPool resolved '
-      'pool id=${_pool!.poolId}',
-      name: 'dbas_sqlite.lifecycle',
-    );
+    _pool = await bootWebLivePool(dbName: dbName, readerCount: readerCount);
     await _ensureSqliteVersion();
     return 1;
   }
 
+  // The web "pool pointer" is a fixed sentinel — there is exactly one
+  // live pool per instance. The writer/reader tokens below are what the
+  // statement layer threads back as `dbPtr`, and [prepareQuery] routes a
+  // prepare to the writer or a reader connection based on which it sees.
   @override
-  int poolGetWriter(int poolPtr) => 1;
+  int poolGetWriter(int poolPtr) => _writerConn;
   @override
-  int poolAcquireReader(int poolPtr) => 1;
+  int poolAcquireReader(int poolPtr) => _readerConn;
   @override
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async => 1;
+  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async =>
+      _readerConn;
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) {}
 
@@ -941,12 +954,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   Future<void> _ensurePool() async {
     final existing = _pool;
-    developer.log(
-      'instance id=$_instanceId(dbName=$dbName) _ensurePool entry; '
-      'existing pool id=${existing?.poolId} closed=${existing?.isClosed} '
-      '_stmts.length=${_stmts.length}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     if (existing != null && !existing.isClosed) return;
     // `existing` is either null or stale-closed. Stale-closed happens
     // when another `DbasSqliteNativeWeb` instance for the same dbName
@@ -962,7 +969,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     // leak into the fresh worker (which would reject them with
     // UNKNOWN_HANDLE on next use).
     if (existing != null) _stmts.clear();
-    _pool = await DbasSqliteWebPool.create(
+    _pool = await bootWebLivePool(
       dbName: dbName,
       readerCount: DbasSqliteNativeInterface.workerPoolSize,
     );
@@ -1100,7 +1107,11 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 ///   - the post-step counter cache for write-shape statements
 ///     (column count == 0).
 class _WebStmtState {
-  final JSAny rawHandle;
+  /// Opaque pool cursor token for this statement: a pool-level cursor id
+  /// (multi-worker pool) or the worker's raw statement handle
+  /// (single-worker fallback). Echoed back on every per-stmt call; never
+  /// inspected here.
+  final Object cursor;
   final int columnCount;
   final List<String> columnNames;
 
@@ -1120,7 +1131,7 @@ class _WebStmtState {
   String? lastError;
 
   _WebStmtState({
-    required this.rawHandle,
+    required this.cursor,
     required this.columnCount,
     required this.columnNames,
   });
