@@ -110,6 +110,40 @@ class DbasSqliteWebPool {
   static final Map<String, DbasSqliteWebPool> _pools = {};
   static final Map<String, Future<DbasSqliteWebPool>> _pending = {};
 
+  /// Monotonic per-pool diagnostic ID. Used in lifecycle logging so
+  /// the user can correlate "pool created" / "pool closed" /
+  /// "postMessage on pool X" events across a session. Exposed via
+  /// [poolId] for cross-library logging in `dbas_sqlite_native_web.dart`.
+  static int _poolIdSeq = 0;
+  final int _poolId = ++_poolIdSeq;
+
+  /// Public alias for the diagnostic [_poolId], readable from the
+  /// platform shim across libraries.
+  int get poolId => _poolId;
+
+  /// Per-dbName barrier completed when a previously-live pool has
+  /// fully released its OPFS [`FileSystemSyncAccessHandle`]s (the
+  /// worker's `handleClose` awaits `closeOpfsHandles()` before
+  /// responding, so the close response is the "OPFS released" signal).
+  ///
+  /// [create] awaits this barrier before deciding whether to reuse or
+  /// spawn, which closes the OPFS-ownership race: the OPFS spec
+  /// allows only one sync access handle per file per origin, so a
+  /// fresh `init` running while the previous worker is still draining
+  /// `closeOpfsHandles` would either race the drain (rare happy path)
+  /// or invalidate the previous worker's still-open handles (the
+  /// "file was already closed" warning observed in production). Pairs
+  /// with [_pending] (which serialises concurrent creates).
+  static final Map<String, Future<void>> _closing = {};
+
+  /// Diagnostic count of prepared statements currently open on the
+  /// worker for THIS pool (incremented on [prepareQueryStream] success,
+  /// decremented on [finalizeStmt]). The worker rejects a write
+  /// (`exec` / `BEGIN`) while its `_openStmts` is non-empty, so logging
+  /// this count at write time pinpoints a read cursor that wasn't
+  /// finalized before the write. Diagnostic only — does not gate.
+  int _openStmtCount = 0;
+
   final String dbName;
   final web.Worker _worker;
   int _nextId = 0;
@@ -154,6 +188,11 @@ class DbasSqliteWebPool {
       final completer = _requests.remove(id);
       if (completer == null) return;
       if (data.containsKey('error') && data['error'] != null) {
+        developer.log(
+          'pool id=$_poolId(dbName=$dbName) worker REPLY ERROR reqId=$id: '
+          '${data['error']}',
+          name: 'dbas_sqlite.lifecycle',
+        );
         completer.completeError(_workerErrorFromJsError(data['error']));
       } else {
         completer.complete(data['result']);
@@ -201,11 +240,42 @@ class DbasSqliteWebPool {
   }
 
   /// Get or create a pool for the given [dbName].
+  ///
+  /// Awaits any in-flight [close] for the same `dbName` before
+  /// consulting the live-pool registry. Without that gate, the
+  /// registry can briefly hold a still-closing pool whose worker has
+  /// not yet released its OPFS sync access handle — spawning a fresh
+  /// worker in that window collides with the dying handle and
+  /// corrupts the file resolver. See [_closing] for the full
+  /// rationale.
   static Future<DbasSqliteWebPool> create({
     required String dbName,
     int readerCount = 3,
   }) async {
-    if (_pools.containsKey(dbName)) return _pools[dbName]!;
+    final closing = _closing[dbName];
+    developer.log(
+      'create(dbName=$dbName) entry — _closing=${closing != null}, '
+      '_pools.has=${_pools.containsKey(dbName)} (id=${_pools[dbName]?._poolId}), '
+      '_pending.has=${_pending.containsKey(dbName)}',
+      name: 'dbas_sqlite.lifecycle',
+    );
+    if (closing != null) {
+      developer.log('create(dbName=$dbName) awaiting _closing barrier',
+          name: 'dbas_sqlite.lifecycle');
+      await closing;
+      developer.log('create(dbName=$dbName) _closing barrier resolved',
+          name: 'dbas_sqlite.lifecycle');
+    }
+
+    if (_pools.containsKey(dbName)) {
+      final reused = _pools[dbName]!;
+      developer.log(
+        'create(dbName=$dbName) reusing pool id=${reused._poolId} '
+        '(closed=${reused._closed})',
+        name: 'dbas_sqlite.lifecycle',
+      );
+      return reused;
+    }
     return _pending.putIfAbsent(dbName, () async {
       try {
         return await _doCreate(dbName: dbName, readerCount: readerCount);
@@ -221,13 +291,31 @@ class DbasSqliteWebPool {
   }) async {
     final worker = web.Worker(_workerUrl.toJS);
     final pool = DbasSqliteWebPool._(dbName, worker);
+    developer.log(
+      '_doCreate(dbName=$dbName) spawned worker, pool id=${pool._poolId}; '
+      'posting init',
+      name: 'dbas_sqlite.lifecycle',
+    );
 
-    // Initialize: load WASM + OPFS, open DB
-    await pool.send('init', {
-      'dbName': dbName.endsWith('.db') ? dbName : '$dbName.db',
-      'role': 'writer',
-      'libUrl': _libUrl,
-    });
+    try {
+      await pool.send('init', {
+        'dbName': dbName.endsWith('.db') ? dbName : '$dbName.db',
+        'role': 'writer',
+        'libUrl': _libUrl,
+      });
+    } catch (e, st) {
+      developer.log(
+        '_doCreate(dbName=$dbName) pool id=${pool._poolId} init FAILED',
+        name: 'dbas_sqlite.lifecycle',
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
+    }
+    developer.log(
+      '_doCreate(dbName=$dbName) pool id=${pool._poolId} init succeeded',
+      name: 'dbas_sqlite.lifecycle',
+    );
 
     _pools[dbName] = pool;
     return pool;
@@ -237,6 +325,10 @@ class DbasSqliteWebPool {
   Future<dynamic> send(String action, [Map<String, dynamic>? payload]) {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage action=$action reqId=$id',
+      name: 'dbas_sqlite.lifecycle',
+    );
     final completer = Completer<dynamic>();
     _requests[id] = completer;
     try {
@@ -259,6 +351,12 @@ class DbasSqliteWebPool {
   Future<Map<String, dynamic>> exec(String sql, [dynamic params]) async {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage exec reqId=$id '
+      '_openStmtCount=$_openStmtCount '
+      'sql=${sql.length > 60 ? "${sql.substring(0, 60)}..." : sql}',
+      name: 'dbas_sqlite.lifecycle',
+    );
     final completer = Completer<dynamic>();
     // Use a stream handler to get raw JS access (avoids dartify losing BigInt)
     _streamHandlers[id] = (_JSObj jsData) {
@@ -407,6 +505,12 @@ class DbasSqliteWebPool {
           }
         }
       }
+      _openStmtCount++;
+      developer.log(
+        'pool id=$_poolId(dbName=$dbName) prepareQuery reqId=$id opened a '
+        'statement; _openStmtCount=$_openStmtCount',
+        name: 'dbas_sqlite.lifecycle',
+      );
       completer.complete((
         rawHandle: handleRaw,
         columnCount: cc,
@@ -414,6 +518,11 @@ class DbasSqliteWebPool {
       ));
     };
 
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage prepareQuery reqId=$id '
+      'sql=${sql.length > 60 ? "${sql.substring(0, 60)}..." : sql}',
+      name: 'dbas_sqlite.lifecycle',
+    );
     try {
       _worker.postMessage(<String, dynamic>{
         'id': id,
@@ -465,14 +574,22 @@ class DbasSqliteWebPool {
   /// `bindNameParameters` docstring promises ("silently skipped …
   /// matching Microsoft.Data.Sqlite").
   ///
-  /// Throws on worker / protocol errors. SQLite-level non-OK rcs are
-  /// surfaced as a thrown [DbasSqliteWebWorkerError] whose
-  /// [DbasSqliteWebWorkerError.sqliteCode] carries the rc; the platform
-  /// shim catches and converts to a returned rc to match the native
-  /// interface signature.
+  /// This method ALWAYS throws on a non-OK outcome — both for worker /
+  /// protocol failures (generic exceptions) and for SQLite-level non-OK
+  /// rcs (a [DbasSqliteWebWorkerError] whose
+  /// [DbasSqliteWebWorkerError.sqliteCode] carries the rc). The
+  /// throw-vs-return rc translation lives one layer up in
+  /// `DbasSqliteNativeWeb._bindOne`, which catches and converts so the
+  /// platform-interface signature (`Future<int>` returning the rc)
+  /// matches native.
   Future<void> bindParam(JSAny rawHandle, Object param, Object? value) {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage bindParam reqId=$id '
+      'param=$param',
+      name: 'dbas_sqlite.lifecycle',
+    );
     final completer = Completer<void>();
     _requests[id] = completer;
 
@@ -562,6 +679,10 @@ class DbasSqliteWebPool {
       completer.complete((rc: rc, columns: cols));
     };
 
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage readRow reqId=$id',
+      name: 'dbas_sqlite.lifecycle',
+    );
     try {
       _worker.postMessage(<String, dynamic>{
         'id': id,
@@ -646,6 +767,11 @@ class DbasSqliteWebPool {
       completer.complete((rows: outRows, hasMore: hasMore));
     };
 
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage readRows reqId=$id '
+      'maxRows=$maxRows',
+      name: 'dbas_sqlite.lifecycle',
+    );
     try {
       _worker.postMessage(<String, dynamic>{
         'id': id,
@@ -671,6 +797,12 @@ class DbasSqliteWebPool {
       return Future.value();
     }
     final id = _nextId++;
+    if (_openStmtCount > 0) _openStmtCount--;
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) postMessage finalizeStmt reqId=$id; '
+      '_openStmtCount=$_openStmtCount',
+      name: 'dbas_sqlite.lifecycle',
+    );
     final completer = Completer<void>();
     _requests[id] = completer;
     try {
@@ -1087,77 +1219,157 @@ class DbasSqliteWebPool {
   }
 
   /// Close the worker and release resources.
+  ///
+  /// The pool stays registered in [_pools] for the full duration of
+  /// the close — including the worker-side `closeOpfsHandles()` drain
+  /// — and is only removed in the `finally` after the worker has
+  /// terminated. Until then, any concurrent [create] for the same
+  /// `dbName` blocks on [_closing] so the OPFS sync access handle
+  /// cannot be acquired by a fresh worker before the previous one
+  /// has released it. See [_closing] for the rationale.
+  ///
+  /// A duplicate `close()` call (already in flight) awaits the same
+  /// barrier so its caller's "teardown done" signal lines up with
+  /// the actual OPFS-release timing, rather than racing ahead of it.
   Future<void> close() async {
-    if (_closed) return;
+    if (_closed) {
+      developer.log(
+        'pool id=$_poolId(dbName=$dbName) close() re-entrant; '
+        'awaiting in-flight barrier=${_closing.containsKey(dbName)}',
+        name: 'dbas_sqlite.lifecycle',
+      );
+      // Already closing or closed. Wait for the in-flight drain so
+      // duplicate callers (e.g. two `_teardownLivePool`s on sibling
+      // `DbasSqliteNativeWeb` instances sharing this pool object)
+      // observe consistent "OPFS released" timing.
+      final closing = _closing[dbName];
+      if (closing != null) await closing;
+      return;
+    }
+    developer.log(
+      'pool id=$_poolId(dbName=$dbName) close() entry; '
+      '_requests.length=${_requests.length}, '
+      '_streamHandlers.length=${_streamHandlers.length}',
+      name: 'dbas_sqlite.lifecycle',
+    );
     // Flip the flag synchronously BEFORE awaiting the graceful close so
     // any concurrent send() invocation rejects immediately instead of
     // queueing a request whose response will never arrive once we
     // terminate the worker below.
     _closed = true;
-    _pools.remove(dbName);
 
-    // Post the 'close' message directly (bypassing send() which now
-    // throws on _closed) and await the response inline.
-    final id = _nextId++;
-    final completer = Completer<dynamic>();
-    _requests[id] = completer;
+    // Register the closing barrier synchronously so any concurrent
+    // [create] for the same dbName waits for full OPFS drain before
+    // spawning a fresh worker. Note: `_pools.remove(dbName)` is
+    // deliberately deferred to the `finally` block below — keeping
+    // the entry in `_pools` during the drain prevents
+    // [DbasSqliteNativeWeb._ensurePool] from observing a `null`
+    // registry slot and concluding "no owner" while the worker still
+    // holds the OPFS handle.
+    final closeBarrier = Completer<void>();
+    _closing[dbName] = closeBarrier.future;
+
     try {
-      _worker.postMessage(<String, dynamic>{
-        'id': id,
-        'action': 'close',
-        'payload': <String, dynamic>{},
-      }.jsify());
-      await completer.future;
-    } catch (e) {
-      developer.log(
-        'DbasSqliteWebPool: graceful close failed for "$dbName"',
-        name: 'dbas_sqlite.DbasSqliteWebPool',
-        error: e,
-      );
-    } finally {
-      _requests.remove(id);
-    }
-
-    _worker.terminate();
-
-    // After terminate, any still-pending completers will never receive
-    // a response. Reject them so callers don't hang forever.
-    final closedErr = StateError('Pool closed for "$dbName"');
-    for (final c in _requests.values) {
-      if (!c.isCompleted) c.completeError(closedErr);
-    }
-    _requests.clear();
-
-    // Stream handlers own their completers inside their closures (see
-    // `prepareQueryStream`, `readRow`, `readRows`, `getStmtAffectedRows`,
-    // `getStmtLastInsertedId`, `exec`, `attachStreamChunked`,
-    // `exportContentStream`). Synthesise an `error`-shaped JS object
-    // and dispatch it to each handler — they're already structured to
-    // unwrap the error and reject their captured completer. Without
-    // this, an in-flight stream-RPC caller (e.g. a `readRows` chunk
-    // fetch driving `DbasSqliteReader.readRow` mid-iteration) would
-    // hang forever after a graceful close.
-    final handlersSnapshot = Map.of(_streamHandlers);
-    _streamHandlers.clear();
-    for (final entry in handlersSnapshot.entries) {
+      // Post the 'close' message directly (bypassing send() which now
+      // throws on _closed) and await the response inline. The worker's
+      // `handleClose` awaits `closeOpfsHandles()` before posting its
+      // response, so a successful await here means the OPFS file is
+      // fully released — that's what makes the barrier above honest.
+      final id = _nextId++;
+      final completer = Completer<dynamic>();
+      _requests[id] = completer;
       try {
-        final errMsg = <String, dynamic>{
-          'id': entry.key,
-          'error': {
-            'code': 'POOL_CLOSED',
-            'message': 'Pool closed for "$dbName"',
-          },
-        }.jsify() as _JSObj;
-        entry.value(errMsg);
+        _worker.postMessage(<String, dynamic>{
+          'id': id,
+          'action': 'close',
+          'payload': <String, dynamic>{},
+        }.jsify());
+        await completer.future;
       } catch (e, st) {
         developer.log(
-          'DbasSqliteWebPool: failed to wake stream handler ${entry.key} '
-          'during close',
+          'DbasSqliteWebPool: graceful close failed for "$dbName"',
+          name: 'dbas_sqlite.DbasSqliteWebPool',
+          error: e,
+          stackTrace: st,
+        );
+      } finally {
+        _requests.remove(id);
+      }
+
+      // Terminate is best-effort: the cleanup loops below MUST run
+      // regardless so that in-flight `_requests` completers and
+      // `_streamHandlers` are not left hanging. If `terminate()`
+      // throws (worker proxy detached, browser exception in a
+      // degraded context, …), we still need to reject every awaiter
+      // — otherwise the static `_closing` barrier completes in the
+      // outer `finally` advertising "OPFS released, safe to spawn"
+      // while Dart-side callers from the dying pool stay wedged.
+      try {
+        _worker.terminate();
+      } catch (e, st) {
+        developer.log(
+          'DbasSqliteWebPool: worker.terminate() threw for "$dbName"; '
+          'continuing with completer cleanup',
           name: 'dbas_sqlite.DbasSqliteWebPool',
           error: e,
           stackTrace: st,
         );
       }
+
+      // After terminate, any still-pending completers will never receive
+      // a response. Reject them so callers don't hang forever.
+      final closedErr = StateError('Pool closed for "$dbName"');
+      for (final c in _requests.values) {
+        if (!c.isCompleted) c.completeError(closedErr);
+      }
+      _requests.clear();
+
+      // Stream handlers own their completers inside their closures (see
+      // `prepareQueryStream`, `readRow`, `readRows`, `getStmtAffectedRows`,
+      // `getStmtLastInsertedId`, `exec`, `attachStreamChunked`,
+      // `exportContentStream`). Synthesise an `error`-shaped JS object
+      // and dispatch it to each handler — they're already structured to
+      // unwrap the error and reject their captured completer. Without
+      // this, an in-flight stream-RPC caller (e.g. a `readRows` chunk
+      // fetch driving `DbasSqliteReader.readRow` mid-iteration) would
+      // hang forever after a graceful close.
+      final handlersSnapshot = Map.of(_streamHandlers);
+      _streamHandlers.clear();
+      for (final entry in handlersSnapshot.entries) {
+        try {
+          final errMsg = <String, dynamic>{
+            'id': entry.key,
+            'error': {
+              'code': 'POOL_CLOSED',
+              'message': 'Pool closed for "$dbName"',
+            },
+          }.jsify() as _JSObj;
+          entry.value(errMsg);
+        } catch (e, st) {
+          developer.log(
+            'DbasSqliteWebPool: failed to wake stream handler ${entry.key} '
+            'during close',
+            name: 'dbas_sqlite.DbasSqliteWebPool',
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }
+    } finally {
+      // OPFS is released (worker confirmed close, or we logged the
+      // failure and proceeded to terminate). NOW publish the
+      // teardown to the static registry: drop the pool slot AND
+      // release the barrier so subsequent [create] calls can spawn
+      // a fresh worker without colliding with a still-open sync
+      // access handle.
+      _pools.remove(dbName);
+      _closing.remove(dbName);
+      closeBarrier.complete();
+      developer.log(
+        'pool id=$_poolId(dbName=$dbName) close() finally complete; '
+        '_pools/_closing cleared, barrier resolved',
+        name: 'dbas_sqlite.lifecycle',
+      );
     }
   }
 
