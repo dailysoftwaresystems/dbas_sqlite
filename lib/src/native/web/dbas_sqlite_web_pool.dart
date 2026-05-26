@@ -184,11 +184,6 @@ class DbasSqliteWebPool {
       final completer = _requests.remove(id);
       if (completer == null) return;
       if (data.containsKey('error') && data['error'] != null) {
-        developer.log(
-          'pool id=$_poolId(dbName=$dbName) worker REPLY ERROR reqId=$id: '
-          '${data['error']}',
-          name: 'dbas_sqlite.lifecycle',
-        );
         completer.completeError(_workerErrorFromJsError(data['error']));
       } else {
         completer.complete(data['result']);
@@ -249,28 +244,12 @@ class DbasSqliteWebPool {
     int readerCount = 3,
   }) async {
     final closing = _closing[dbName];
-    developer.log(
-      'create(dbName=$dbName) entry — _closing=${closing != null}, '
-      '_pools.has=${_pools.containsKey(dbName)} (id=${_pools[dbName]?._poolId}), '
-      '_pending.has=${_pending.containsKey(dbName)}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     if (closing != null) {
-      developer.log('create(dbName=$dbName) awaiting _closing barrier',
-          name: 'dbas_sqlite.lifecycle');
       await closing;
-      developer.log('create(dbName=$dbName) _closing barrier resolved',
-          name: 'dbas_sqlite.lifecycle');
     }
 
     if (_pools.containsKey(dbName)) {
-      final reused = _pools[dbName]!;
-      developer.log(
-        'create(dbName=$dbName) reusing pool id=${reused._poolId} '
-        '(closed=${reused._closed})',
-        name: 'dbas_sqlite.lifecycle',
-      );
-      return reused;
+      return _pools[dbName]!;
     }
     return _pending.putIfAbsent(dbName, () async {
       try {
@@ -287,11 +266,6 @@ class DbasSqliteWebPool {
   }) async {
     final worker = web.Worker(_workerUrl.toJS);
     final pool = DbasSqliteWebPool._(dbName, worker);
-    developer.log(
-      '_doCreate(dbName=$dbName) spawned worker, pool id=${pool._poolId}; '
-      'posting init',
-      name: 'dbas_sqlite.lifecycle',
-    );
 
     try {
       await pool.send('init', {
@@ -302,16 +276,12 @@ class DbasSqliteWebPool {
     } catch (e, st) {
       developer.log(
         '_doCreate(dbName=$dbName) pool id=${pool._poolId} init FAILED',
-        name: 'dbas_sqlite.lifecycle',
+        name: 'dbas_sqlite.DbasSqliteWebPool',
         error: e,
         stackTrace: st,
       );
       rethrow;
     }
-    developer.log(
-      '_doCreate(dbName=$dbName) pool id=${pool._poolId} init succeeded',
-      name: 'dbas_sqlite.lifecycle',
-    );
 
     _pools[dbName] = pool;
     return pool;
@@ -321,10 +291,6 @@ class DbasSqliteWebPool {
   Future<dynamic> send(String action, [Map<String, dynamic>? payload]) {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage action=$action reqId=$id',
-      name: 'dbas_sqlite.lifecycle',
-    );
     final completer = Completer<dynamic>();
     _requests[id] = completer;
     try {
@@ -347,12 +313,6 @@ class DbasSqliteWebPool {
   Future<Map<String, dynamic>> exec(String sql, [dynamic params]) async {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage exec reqId=$id '
-      '_openStmtCount=$_openStmtCount '
-      'sql=${sql.length > 60 ? "${sql.substring(0, 60)}..." : sql}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     final completer = Completer<dynamic>();
     // Use a stream handler to get raw JS access (avoids dartify losing BigInt)
     _streamHandlers[id] = (_JSObj jsData) {
@@ -502,11 +462,6 @@ class DbasSqliteWebPool {
         }
       }
       _openStmtCount++;
-      developer.log(
-        'pool id=$_poolId(dbName=$dbName) prepareQuery reqId=$id opened a '
-        'statement; _openStmtCount=$_openStmtCount',
-        name: 'dbas_sqlite.lifecycle',
-      );
       completer.complete((
         rawHandle: handleRaw,
         columnCount: cc,
@@ -514,11 +469,6 @@ class DbasSqliteWebPool {
       ));
     };
 
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage prepareQuery reqId=$id '
-      'sql=${sql.length > 60 ? "${sql.substring(0, 60)}..." : sql}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     try {
       _worker.postMessage(<String, dynamic>{
         'id': id,
@@ -581,11 +531,6 @@ class DbasSqliteWebPool {
   Future<void> bindParam(JSAny rawHandle, Object param, Object? value) {
     if (_closed) throw StateError('Pool is closed for "$dbName"');
     final id = _nextId++;
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage bindParam reqId=$id '
-      'param=$param',
-      name: 'dbas_sqlite.lifecycle',
-    );
     final completer = Completer<void>();
     _requests[id] = completer;
 
@@ -675,10 +620,6 @@ class DbasSqliteWebPool {
       completer.complete((rc: rc, columns: cols));
     };
 
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage readRow reqId=$id',
-      name: 'dbas_sqlite.lifecycle',
-    );
     try {
       _worker.postMessage(<String, dynamic>{
         'id': id,
@@ -763,11 +704,6 @@ class DbasSqliteWebPool {
       completer.complete((rows: outRows, hasMore: hasMore));
     };
 
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage readRows reqId=$id '
-      'maxRows=$maxRows',
-      name: 'dbas_sqlite.lifecycle',
-    );
     try {
       _worker.postMessage(<String, dynamic>{
         'id': id,
@@ -794,11 +730,6 @@ class DbasSqliteWebPool {
     }
     final id = _nextId++;
     if (_openStmtCount > 0) _openStmtCount--;
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) postMessage finalizeStmt reqId=$id; '
-      '_openStmtCount=$_openStmtCount',
-      name: 'dbas_sqlite.lifecycle',
-    );
     final completer = Completer<void>();
     _requests[id] = completer;
     try {
@@ -1168,11 +1099,6 @@ class DbasSqliteWebPool {
   /// the actual OPFS-release timing, rather than racing ahead of it.
   Future<void> close() async {
     if (_closed) {
-      developer.log(
-        'pool id=$_poolId(dbName=$dbName) close() re-entrant; '
-        'awaiting in-flight barrier=${_closing.containsKey(dbName)}',
-        name: 'dbas_sqlite.lifecycle',
-      );
       // Already closing or closed. Wait for the in-flight drain so
       // duplicate callers (e.g. two `_teardownLivePool`s on sibling
       // `DbasSqliteNativeWeb` instances sharing this pool object)
@@ -1181,12 +1107,6 @@ class DbasSqliteWebPool {
       if (closing != null) await closing;
       return;
     }
-    developer.log(
-      'pool id=$_poolId(dbName=$dbName) close() entry; '
-      '_requests.length=${_requests.length}, '
-      '_streamHandlers.length=${_streamHandlers.length}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     // Flip the flag synchronously BEFORE awaiting the graceful close so
     // any concurrent send() invocation rejects immediately instead of
     // queueing a request whose response will never arrive once we
@@ -1300,11 +1220,6 @@ class DbasSqliteWebPool {
       _pools.remove(dbName);
       _closing.remove(dbName);
       closeBarrier.complete();
-      developer.log(
-        'pool id=$_poolId(dbName=$dbName) close() finally complete; '
-        '_pools/_closing cleared, barrier resolved',
-        name: 'dbas_sqlite.lifecycle',
-      );
     }
   }
 

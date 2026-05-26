@@ -183,18 +183,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     }
   }
 
-  /// Monotonic per-instance diagnostic ID. Lets lifecycle logging
-  /// distinguish between sibling instances that share the same pool
-  /// via `_pools[dbName]`.
-  static int _instanceIdSeq = 0;
-  final int _instanceId = ++_instanceIdSeq;
-
-  DbasSqliteNativeWeb(super.dbName) {
-    developer.log(
-      'DbasSqliteNativeWeb instance id=$_instanceId(dbName=$dbName) constructed',
-      name: 'dbas_sqlite.lifecycle',
-    );
-  }
+  DbasSqliteNativeWeb(super.dbName);
 
   static void registerWith(Registrar registrar) {}
 
@@ -1042,12 +1031,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         try {
           await idle.future.timeout(_teardownDrainTimeout);
         } on TimeoutException {
-          developer.log(
-            'instance id=$_instanceId(dbName=$dbName) _runExclusive drain '
-            'timed out with _stmts.length=${_stmts.length}, '
-            '_inFlightCalls=$_inFlightCalls; proceeding',
-            name: 'dbas_sqlite.DbasSqliteNativeWeb',
-          );
           _quiescent = null;
         }
       }
@@ -1074,12 +1057,6 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   /// against a file the previous worker still owns.
   Future<void> _teardownLivePool() async {
     final pool = _pool;
-    developer.log(
-      'instance id=$_instanceId(dbName=$dbName) _teardownLivePool entry; '
-      'pool id=${pool?.poolId} closed=${pool?.isClosed} '
-      '_stmts.length=${_stmts.length}',
-      name: 'dbas_sqlite.lifecycle',
-    );
     if (pool != null) await pool.close();
     _pool = null;
     _stmts.clear();
