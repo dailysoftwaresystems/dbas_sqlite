@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.8.1 - 2026-05-26
+
+### Fixed
+
+- **Segfault during `closeDb()` on a pool with parked reader-slot
+  waiters.** When the database was closed while one reader held the
+  only slot and others were parked, the held reader's `onClose`
+  released the slot and granted a parked waiter, which then raced into
+  the native pool's blocking acquire on one worker isolate while
+  `closeDb` dispatched `ClosePool` on another — tearing down the pool's
+  lock/condvar underneath the parked acquire (observed as a SIGSEGV in
+  test finalization on CI). `closeDb()` now latches a closing flag and
+  drains both the writer-lock and reader-slot wait queues **before**
+  sweeping statements, and `_acquireReaderSlot` / `_acquireWriterLock`
+  reject synchronously with
+  `DbasSqliteErrorCode.readerSlotWaitCancelled` /
+  `writerLockWaitCancelled` once a close is in flight, so no caller can
+  enter the native pool during teardown. (Native `ClosePool` is
+  hardened in lockstep to drain in-flight acquires and checked-out
+  readers before destroying the pool.)
+
+### Changed
+
+- **Pool reader acquisition now reports a specific status instead of a
+  bare null.** A failed `poolAcquireReaderBlocking` distinguishes
+  `closing` (terminal — the pool is tearing down) from `timeout`
+  (transient — no reader freed in the window) and `invalid` (the pool
+  is gone), mirroring the native `PoolLastAcquireStatus()` accessor. A
+  reader acquire that loses the race to a concurrent close now surfaces
+  as `readerSlotWaitCancelled` rather than being misreported as
+  `executeReaderPoolAcquireTimeout`.
+
 ## 2.8.0 - 2026-05-25
 
 ### Added
