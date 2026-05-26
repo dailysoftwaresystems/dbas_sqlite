@@ -434,6 +434,15 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     await _runExclusive(() async {
       await _teardownLivePool();
       await _withTempPool((pool) => pool.streamCopy(destName));
+      // streamCopy is READ-ONLY on the source — native FFI never closes
+      // the source connection across a copy. Re-establish the source
+      // live pool here so the connection survives, matching native. The
+      // teardown above was only needed to release the OPFS file for the
+      // transient copy worker; leaving `_pool == null` afterward made
+      // isOpened() spuriously false, so any isOpened-guarded op run
+      // right after a copy (vacuum, executeSql, …) threw
+      // "Database is not opened" before the lazy `_ensurePool` could fire.
+      await _ensurePool();
     });
   }
 
@@ -575,10 +584,12 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       // matching cross-handle fence for the cursor's lifetime — SHARED
       // for reads, EXCLUSIVE for writes (decided in the worker via
       // sqlite3_stmt_readonly).
-      final prep = await _pool!.streamPrepare(dbPtr != _readerConn, sql);
+      final pool = _pool!;
+      final prep = await pool.streamPrepare(dbPtr != _readerConn, sql);
       final handle = _nextStmtId++;
       _stmts[handle] = _WebStmtState(
         cursor: prep.cursor,
+        pool: pool,
         columnCount: prep.columnCount,
         columnNames: prep.columnNames,
       );
@@ -610,7 +621,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     final state = _stmts.remove(handle);
     if (state == null) return sqliteOk; // already finalized / unknown
     try {
-      await _pool!.streamFinalize(state.cursor);
+      await state.pool.streamFinalize(state.cursor);
       return sqliteOk;
     } catch (e, st) {
       developer.log(
@@ -678,7 +689,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         // an all-bulk approach for multi-row scans.
         state.firstFetchDone = true;
         final result =
-            await _pool!.streamReadRow(state.cursor, state.columnNames);
+            await state.pool.streamReadRow(state.cursor, state.columnNames);
         if (result.rc == sqliteRow) {
           cache.columns = result.columns;
           return sqliteRow;
@@ -691,7 +702,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       }
 
       // Subsequent steps: bulk-fetch up to chunkSize rows.
-      final result = await _pool!.streamReadRows(
+      final result = await state.pool.streamReadRows(
           state.cursor, state.columnNames, _readRowsChunkSize);
       state.hasMore = result.hasMore;
       for (final row in result.rows) {
@@ -704,9 +715,25 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       }
       cache.columns = state.chunk.removeFirst();
       return sqliteRow;
+    } on DbasSqliteWebWorkerError catch (e) {
+      // Worker reported a real SQLite rc — preserve it so the statement
+      // layer's `getErrorCode() ?? rc` surfaces the true code.
+      state.lastError = e.message;
+      _captureError(e);
+      cache.columns = null;
+      return e.sqliteCode ?? 1;
     } catch (e) {
+      // Non-SQLite failure (e.g. the owning pool was torn down — a
+      // `StateError` "...is closed", which `_ensureOpen` throws BEFORE
+      // the cursor is consulted, so it never passes through
+      // `_toWorkerError`). Mirror `_bindOne`: clear any cached worker rcs
+      // so the statement layer's `getErrorCode() ?? rc` reports the
+      // honest local SQLITE_ERROR rather than a stale code carried over
+      // from an earlier, unrelated worker error.
       state.lastError = e.toString();
       _captureError(e);
+      _lastErrorCode = null;
+      _lastUniqueErrorCode = null;
       cache.columns = null;
       return 1; // SQLITE_ERROR
     }
@@ -732,7 +759,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     state.countersFetched = true;
     try {
       state.affectedRows =
-          await _pool!.streamAffectedRows(state.cursor);
+          await state.pool.streamAffectedRows(state.cursor);
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb: getStmtAffectedRows failed at SQLITE_DONE',
@@ -748,7 +775,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     }
     try {
       state.lastInsertedId =
-          await _pool!.streamLastInsertedId(state.cursor);
+          await state.pool.streamLastInsertedId(state.cursor);
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb: getStmtLastInsertedId failed at SQLITE_DONE',
@@ -791,9 +818,14 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   Future<int> _bindOne(int handle, Object param, Object? value) async {
     final state = _stmts[handle];
     if (state == null) return sqliteMisuse;
-    await _ensurePool();
+    // Bind on the cursor's OWNING pool — do NOT _ensurePool(). The
+    // statement was already prepared on `state.pool`; if that pool has
+    // been torn down, the bind must fail cleanly with a pool-closed
+    // error (a `StateError` "...is closed") rather than spin up a fresh
+    // pool whose cursor map doesn't know this cursor (which would
+    // surface the misleading UNKNOWN_CURSOR).
     try {
-      await _pool!.streamBind(state.cursor, param, _jsifyBindValue(value));
+      await state.pool.streamBind(state.cursor, param, _jsifyBindValue(value));
       return sqliteOk;
     } on DbasSqliteWebWorkerError catch (e) {
       // Worker reported a non-OK rc. Surface it to the statement
@@ -1053,6 +1085,27 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     _stmts.clear();
   }
 
+  /// TEST-ONLY (named with a `debug` prefix; not part of the public
+  /// contract, reachable only via the platform delegate). Deterministically
+  /// reproduces the "in-flight reader during a pool teardown+recreate"
+  /// race: closes the current live pool and boots a fresh one WITHOUT
+  /// clearing [_stmts] — exactly the state an in-flight reader observes
+  /// when its [_WebStmtState] was captured before a teardown cleared the
+  /// map and a new pool replaced [_pool]. After this, a per-statement op
+  /// MUST route to the statement's OWNING (now-closed) pool and surface a
+  /// "closed" error, NOT route to the new [_pool] (which would give the
+  /// misleading UNKNOWN_CURSOR). The real teardown drains for 5s and
+  /// clears [_stmts], so this exact interleaving can't be produced through
+  /// the public API.
+  Future<void> debugSwapLivePoolPreservingStatements() async {
+    final old = _pool;
+    if (old != null) await old.close();
+    _pool = await bootWebLivePool(
+      dbName: dbName,
+      readerCount: DbasSqliteNativeInterface.workerPoolSize,
+    );
+  }
+
   /// Runs [action] against a transient pool that is NOT shared with
   /// [_pool]. Used by destructive file operations and by
   /// [databaseExists] when no live pool exists. The transient pool is
@@ -1112,6 +1165,21 @@ class _WebStmtState {
   /// (single-worker fallback). Echoed back on every per-stmt call; never
   /// inspected here.
   final Object cursor;
+
+  /// The pool this cursor was PREPARED ON. Every per-statement call
+  /// (bind / read / counters / finalize) MUST route through this exact
+  /// pool — NOT the instance's current `_pool`. A teardown + recreate
+  /// for the same dbName swaps `_pool` to a fresh pool whose cursor map
+  /// is empty; an in-flight reader that already captured this state and
+  /// then used `_pool` would dispatch its stale cursor to the new pool
+  /// and get the misleading `UNKNOWN_CURSOR`. Routing to the owning pool
+  /// instead surfaces a clean pool-closed error once that pool is torn
+  /// down (a `StateError` whose message contains "...is closed", thrown
+  /// by the reader pool's `_ensureOpen` before the cursor is ever
+  /// consulted), which is the truthful failure: the cursor's connection
+  /// is gone.
+  final WebLivePool pool;
+
   final int columnCount;
   final List<String> columnNames;
 
@@ -1132,6 +1200,7 @@ class _WebStmtState {
 
   _WebStmtState({
     required this.cursor,
+    required this.pool,
     required this.columnCount,
     required this.columnNames,
   });

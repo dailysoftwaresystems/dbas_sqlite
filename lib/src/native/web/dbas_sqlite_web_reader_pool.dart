@@ -130,6 +130,21 @@ DbasSqliteWebWorkerError _toWorkerError(Object e) {
       sqliteCode: rc, sqliteUniqueCode: extendedRc);
 }
 
+/// True if [e] is a JS error object carrying the exact `.code`. Used to
+/// let the STRUCTURAL `POOL_ALREADY_ACTIVE` error (a live pool already
+/// exists for this dbName — a prior pool's `close()` was not awaited)
+/// escape [bootWebLivePool]'s single-worker fallback instead of being
+/// silently demoted to single-worker mode. Defensive: a non-JSObject
+/// rejection cleanly returns false.
+bool _jsErrorCodeIs(Object e, String code) {
+  try {
+    final c = (e as JSObject).getProperty<JSAny?>('code'.toJS);
+    return c != null && c.isA<JSString>() && (c as JSString).toDart == code;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Adapts a normalized Dart bind value (already passed through the shim's
 /// `_jsifyBindValue`, so it is null / int / double / String / Uint8List)
 /// into the JS value the worker's `bindParam` expects.
@@ -479,6 +494,14 @@ Future<WebLivePool> bootWebLivePool({
       return await DbasSqliteWebReaderPool.create(
           dbName: dbName, readerCount: readerCount);
     } catch (e, st) {
+      // POOL_ALREADY_ACTIVE is a STRUCTURAL programming error (a live
+      // pool for this dbName already exists — the prior pool's close()
+      // wasn't awaited), NOT a recoverable multi-worker init failure.
+      // Let it propagate loudly. Demoting it to the single-worker
+      // fallback would silently lose read/write concurrency and bury the
+      // exact lifecycle bug the native one-pool-per-dbName check exists
+      // to surface.
+      if (_jsErrorCodeIs(e, 'POOL_ALREADY_ACTIVE')) rethrow;
       developer.log(
         'multi-worker pool init FAILED for "$dbName" — falling back to a '
         'single worker (no read/write concurrency; the write-while-read '
