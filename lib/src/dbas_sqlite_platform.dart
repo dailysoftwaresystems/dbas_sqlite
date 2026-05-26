@@ -221,7 +221,7 @@ final class DbasSqlitePlatform {
   int poolAcquireReader(String dbName, int poolPtr) =>
       _delegate[dbName]!.poolAcquireReader(poolPtr);
 
-  Future<int> poolAcquireReaderBlocking(
+  Future<({int readerPtr, PoolAcquireStatus status})> poolAcquireReaderBlocking(
           String dbName, int poolPtr, int timeoutMs) async =>
       await _delegate[dbName]!.poolAcquireReaderBlocking(poolPtr, timeoutMs);
 

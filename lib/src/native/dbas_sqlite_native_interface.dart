@@ -5,6 +5,34 @@ import 'package:dbas_sqlite/src/native/stub/dbas_sqlite_native_web_stub.dart'
 
 import 'package:flutter/foundation.dart';
 
+/// Dart mirror of the native `PoolAcquireStatus` enum (dbas_sqlite.h).
+/// Explains why [DbasSqliteNativeInterface.poolAcquireReaderBlocking]
+/// returned a `0` reader pointer. Enum order matches the C values 0–4
+/// so [fromCode] is a direct index.
+enum PoolAcquireStatus {
+  /// A reader was returned (`readerPtr != 0`).
+  ok,
+
+  /// Non-blocking / `timeoutMs == 0`: every reader was busy.
+  noSlot,
+
+  /// Blocking: the deadline elapsed with no reader free.
+  timeout,
+
+  /// The pool is closing or closed — terminal; retrying is pointless.
+  closing,
+
+  /// NULL pool or readers already destroyed — a misuse/programming
+  /// error rather than a transient condition.
+  invalid;
+
+  /// Maps a raw native status int to the enum. Out-of-range codes
+  /// (including a missing/older binary that can't report one) fall back
+  /// to [invalid] rather than guessing a transient cause.
+  static PoolAcquireStatus fromCode(int code) =>
+      (code >= 0 && code < values.length) ? values[code] : invalid;
+}
+
 abstract class DbasSqliteNativeInterface {
   static final Map<String, DbasSqliteNativeInterface> _instance = {};
   final String _dbName;
@@ -188,7 +216,19 @@ abstract class DbasSqliteNativeInterface {
   Future<int> createPool(String path, int readerCount);
   int poolGetWriter(int poolPtr);
   int poolAcquireReader(int poolPtr);
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs);
+
+  /// Acquires a pool reader, blocking up to [timeoutMs].
+  ///
+  /// Returns the reader pointer in `readerPtr` (`0` when none was
+  /// acquired) together with a [PoolAcquireStatus] that disambiguates a
+  /// `0` — most importantly [PoolAcquireStatus.closing] (terminal: the
+  /// pool is tearing down) versus [PoolAcquireStatus.timeout]
+  /// (transient: no reader freed in the window). The status mirrors the
+  /// native `PoolLastAcquireStatus()` errno-style accessor and MUST be
+  /// read on the same thread as the acquire, so implementations read it
+  /// immediately after the native call with no intervening await.
+  Future<({int readerPtr, PoolAcquireStatus status})>
+      poolAcquireReaderBlocking(int poolPtr, int timeoutMs);
   void poolReleaseReader(int poolPtr, int readerPtr);
   Future<void> closePool(int poolPtr);
 

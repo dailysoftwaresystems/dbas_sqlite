@@ -397,11 +397,27 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
   }
 
   @override
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async {
-    return await _dispatch('poolAcquireReaderBlocking', {
+  Future<({int readerPtr, PoolAcquireStatus status})> poolAcquireReaderBlocking(
+      int poolPtr, int timeoutMs) async {
+    final result = await _dispatch('poolAcquireReaderBlocking', {
       'poolPtr': poolPtr,
       'timeoutMs': timeoutMs,
-    }) as int;
+    });
+    // The worker reads the per-thread status in the same dispatch (so
+    // it isn't clobbered by an acquire on another worker isolate) and
+    // returns it alongside the pointer.
+    if (result is Map) {
+      return (
+        readerPtr: (result['readerPtr'] as num).toInt(),
+        status: PoolAcquireStatus.fromCode((result['status'] as num).toInt()),
+      );
+    }
+    // Backward-compat: an older worker that returned a bare int pointer.
+    final ptr = (result as num).toInt();
+    return (
+      readerPtr: ptr,
+      status: ptr != 0 ? PoolAcquireStatus.ok : PoolAcquireStatus.timeout,
+    );
   }
 
   @override
@@ -597,6 +613,8 @@ class DbasSqliteNativeApp extends DbasSqliteNativeAppBase {
           Pointer<DbasSqlitePoolStruct> poolPtr, int timeoutMs) =>
       _ffi.poolAcquireReaderBlocking(poolPtr, timeoutMs);
   @override
+  int nativePoolLastAcquireStatus() => _ffi.poolLastAcquireStatus();
+  @override
   void nativePoolReleaseReader(Pointer<DbasSqlitePoolStruct> poolPtr,
           Pointer<DbasSqliteDbStruct> readerPtr) =>
       _ffi.poolReleaseReader(poolPtr, readerPtr);
@@ -712,6 +730,7 @@ class _MainIsolateFfi {
       poolAcquireReader;
   late final Pointer<DbasSqliteDbStruct> Function(
       Pointer<DbasSqlitePoolStruct>, int) poolAcquireReaderBlocking;
+  late final int Function() poolLastAcquireStatus;
   late final void Function(
       Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>) poolReleaseReader;
   late final void Function(Pointer<DbasSqlitePoolStruct>) closePool;
@@ -896,6 +915,8 @@ class _MainIsolateFfi {
             Pointer<DbasSqlitePoolStruct>, Int32),
         Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>,
             int)>('PoolAcquireReaderBlocking');
+    poolLastAcquireStatus = lib.lookupFunction<Int32 Function(),
+        int Function()>('PoolLastAcquireStatus');
     poolReleaseReader = lib.lookupFunction<
         Void Function(
             Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>),

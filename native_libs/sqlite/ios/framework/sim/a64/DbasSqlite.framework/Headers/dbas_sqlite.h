@@ -22,8 +22,9 @@ extern "C" {
 
     /*
      * ABI version. Bump on any change to the binary shape of the public
-     * surface — struct field reorder/addition (SQLiteDb / SQLitePool /
-     * SQLiteStmt-anything visible), function signature change, or
+     * surface that a consumer can OBSERVE — a field reorder/addition in
+     * a struct the consumer allocates, sizes, or dereferences
+     * (`SQLiteDb` / `SQLiteStmt`), a function signature change, or the
      * removal of an exported symbol. Adding a new DLL_EXPORT function is
      * NOT a bump (additive). FFI consumers (Dart, .NET, Flutter, etc.)
      * compile against this header value and assert at startup against
@@ -31,9 +32,22 @@ extern "C" {
      * instead of a `<missing-symbol> is not a function` six frames deep,
      * or worse, a struct misread that surfaces as silent corruption.
      *
+     * `SQLitePool` is deliberately excluded from the struct list above:
+     * it is fully opaque at every FFI boundary — no consumer allocates
+     * one, takes its `sizeof`, or reads a field; it is only ever held as
+     * an opaque pointer minted and freed by this library. Adding fields
+     * to it therefore changes no binary contract any consumer can
+     * observe, so additive `SQLitePool` fields do NOT bump. (The
+     * invariant is "no consumer depends on the layout," not the weaker
+     * "no consumer happens to read it today" — if `SQLitePool` ever
+     * becomes consumer-allocatable, it joins the bump list.)
+     *
      * Version registry (terse — full notes in CHANGELOG):
      *   1 → introduced 2026-05 alongside `GetSqliteVersion`,
-     *       `GetAbiVersion`, and `PoolAcquireReaderBlocking`.
+     *       `GetAbiVersion`, and `PoolAcquireReaderBlocking`. The
+     *       `closing` / `activeOps` drain fields and the additive
+     *       `PoolLastAcquireStatus` accessor landed under this version
+     *       (opaque-struct fields + a new export — neither bumps).
      */
     #define DBAS_ABI_VERSION ((uint32_t)1)
 
@@ -369,13 +383,32 @@ extern "C" {
         bool* readerBusy;
         int readerCount;
         char* fileName;
+        /* Latched true by `ClosePool` before it broadcasts the
+         * shutdown signal. While set, `PoolAcquireReader[Blocking]`
+         * bail under the lock instead of returning a soon-to-be-freed
+         * reader, and any thread parked in `pool_cond_wait` sees the
+         * flag on its next wake and exits without touching pool
+         * state. The flag plus `activeOps` together let `ClosePool`
+         * wait until no operation is in flight before destroying
+         * the lock / condvar. */
+        bool closing;
+        /* Count of in-flight pool operations that must finish before
+         * teardown is safe: parked blocking-acquires (so the condvar
+         * isn't destroyed under them) AND checked-out readers (so a
+         * reader isn't force-closed while a caller still holds it). A
+         * successful acquire keeps its bump until `PoolReleaseReader`.
+         * `ClosePool` waits for this to reach zero. */
+        int activeOps;
 #ifndef __EMSCRIPTEN__
 #ifdef _WIN32
         CRITICAL_SECTION lock;
         /* Condition variable signalled whenever a reader is released
-         * back to the pool. `PoolAcquireReaderBlocking` waits on this
-         * to avoid the spin-and-retry pattern FFI consumers would
-         * otherwise have to write at the Dart / language layer. */
+         * back to the pool, when `ClosePool` latches `closing`, and
+         * whenever `activeOps` is decremented. `PoolAcquireReaderBlocking`
+         * waits on this to avoid the spin-and-retry pattern FFI
+         * consumers would otherwise have to write at the Dart /
+         * language layer; `ClosePool` waits on it to drain in-flight
+         * acquires and checked-out readers before tearing the pool down. */
         CONDITION_VARIABLE readerAvailable;
 #else
         pthread_mutex_t lock;
@@ -386,30 +419,75 @@ extern "C" {
 
     DLL_EXPORT SQLitePool* CreatePool(const char* fileName, int readerCount);
     DLL_EXPORT SQLiteDb* PoolGetWriter(SQLitePool* pool);
+
+    /* Why the last `PoolAcquireReader[Blocking]` returned NULL. Both
+     * acquire functions return NULL for several distinct reasons that
+     * the SQLiteDb*\/NULL contract alone can't tell apart — most
+     * importantly, "the pool is closing" (terminal; retrying is
+     * pointless) versus "no reader was free in time" (transient;
+     * retrying may succeed). After a NULL return, call this to learn
+     * which. The value is stored per-thread (like `errno`): it
+     * reflects THIS thread's most recent acquire call only, is not
+     * raced by acquires on other threads, and is meaningful only
+     * immediately after a NULL — a successful acquire sets it to
+     * `POOL_ACQUIRE_OK`. */
+    typedef enum PoolAcquireStatus {
+        POOL_ACQUIRE_OK       = 0, /* a reader was returned */
+        POOL_ACQUIRE_NO_SLOT  = 1, /* non-blocking / timeout==0: all busy */
+        POOL_ACQUIRE_TIMEOUT  = 2, /* blocking: deadline elapsed, none free */
+        POOL_ACQUIRE_CLOSING  = 3, /* pool is closing or closed (terminal) */
+        POOL_ACQUIRE_INVALID  = 4  /* NULL pool / readers already destroyed */
+    } PoolAcquireStatus;
+    DLL_EXPORT int PoolLastAcquireStatus(void);
+
     /* Non-blocking reader acquire. Returns the first idle reader's
-     * SQLiteDb*, or NULL when every reader is busy. Caller is
-     * responsible for retrying / queueing. Use
-     * `PoolAcquireReaderBlocking` when you want the kernel to wake
-     * you on release rather than spinning. */
+     * SQLiteDb*, or NULL when every reader is busy (or the pool is
+     * closing — see `PoolLastAcquireStatus`). Caller is responsible
+     * for retrying / queueing. Use `PoolAcquireReaderBlocking` when you
+     * want the kernel to wake you on release rather than spinning.
+     * A returned reader is "checked out" until `PoolReleaseReader`;
+     * see ClosePool for the lifetime contract that pins. */
     DLL_EXPORT SQLiteDb* PoolAcquireReader(SQLitePool* pool);
     /* Blocking reader acquire with optional timeout.
      *
-     *   timeout_ms <  0  : wait forever (returns only on success)
+     *   timeout_ms <  0  : wait forever (returns only on success or
+     *                      when the pool starts closing)
      *   timeout_ms == 0  : equivalent to PoolAcquireReader (no wait)
      *   timeout_ms >  0  : wait up to that many milliseconds; returns
      *                      NULL if no reader becomes available in
      *                      that window
      *
      * Spurious wakeups are handled internally; callers see a clean
-     * "got a reader or hit the deadline" contract. Returns NULL on a
-     * NULL pool or one whose readers were destroyed. On WASM (single-
-     * threaded) this degrades to PoolAcquireReader — there's no peer
-     * thread to release a reader while we wait. */
+     * "got a reader, hit the deadline, or the pool is closing"
+     * contract — call `PoolLastAcquireStatus` to disambiguate a NULL.
+     * Returns NULL on a NULL pool or one whose readers were destroyed.
+     * On WASM (single-threaded) this degrades to PoolAcquireReader —
+     * there's no peer thread to release a reader while we wait. */
     DLL_EXPORT SQLiteDb* PoolAcquireReaderBlocking(SQLitePool* pool, int timeout_ms);
+    /* Return a checked-out reader to the pool. Idempotent for a given
+     * checkout: a second release of an already-returned reader (or of a
+     * pointer this pool never handed out) is a no-op. Releasing is what
+     * lets a concurrent `ClosePool` finish — see its contract. */
     DLL_EXPORT void PoolReleaseReader(SQLitePool* pool, SQLiteDb* reader);
     /* End-of-life cleanup. Force-closes the writer and all readers,
-     * draining any handles the caller forgot to finalize. After this
-     * call:
+     * draining any handles the caller forgot to finalize.
+     *
+     * ClosePool BLOCKS until every reader checked out via
+     * `PoolAcquireReader[Blocking]` has been returned with
+     * `PoolReleaseReader` and every parked blocking-acquire has woken
+     * and bailed. This is what makes teardown safe: a reader cannot be
+     * force-closed (nor the lock/condvar destroyed) while another
+     * thread still holds and may be stepping it. New acquires after
+     * close begins return NULL with status `POOL_ACQUIRE_CLOSING`.
+     *
+     * Corollary — calling ClosePool from a thread that is ITSELF still
+     * holding a reader deadlocks (nothing can release it). The
+     * supported usage is "quiesce, release every reader, then close,"
+     * which the wrapper layer already enforces. The writer is NOT
+     * checkout-tracked (it has no release call); the same quiesce
+     * contract covers it.
+     *
+     * After this call returns:
      *   - The pool pointer is invalid.
      *   - Every SQLiteDb pointer the pool produced (writer + readers) is
      *     invalid.

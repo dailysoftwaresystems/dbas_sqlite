@@ -40,6 +40,21 @@ Future<int> _runSql(DbasSqlite db, String sql,
   }
 }
 
+/// Pumps the event loop until [count] callers have parked in the
+/// reader-slot wait queue (or [maxYields] is exhausted). Avoids a
+/// fixed `Future.delayed(Duration.zero)`, which assumes a single
+/// microtask drain is enough to register every waiter.
+Future<void> _awaitReaderWaiters(DbasSqlite db, int count,
+    {int maxYields = 1000}) async {
+  for (var i = 0;
+      i < maxYields && db.debugReaderSlotWaitQueueLength < count;
+      i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+  expect(db.debugReaderSlotWaitQueueLength, greaterThanOrEqualTo(count),
+      reason: 'expected at least $count parked reader-slot waiter(s)');
+}
+
 void main() async {
   setUpAll(() async {
     // Clean test database directory before all tests
@@ -4947,13 +4962,21 @@ void main() async {
       'pool: closeDb cancels surplus Dart-side reader-slot waiters with '
       'DbasSqliteException', () async {
     // Park two reader-slot waiters behind a single held slot, then
-    // close the database. closeDb sweeps active statements first; the
-    // held reader's onClose releases the slot and grants ONE parked
-    // waiter (which then fails downstream at prepareQuery because the
-    // pool is mid-tear-down). The SECOND parked waiter never gets a
-    // slot — it must be drained by `_cancelReaderSlotWaitQueue` and
-    // reject with DbasSqliteException(readerSlotWaitCancelled). Without that drain the waiter would
-    // hang forever.
+    // close the database. closeDb latches _closing and drains both
+    // waiter queues BEFORE sweeping statements: each parked waiter
+    // must reject with DbasSqliteException(readerSlotWaitCancelled).
+    // Pre-sweep draining is load-bearing — if the sweep ran first,
+    // the held reader's onClose would _releaseReaderSlot → grant a
+    // parked waiter, which would then race into
+    // poolAcquireReaderBlocking on a worker isolate against the
+    // closePool dispatched by this method on a sibling worker
+    // isolate, segfaulting in C when ClosePool destroys the pool
+    // lock/condvar underneath the parked acquire. Without the drain,
+    // already-parked waiters would either be race-granted into the
+    // mid-tear-down pool (the segfault above) or wait out the full
+    // poolAcquireTimeout — disjoint from the synchronous-rejection
+    // path the _closing flag covers for callers arriving AFTER close
+    // begins (see the two tests below).
     final db = await _createTestDb('pool_close_cancels_surplus_waiter.db',
         readerPoolSize: 1);
     DbasSqlite.debugPoolAcquireTimeoutMs = 30000;
@@ -4981,25 +5004,155 @@ void main() async {
           parkedStmt2.executeReader().then<Object?>(
               (r) => r, onError: (Object e) => e);
 
-      // Yield so the waiters register in the queue.
-      await Future<void>.delayed(Duration.zero);
+      // Wait until both waiters have actually parked in the queue.
+      await _awaitReaderWaiters(db, 2);
 
       await db.closeDb();
 
-      // One of the two parked reads will be cancelled with the
-      // readerSlotWaitCancelled code; the other will fail downstream
-      // at prepareQuery once its slot is granted mid-close. Assert
-      // that AT LEAST one threw the cancellation-specific code so the
-      // cancel path is exercised.
+      // Both parked reads must be rejected with
+      // readerSlotWaitCancelled — the pre-sweep drain in closeDb
+      // empties the wait queue before any onClose can race-grant a
+      // waiter into the mid-tear-down pool.
       final err1 = await parked1Outcome;
       final err2 = await parked2Outcome;
       bool isCancellation(Object? e) =>
           e is DbasSqliteException &&
           e.code == DbasSqliteErrorCode.readerSlotWaitCancelled;
-      final sawCancellation = isCancellation(err1) || isCancellation(err2);
-      expect(sawCancellation, isTrue,
-          reason: 'expected at least one waiter to be cancelled by '
-              '_cancelReaderSlotWaitQueue, got err1=$err1 err2=$err2');
+      expect(isCancellation(err1), isTrue,
+          reason: 'expected parked1 to be cancelled by '
+              '_cancelReaderSlotWaitQueue, got err1=$err1');
+      expect(isCancellation(err2), isTrue,
+          reason: 'expected parked2 to be cancelled by '
+              '_cancelReaderSlotWaitQueue, got err2=$err2');
+    } finally {
+      DbasSqlite.debugPoolAcquireTimeoutMs = null;
+      await db.dropDb();
+    }
+  });
+
+  test(
+      'pool: executeReader arriving after closeDb starts is rejected '
+      'synchronously with readerSlotWaitCancelled', () async {
+    // Covers the _closing-flag guard in _acquireReaderSlot for a NEW
+    // caller (distinct from the pre-parked-waiter drain above). closeDb
+    // latches _closing synchronously before its first await, so an
+    // executeReader issued while teardown is in flight must reject with
+    // readerSlotWaitCancelled instead of racing into
+    // poolAcquireReaderBlocking against the closePool dispatch. Without
+    // the guard, _acquireReaderSlot would enter the (now-empty) queue
+    // and hang, or grant a stale slot into the mid-tear-down pool.
+    final db = await _createTestDb('pool_close_rejects_new_reader.db',
+        readerPoolSize: 1);
+    try {
+      await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY)');
+      await _runSql(db, 'INSERT INTO t VALUES (1)');
+      // Prepare BEFORE closing so prepareQuery's isOpened() check is
+      // not what gates the call — we want to reach _acquireReaderSlot.
+      final stmt = await db.prepareQuery('SELECT id FROM t WHERE id = 1');
+
+      // Start teardown but do not await: closeDb's synchronous prelude
+      // latches _closing before suspending at its first await. The pool
+      // pointer is still live at this point.
+      final closeFuture = db.closeDb();
+      final outcome = stmt
+          .executeReader()
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await closeFuture;
+
+      final err = await outcome;
+      expect(err, isA<DbasSqliteException>(),
+          reason: 'expected a DbasSqliteException, got $err');
+      expect((err as DbasSqliteException).code,
+          DbasSqliteErrorCode.readerSlotWaitCancelled);
+    } finally {
+      await db.dropDb();
+    }
+  });
+
+  test(
+      'pool: beginTransaction arriving after closeDb starts is rejected '
+      'with writerLockWaitCancelled', () async {
+    // Writer-lock symmetry with the reader-slot guard. closeDb latches
+    // _closing synchronously before its first await; a writer-lock
+    // acquire issued while teardown is in flight must reject with
+    // writerLockWaitCancelled instead of entering the (now-drained)
+    // _writerWaitQueue and hanging, or racing executeSql against the
+    // closePool dispatch.
+    //
+    // This exercises the _acquireWriterLock guard directly. Parking a
+    // writer BEHIND a held lock is not reachable via the public API
+    // while the holder is idle (beginTransaction is idempotent,
+    // executeSql short-circuits on isInTransaction, vacuum rejects in a
+    // transaction), so the new-caller guard is the test surface.
+    final db = await _createTestDb('pool_close_rejects_new_writer.db',
+        readerPoolSize: 1);
+    try {
+      await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY)');
+
+      // Start teardown but do not await: _closing is latched, _db is
+      // still live so beginTransaction passes its isOpened() check and
+      // reaches _acquireWriterLock.
+      final closeFuture = db.closeDb();
+      final outcome = db
+          .beginTransaction()
+          .then<Object?>((_) => null, onError: (Object e) => e);
+      await closeFuture;
+
+      final err = await outcome;
+      expect(err, isA<DbasSqliteException>(),
+          reason: 'expected a DbasSqliteException, got $err');
+      expect((err as DbasSqliteException).code,
+          DbasSqliteErrorCode.writerLockWaitCancelled);
+    } finally {
+      await db.dropDb();
+    }
+  });
+
+  test(
+      'pool: closeDb during a transaction still cancels parked reader '
+      'waiters and rolls back', () async {
+    // Combines the rollback path with parked reader waiters — closeDb
+    // runs _cancelReaderSlotWaitQueue BEFORE await rollback(), so this
+    // pins that ordering. A write-less transaction routes executeReader
+    // through the pool (read-your-writes only kicks in after a write),
+    // so a held reader + two parked waiters is reproducible while a
+    // transaction is open.
+    final db = await _createTestDb('pool_close_tx_cancels_waiters.db',
+        readerPoolSize: 1);
+    DbasSqlite.debugPoolAcquireTimeoutMs = 30000;
+    try {
+      await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)');
+      await _runSql(db, "INSERT INTO t VALUES (1, 'first')");
+
+      await db.beginTransaction();
+      expect(db.isInTransaction, isTrue);
+
+      // Hold the only reader slot, then park two more waiters.
+      final firstStmt = await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final firstReader = await firstStmt.executeReader();
+      expect(await firstReader.readRow(), isTrue);
+
+      final parkedStmt1 =
+          await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final parkedStmt2 =
+          await db.prepareQuery('SELECT val FROM t WHERE id = 1');
+      final parked1 = parkedStmt1
+          .executeReader()
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      final parked2 = parkedStmt2
+          .executeReader()
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await _awaitReaderWaiters(db, 2);
+
+      await db.closeDb();
+
+      bool isCancellation(Object? e) =>
+          e is DbasSqliteException &&
+          e.code == DbasSqliteErrorCode.readerSlotWaitCancelled;
+      expect(isCancellation(await parked1), isTrue);
+      expect(isCancellation(await parked2), isTrue);
+      // Rollback ran during teardown despite the pre-sweep cancel.
+      expect(db.isInTransaction, isFalse);
     } finally {
       DbasSqlite.debugPoolAcquireTimeoutMs = null;
       await db.dropDb();
