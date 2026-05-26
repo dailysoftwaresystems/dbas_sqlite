@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.8.2 - 2026-05-26
+
+### Fixed
+
+- **Concurrent `openDb()` calls raced a second pool creation for the
+  same file (web: `POOL_ALREADY_ACTIVE`).** `openDb()`'s `isOpened()`
+  fast-path guard stays `false` until `_db` is assigned, which only
+  happens *after* the `createPool` await. Two or more `openDb()` calls
+  that arrived before the first finished therefore all observed
+  `_db == null`, fell through, and each issued its own `createPool` for
+  the same database file. On web the pool layer is process-wide and
+  rejected the second create with `POOL_ALREADY_ACTIVE` ("a
+  ConnectionPool is already active for dbName …"); on native it silently
+  leaked a duplicate pool. The real-world trigger was a consumer
+  starting several queue processors together (sendData / receiveData /
+  log), each resolving the same user database concurrently. `openDb()`
+  is now single-flight: concurrent callers await one in-flight open
+  instead of racing, upholding the documented idempotency contract under
+  concurrency. (No retry — the duplicate create is structurally
+  prevented.)
+
 ## 2.8.1 - 2026-05-26
 
 ### Fixed

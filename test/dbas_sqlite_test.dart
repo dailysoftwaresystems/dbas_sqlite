@@ -5772,6 +5772,55 @@ void main() async {
     await db2.dropDb();
   });
 
+  test('concurrent openDb calls are single-flight (one pool per file)',
+      () async {
+    // Regression: openDb's `isOpened()` guard stays false until `_db` is
+    // assigned, which happens AFTER the `createPool` await. Before the
+    // single-flight fix, several openDb() calls that arrived before the
+    // first finished all fell through and each issued its own createPool
+    // for the same file. On web that tripped the pool layer's
+    // process-wide POOL_ALREADY_ACTIVE guard ("a ConnectionPool is
+    // already active for dbName ..."); the real-world trigger is the
+    // consumer's queue starting its sendData/receiveData/log processors
+    // together, each resolving the same user DB. Pool mode
+    // (readerPoolSize >= 1) is what exercises the createPool path.
+    final db = await DbasSqlite.getInstance(dbName: 'concurrent_open.db');
+    await db.dropDb();
+
+    // Fire the opens together, with no await between them, so they all
+    // observe `_db == null` and race the guard exactly as the queue
+    // processors did.
+    await Future.wait([
+      db.openDb(readerPoolSize: 2),
+      db.openDb(readerPoolSize: 2),
+      db.openDb(readerPoolSize: 2),
+      db.openDb(readerPoolSize: 2),
+    ]);
+
+    expect(db.isOpened(), isTrue,
+        reason: 'concurrent opens must converge on a single open pool');
+
+    // The single pool must be fully functional — a write then read back
+    // confirms the converged pool wasn't left in a half-initialized state.
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
+    await _runSql(db, "INSERT INTO t (v) VALUES ('ok')");
+    final read = await db.prepareQuery('SELECT v FROM t WHERE id = 1');
+    try {
+      final reader = await read.executeReader();
+      try {
+        expect(await reader.readRow(), isTrue);
+        expect(reader.getColumnValue(0), 'ok');
+      } finally {
+        await reader.close();
+      }
+    } finally {
+      await read.close();
+    }
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   // ──────────────────────────────────────────────────────────────────────
   // Worker-error envelope `code` field is folded into the message — the
   // public exception's message should carry "[CODE]" so log scrapers

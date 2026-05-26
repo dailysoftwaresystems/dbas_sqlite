@@ -117,6 +117,12 @@ class DbasSqlite {
   /// [closeDb] complements this for already-parked waiters.
   bool _closing = false;
 
+  /// Non-null while an [openDb] call on this instance is in flight.
+  /// Concurrent [openDb] callers await this single future instead of
+  /// each racing their own pool creation for the same database file —
+  /// see [openDb] for why the plain `isOpened()` guard is insufficient.
+  Future<void>? _opening;
+
   /// When `true`, binding a named parameter that does not exist in
   /// the prepared statement throws an exception instead of silently
   /// skipping it. Defaults to `false` (C#/SQLite-compatible behaviour).
@@ -259,17 +265,65 @@ class DbasSqlite {
   /// change the pool size.
   Future<void> openDb({int readerPoolSize = 4}) async {
     if (isOpened()) {
-      if (readerPoolSize != _readerPoolSize) {
-        throw DbasSqliteException.dart(
-          DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize,
-          'openDb("$dbName") was called with readerPoolSize=$readerPoolSize '
-          'but the database is already opened with readerPoolSize=$_readerPoolSize. '
-          'Close the database before re-opening with a different pool size.',
-        );
-      }
+      _assertReopenPoolSize(readerPoolSize);
       return;
     }
 
+    // Single-flight: coalesce concurrent opens of this instance onto one
+    // in-flight open. The `isOpened()` guard above is NOT sufficient on
+    // its own — `_db` is only assigned AFTER the `createPool` await in
+    // [_performOpen], so two `openDb()` calls that arrive before the
+    // first finishes both observe `_db == null`, both fall through, and
+    // each issues its own `createPool` for the same database file. On
+    // web the pool layer is process-wide and rejects the second with
+    // `POOL_ALREADY_ACTIVE`; on native it would spin up a duplicate C
+    // pool against the same file. Awaiting the in-flight open is what
+    // upholds the documented idempotency contract under concurrency —
+    // it is not a retry that papers over the race.
+    final inFlight = _opening;
+    if (inFlight != null) {
+      await inFlight;
+      // The open we waited on may have left the instance open, or it may
+      // have failed / been closed again in the meantime. If it left us
+      // open, honour this call's pool-size contract and return; otherwise
+      // start a fresh open below.
+      if (isOpened()) {
+        _assertReopenPoolSize(readerPoolSize);
+        return;
+      }
+      return openDb(readerPoolSize: readerPoolSize);
+    }
+
+    final open = _performOpen(readerPoolSize);
+    _opening = open;
+    try {
+      await open;
+    } finally {
+      // Clear the marker only if it still points at this open — a
+      // close→open during teardown could have replaced it.
+      if (identical(_opening, open)) _opening = null;
+    }
+  }
+
+  /// Throws [DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize] when
+  /// an already-open instance is asked to (re)open with a different
+  /// [readerPoolSize] — pool resizing isn't supported.
+  void _assertReopenPoolSize(int readerPoolSize) {
+    if (readerPoolSize != _readerPoolSize) {
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize,
+        'openDb("$dbName") was called with readerPoolSize=$readerPoolSize '
+        'but the database is already opened with readerPoolSize=$_readerPoolSize. '
+        'Close the database before re-opening with a different pool size.',
+      );
+    }
+  }
+
+  /// Performs the actual open: resolves the file path, creates the
+  /// connection pool (or falls back to a single connection), and
+  /// publishes the [_db] handle. Always run through [openDb]'s
+  /// single-flight guard so at most one open runs per instance at a time.
+  Future<void> _performOpen(int readerPoolSize) async {
     final fileName = await getAppDatabasePath(dbName: dbName);
 
     // Clear the close-latched flag so re-opening this same instance
