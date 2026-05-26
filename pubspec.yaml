@@ -1,6 +1,6 @@
 name: dbas_sqlite
 description: "Flutter plugin that access SQLite for Android, iOS, macOS, Linux, Windows and Web."
-version: 2.7.3
+version: 2.8.0
 homepage: https://github.com/dailysoftwaresystems/dbas_sqlite
 author_name: Daily Software Systems
 author_email: dailysoftwaresystems@dailysoftwaresystems.com
@@ -45,3 +45,10 @@ flutter:
   assets:
     - web/libs/dbas_sqlite.js
     - web/libs/dbas_sqlite_worker.js
+    # Cross-origin-isolation bootstrap (enables SharedArrayBuffer for the
+    # multi-worker pool). Built from DBAS.SQLite/src/web/coi-serviceworker.js
+    # and synced here. NOTE: a service worker only controls its own URL
+    # path, so to isolate the document the consuming app must also serve
+    # this file at its web ROOT (copy it into web/ and load it from
+    # index.html). Shipping it only as this asset is not enough on its own.
+    - web/libs/coi-serviceworker.js

@@ -73,6 +73,14 @@ cp -r "$OUT_DIR/windows/"* "$SCRIPT_DIR/../../windows/libs"
 cp -r "$OUT_DIR/linux/"* "$SCRIPT_DIR/../../linux/libs"
 cp -r "$OUT_DIR/web/"* "$SCRIPT_DIR/../../web/libs"
 
+# The cross-origin-isolation service worker must also sit at the example's
+# web ROOT (a service worker only controls its own URL path; isolation must
+# apply to the document at "/"). Guarded for older dists without it.
+if [ -f "$OUT_DIR/web/coi-serviceworker.js" ]; then
+  mkdir -p "$SCRIPT_DIR/../../example/web"
+  cp "$OUT_DIR/web/coi-serviceworker.js" "$SCRIPT_DIR/../../example/web/"
+fi
+
 echo "Copying ios binaries..."
 mkdir -p "$SCRIPT_DIR/../../ios/dbas_sqlite/dbas_sqlite.xcframework"
 cp -r "$OUT_DIR/ios/dbas_sqlite.xcframework/"* "$SCRIPT_DIR/../../ios/dbas_sqlite/dbas_sqlite.xcframework"

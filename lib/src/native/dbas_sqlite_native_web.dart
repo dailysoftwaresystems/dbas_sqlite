@@ -5,6 +5,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'package:web/web.dart' as web;
 
 import 'package:dbas_sqlite/src/dbas_sqlite_row_cache.dart';
 import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
@@ -15,7 +16,9 @@ import 'package:dbas_sqlite/src/stub/dbas_sqlite_db_stub.dart'
         sqliteMisuse,
         sqliteInvalidStmtHandle;
 import 'dbas_sqlite_native_interface.dart';
+import 'web/dbas_sqlite_web_live_pool.dart';
 import 'web/dbas_sqlite_web_pool.dart';
+import 'web/dbas_sqlite_web_reader_pool.dart';
 
 /// Web implementation of [DbasSqliteNativeInterface].
 ///
@@ -64,7 +67,20 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   /// values increase per-chunk memory. The worker caps at 10000.
   static const int _readRowsChunkSize = 50;
 
-  DbasSqliteWebPool? _pool;
+  /// Connection-role tokens handed to the statement layer as opaque
+  /// "pointers". The layer stores one as a `DbasSqliteDb.ptr` and passes
+  /// it back as `dbPtr` on every per-statement call; [prepareQuery] routes
+  /// reads vs. writes on it. The writer token doubles as the
+  /// single-connection / fallback pointer returned by [openDb].
+  static const int _writerConn = 1;
+  static const int _readerConn = 2;
+
+  /// The live read/write pool. A multi-worker [DbasSqliteWebReaderPool]
+  /// (reads on reader connections, writes on the writer connection — true
+  /// concurrency) when the page is cross-origin isolated; otherwise a
+  /// single-worker fallback. Destructive file operations use a separate
+  /// transient [DbasSqliteWebPool] (see [_withTempPool]), never this.
+  WebLivePool? _pool;
   bool _initialized = false;
   String _sqliteVersion = '';
   final int _abiVersion = 0;
@@ -87,6 +103,85 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   /// the worker without round-tripping through Dart `BigInt`.
   final Map<int, _WebStmtState> _stmts = {};
   int _nextStmtId = 1;
+
+  // ── Destructive-op / regular-op access discipline ─────────────────────
+  //
+  // Destructive operations (the [_teardownLivePool] path behind
+  // [closeDb] / [closePool] / [attachDb] / [attachStreamDb] / [dropDb] /
+  // [getContent]) tear the worker down and replace the OPFS file. If
+  // they fire while a statement lifecycle (prepare → bind → read →
+  // finalize) or a single-shot [executeSql] is still in flight on the
+  // live pool, they sever it and surface a spurious "Pool is closed"
+  // error — the symptom seen when a background queue queries the DB at
+  // the same moment the login flow attaches a downloaded snapshot.
+  //
+  // The discipline is a minimal shared/exclusive gate:
+  //   - Regular work that OPENS new pool activity ([executeSql],
+  //     [prepareQuery], [streamCopyDb]) waits behind [_exclusiveGate]
+  //     so it queues after an in-progress destructive op instead of
+  //     racing it, and counts itself into [_inFlightCalls] /
+  //     [_stmts] so a destructive op can tell when the pool is busy.
+  //   - Continuation calls on an already-open statement
+  //     (`bind*` / [readRowAndCache] / [finalizeStmt]) are deliberately
+  //     NOT gated. Gating them would deadlock: a destructive op holding
+  //     the gate waits for the statement to finalize, but the finalize
+  //     would be waiting on the gate. Leaving them ungated lets the
+  //     open statement drain to completion while the destructive op
+  //     waits for quiescence.
+  //   - [_teardownLivePool] raises [_exclusiveGate], waits for
+  //     quiescence (no in-flight calls, no open statements) bounded by
+  //     a timeout, then closes the pool and lowers the gate.
+
+  /// Non-null while a destructive op holds (or is waiting to hold)
+  /// exclusive access. New gated work awaits its future.
+  Completer<void>? _exclusiveGate;
+
+  /// Count of in-flight gated calls ([executeSql] / [prepareQuery] /
+  /// [streamCopyDb]) that have passed the gate but not yet returned.
+  /// Combined with `_stmts.isEmpty`, defines pool quiescence.
+  int _inFlightCalls = 0;
+
+  /// Completed by [_signalIfQuiescent] when the pool becomes quiescent,
+  /// unblocking a destructive op waiting in [_teardownLivePool].
+  Completer<void>? _quiescent;
+
+  /// Max time [_teardownLivePool] waits for in-flight work to drain
+  /// before forcing the close. Bounds the impact of a leaked (never
+  /// finalized) statement — after this the close proceeds and the
+  /// leaked op's next call gets a clean "Pool is closed".
+  static const Duration _teardownDrainTimeout = Duration(seconds: 5);
+
+  bool get _poolQuiescent => _inFlightCalls == 0 && _stmts.isEmpty;
+
+  /// Enters a gated regular operation: waits behind any in-progress
+  /// destructive op, then registers this call as in-flight. The
+  /// `_inFlightCalls++` runs synchronously after the final gate
+  /// null-check with no `await` between them, so a destructive op
+  /// cannot claim the gate between the check and the increment (Dart's
+  /// single-threaded loop can't interleave a synchronous run). Pair
+  /// every call with [_exitGated] in a `finally`.
+  Future<void> _enterGated() async {
+    while (_exclusiveGate != null) {
+      await _exclusiveGate!.future;
+    }
+    _inFlightCalls++;
+  }
+
+  /// Exits a gated regular operation and wakes a waiting destructive op
+  /// if the pool just went quiescent.
+  void _exitGated() {
+    _inFlightCalls--;
+    _signalIfQuiescent();
+  }
+
+  /// Wakes a destructive op waiting on quiescence once the last
+  /// in-flight call returns / the last open statement is finalized.
+  void _signalIfQuiescent() {
+    if (_poolQuiescent) {
+      _quiescent?.complete();
+      _quiescent = null;
+    }
+  }
 
   DbasSqliteNativeWeb(super.dbName);
 
@@ -140,51 +235,129 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     // reported false, and the next `openDb()` on the same instance
     // would re-enter this path instead of being a no-op as the
     // idempotent contract promises.
-    await _ensurePool();
+    //
+    // Gated so a re-open queued right after a destructive op (e.g. the
+    // `openDb` that `DbasSqlite.attachDb` issues) waits for that op to
+    // finish instead of racing a fresh pool against it.
+    await _enterGated();
+    try {
+      await _ensurePool();
+    } finally {
+      _exitGated();
+    }
     return 1;
   }
 
   @override
   Future<bool> databaseExists(String fileName) async {
-    // Read-only probe: just asks the worker whether the OPFS file
-    // exists. When a live pool is already running for this dbName,
-    // dispatch through it directly — do NOT call
-    // `DbasSqliteWebPool.create()` to obtain a "throwaway" pool. That
-    // factory is a get-or-create against the shared `_pools` map
-    // keyed by dbName, so it would return the live pool and the
-    // subsequent `pool.close()` here would tear it down — corrupting
-    // every other operation in flight on that database. Only spin up
-    // (and close) a transient pool when no live pool exists.
+    // Native FFI parity: `databaseExists` is a no-side-effect probe —
+    // it reports whether the DB file is present on disk, and a `false`
+    // return MUST NOT cause the file to materialize. The Dart-VM impl
+    // is a one-line `File(path).existsSync()`.
     //
-    // TOCTOU: between the `isClosed` check and `send`, a concurrent
-    // caller could close the live pool. `send` then throws a raw
-    // `StateError('Pool is closed for ...')`. Catch it and fall
-    // through to the transient-pool path so the probe still succeeds
-    // — and the caller never sees a raw `StateError` from this
-    // platform shim.
+    // The previous web implementation routed through the worker —
+    // `DbasSqliteWebPool.create()` → `pool.send('exists')` — which
+    // forced an `init` round-trip on the worker. `init` calls the
+    // WASM lib's `initPersistentFS`, which opens the SQLite DB with
+    // create-or-open semantics AND walks `openOpfsHandles` to call
+    // `opfsDir.getFileHandle(name, {create: true})` for the four
+    // SQLite files (`name.db`, `-journal`, `-wal`, `-shm`). That
+    // creates the file as a side-effect, so the immediately-following
+    // `exists` action always returned `true` — and any caller that
+    // used `databaseExists` as a "should I run the first-time
+    // bootstrap?" gate (e.g. `SessionLifecycle._defaultSessionWriter`
+    // upserting a row before the migrator has had a chance to create
+    // the schema) silently skipped the bootstrap and then crashed on
+    // a downstream "no such table" prepare. Symptom seen in consumers:
+    // "no such table: dbas_Session" on first-ever login.
+    //
+    // The fix is to bypass the worker for the probe and check OPFS
+    // directly from Dart — no init, no file creation, no side effects
+    // — matching native FFI's semantics 1:1.
+    //
+    // Live-pool short-circuit: if our own [_pool] is alive, the file
+    // is loaded into the worker and definitionally exists. Skip the
+    // OPFS round-trip in that case (covers the hot path where the DB
+    // is already open).
     final live = _pool;
-    if (live != null && !live.isClosed) {
-      try {
-        return await live.send('exists') == true;
-      } on StateError catch (e, st) {
-        developer.log(
-          'DbasSqliteNativeWeb.databaseExists: live pool closed mid-probe '
-          'for "$dbName"; retrying via transient pool',
-          name: 'dbas_sqlite.DbasSqliteNativeWeb',
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
-    return await _withTempPool((pool) async => await pool.send('exists') == true);
+    if (live != null && !live.isClosed) return true;
+    return await _opfsFileExists(_normalizedDbName);
   }
+
+  /// OPFS-direct existence probe, no worker / WASM involved. Looks
+  /// for the SQLite file at the exact path the WASM lib's
+  /// `initPersistentFS` mounts: `dbas_data/<dbName>` under
+  /// `navigator.storage.getDirectory()`. The `create: false` options
+  /// guarantee a NotFoundError throw when the file (or the parent
+  /// `dbas_data` directory) is missing, which we catch and convert to
+  /// a `false` return.
+  ///
+  /// Other failure modes (SecurityError when COOP/COEP isn't set,
+  /// QuotaExceededError, TypeError when `navigator.storage` is missing
+  /// in a stripped-down WebView, …) are logged before falling through
+  /// to `false`. The fallthrough preserves the no-side-effect contract
+  /// — `databaseExists` is allowed to be wrong-but-fail-closed; the
+  /// downstream bootstrap will then re-hit the same broken OPFS and
+  /// surface the real error from there. Logging here ensures the
+  /// originating cause isn't lost in the symptom downstream.
+  Future<bool> _opfsFileExists(String fileName) async {
+    try {
+      final root = await web.window.navigator.storage.getDirectory().toDart;
+      final dir = await root
+          .getDirectoryHandle(
+            _opfsDataDirName,
+            web.FileSystemGetDirectoryOptions(create: false),
+          )
+          .toDart;
+      await dir
+          .getFileHandle(
+            fileName,
+            web.FileSystemGetFileOptions(create: false),
+          )
+          .toDart;
+      return true;
+    } catch (e, st) {
+      // Read the DOMException discriminator via the spec-guaranteed
+      // `${name}: ${message}` stringifier (WHATWG WebIDL) instead of
+      // `is web.DOMException`. The analyzer's
+      // `invalid_runtime_check_with_js_interop_types` lint flags
+      // runtime checks against JS interop extension types as
+      // platform-inconsistent — every Dart value on web is also a JS
+      // value at runtime, so `is`/`as` doesn't mean what it looks
+      // like. Pattern-matching on toString() sidesteps the interop
+      // type system altogether.
+      final msg = e.toString();
+      if (msg.startsWith('NotFoundError:')) return false;
+      developer.log(
+        'DbasSqliteNativeWeb._opfsFileExists: OPFS probe for '
+        '"$fileName" failed with a non-NotFoundError; treating as '
+        'not-present so caller bootstrap proceeds.',
+        name: 'dbas_sqlite.DbasSqliteNativeWeb',
+        error: e,
+        stackTrace: st,
+      );
+      return false;
+    }
+  }
+
+  /// dbName normalized to the on-disk filename the WASM lib uses.
+  /// Mirrors `initialize()` in `dbas_sqlite.js`:
+  /// `this.dbName = e.endsWith(".db") ? e : "${e}.db"`.
+  String get _normalizedDbName =>
+      dbName.endsWith('.db') ? dbName : '$dbName.db';
+
+  /// OPFS subdirectory the WASM lib creates inside
+  /// `navigator.storage.getDirectory()` and where it puts every
+  /// SQLite file. Mirrors the literal in `initialize()`:
+  /// `r.getDirectoryHandle("dbas_data", {create: true})`.
+  static const String _opfsDataDirName = 'dbas_data';
 
   @override
   bool isOpened(int dbPtr) => _pool != null && !_pool!.isClosed;
 
   @override
   Future<int> closeDb(int dbPtr, {bool checkpoint = false}) async {
-    await _teardownLivePool();
+    await _runExclusive(_teardownLivePool);
     return sqliteOk;
   }
 
@@ -192,28 +365,35 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future attachDb(String fileName, List<int> content) async {
-    // Destructive: replaces the OPFS file. Tear down the live pool
-    // first so the worker holding the writer connection releases the
-    // file, then perform the attach against a transient pool. Leaves
-    // `_pool == null` so the next `DbasSqlite.openDb()` re-creates
-    // against the freshly-attached file.
-    await _teardownLivePool();
-    await _withTempPool((pool) async {
-      // Eager input: the caller already has the full buffer in memory,
-      // so the chunked-attach protocol receives it as a single chunk.
-      // Memory-friendly attach should use `attachStreamDb` with a real
-      // source stream instead.
-      await pool.attachStreamChunked(
-        Stream.fromIterable([content]),
-        totalSize: content.length,
-      );
+    // Destructive: replaces the OPFS file. Runs under [_runExclusive]
+    // so the teardown + transient-pool attach are serialized against
+    // in-flight queries and no fresh live pool is spawned for the same
+    // OPFS file mid-attach. Tear down the live pool first so the worker
+    // holding the writer connection releases the file, then perform the
+    // attach against a transient pool. Leaves `_pool == null` so the
+    // next `DbasSqlite.openDb()` re-creates against the freshly-attached
+    // file.
+    await _runExclusive(() async {
+      await _teardownLivePool();
+      await _withTempPool((pool) async {
+        // Eager input: the caller already has the full buffer in memory,
+        // so the chunked-attach protocol receives it as a single chunk.
+        // Memory-friendly attach should use `attachStreamDb` with a real
+        // source stream instead.
+        await pool.attachStreamChunked(
+          Stream.fromIterable([content]),
+          totalSize: content.length,
+        );
+      });
     });
   }
 
   @override
   Future attachStreamDb(String fileName, Stream<List<int>> stream) async {
-    await _teardownLivePool();
-    await _withTempPool((pool) => pool.attachStreamChunked(stream));
+    await _runExclusive(() async {
+      await _teardownLivePool();
+      await _withTempPool((pool) => pool.attachStreamChunked(stream));
+    });
   }
 
   @override
@@ -224,22 +404,43 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     // export. The bytes are read against a transient pool; the live
     // pool stays torn down (caller re-opens via `DbasSqlite.openDb`
     // if it wants to keep using the database).
-    await _teardownLivePool();
-    return await _withTempPool((pool) => pool.exportContentStream());
+    return await _runExclusive(() async {
+      await _teardownLivePool();
+      return await _withTempPool((pool) => pool.exportContentStream());
+    });
   }
 
   @override
   Future<void> streamCopyDb(String sourceFileName, String destFileName) async {
     String destName = destFileName;
     if (destFileName.contains('/')) destName = destFileName.split('/').last;
-    await _ensurePool();
-    await _pool!.streamCopy(destName);
+    // Whole-file copy needs exclusive access to a consistent on-disk DB.
+    // Like attach / export / drop, tear the live pool down first (so its
+    // writer flushes and releases the OPFS file), then copy against a
+    // transient single-worker pool — the multi-worker live pool exposes
+    // no streamCopy. The live pool is re-created lazily on the next
+    // operation via [_ensurePool].
+    await _runExclusive(() async {
+      await _teardownLivePool();
+      await _withTempPool((pool) => pool.streamCopy(destName));
+      // streamCopy is READ-ONLY on the source — native FFI never closes
+      // the source connection across a copy. Re-establish the source
+      // live pool here so the connection survives, matching native. The
+      // teardown above was only needed to release the OPFS file for the
+      // transient copy worker; leaving `_pool == null` afterward made
+      // isOpened() spuriously false, so any isOpened-guarded op run
+      // right after a copy (vacuum, executeSql, …) threw
+      // "Database is not opened" before the lazy `_ensurePool` could fire.
+      await _ensurePool();
+    });
   }
 
   @override
   Future dropDb(String fileName) async {
-    await _teardownLivePool();
-    await _withTempPool((pool) => pool.drop());
+    await _runExclusive(() async {
+      await _teardownLivePool();
+      await _withTempPool((pool) => pool.drop());
+    });
   }
 
   // ── No-params SQL (BEGIN/COMMIT/ROLLBACK/VACUUM/PRAGMA) ──────────────
@@ -252,8 +453,9 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<int> executeSql(int dbPtr, String sql) async {
-    await _ensurePool();
+    await _enterGated();
     try {
+      await _ensurePool();
       final result = await _pool!.exec(sql);
       _lastAffectedRows = toIntSafe(result['affectedRows']);
       _lastInsertedId = toIntSafe(result['lastInsertId']);
@@ -271,6 +473,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       // the public [DbasSqliteException].
       _captureError(e);
       return 1; // SQLITE_ERROR
+    } finally {
+      _exitGated();
     }
   }
 
@@ -353,12 +557,28 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   Future<({int handle, int columnCount, List<String> columnNames})>
       prepareQuery(int dbPtr, String sql) async {
-    await _ensurePool();
+    // Gate + count the prepare so a destructive op cannot tear the pool
+    // down between this call and the statement's later bind/read/finalize
+    // steps. The in-flight count covers the prepare round-trip itself;
+    // once the statement is registered in [_stmts] its entry keeps the
+    // pool "busy" until [finalizeStmt] removes it (so quiescence is not
+    // reached until the whole statement lifecycle completes).
+    await _enterGated();
     try {
-      final prep = await _pool!.prepareQueryStream(sql);
+      await _ensurePool();
+      // Route the prepare to the connection role the statement layer
+      // picked: the reader token → a reader connection; anything else
+      // (the writer token, and the single-connection fallback pointer
+      // from [openDb]) → the writer connection. The pool holds the
+      // matching cross-handle fence for the cursor's lifetime — SHARED
+      // for reads, EXCLUSIVE for writes (decided in the worker via
+      // sqlite3_stmt_readonly).
+      final pool = _pool!;
+      final prep = await pool.streamPrepare(dbPtr != _readerConn, sql);
       final handle = _nextStmtId++;
       _stmts[handle] = _WebStmtState(
-        rawHandle: prep.rawHandle,
+        cursor: prep.cursor,
+        pool: pool,
         columnCount: prep.columnCount,
         columnNames: prep.columnNames,
       );
@@ -380,6 +600,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         columnCount: 0,
         columnNames: const <String>[],
       );
+    } finally {
+      _exitGated();
     }
   }
 
@@ -388,7 +610,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     final state = _stmts.remove(handle);
     if (state == null) return sqliteOk; // already finalized / unknown
     try {
-      await _pool!.finalizeStmt(state.rawHandle);
+      await state.pool.streamFinalize(state.cursor);
       return sqliteOk;
     } catch (e, st) {
       developer.log(
@@ -405,6 +627,15 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       // caller could otherwise have surfaced through `getLastDbError`.
       _captureError(e, 'finalizeStmt failed');
       return 1; // SQLITE_ERROR
+    } finally {
+      // The statement was removed from [_stmts] above; if it was the
+      // last open statement (and no gated call is in flight) the pool
+      // is now quiescent — wake any destructive op waiting to tear
+      // down. Posting the finalize message happens synchronously inside
+      // `_pool!.finalizeStmt` before this finally's await-resumed
+      // continuation runs, so a teardown that proceeds here still sees
+      // the finalize FIFO-ordered ahead of its own `close` message.
+      _signalIfQuiescent();
     }
   }
 
@@ -415,39 +646,12 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     cache.columnCount = state.columnCount;
     cache.columnNames = state.columnNames;
 
-    // Flush buffered binds on the first call. Subsequent calls reuse
-    // the already-bound parameters on the worker stmt — the worker
-    // doesn't auto-reset between `readRow`/`readRows` calls.
-    //
-    // Statements that mix `?N` (positional) and `:name` (named)
-    // markers need TWO `bindParams` round-trips because the worker's
-    // wrapper accepts either an array or an object per call, not
-    // both. SQLite bind slots are independent so the two calls
-    // accumulate; this matches native FFI's per-slot bind semantics
-    // for the same statement shape.
-    if (!state.bindsFlushed) {
-      // Set the flag in a finally so a partial bind failure (one
-      // shape succeeded, the other threw) doesn't cause a retry on
-      // the next `readRowAndCache` — the worker handle is in an
-      // ambiguous bind state and the caller must finalize and
-      // re-prepare to recover.
-      try {
-        final params = state.mergedParams();
-        if (params.positional != null) {
-          await _pool!.bindParams(state.rawHandle, params.positional);
-        }
-        if (params.named != null) {
-          await _pool!.bindParams(state.rawHandle, params.named);
-        }
-      } catch (e) {
-        state.lastError = e.toString();
-        _captureError(e);
-        state.bindsFlushed = true;
-        cache.columns = null;
-        return 1; // SQLITE_ERROR — caller propagates
-      }
-      state.bindsFlushed = true;
-    }
+    // Binds were applied eagerly by [_bindOne] (one worker round-trip
+    // per `bind*` / `bindName*` call), and each call returned its own
+    // rc to the statement layer — `DbasSqliteStatement._replayBinds`
+    // is what enforces the per-rc contract on those returns. No
+    // deferred flush is needed here; proceed straight to the row
+    // machinery.
 
     // Pop a buffered row if we have one.
     if (state.chunk.isNotEmpty) {
@@ -474,7 +678,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
         // an all-bulk approach for multi-row scans.
         state.firstFetchDone = true;
         final result =
-            await _pool!.readRow(state.rawHandle, state.columnNames);
+            await state.pool.streamReadRow(state.cursor, state.columnNames);
         if (result.rc == sqliteRow) {
           cache.columns = result.columns;
           return sqliteRow;
@@ -487,8 +691,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       }
 
       // Subsequent steps: bulk-fetch up to chunkSize rows.
-      final result = await _pool!.readRows(
-          state.rawHandle, state.columnNames, _readRowsChunkSize);
+      final result = await state.pool.streamReadRows(
+          state.cursor, state.columnNames, _readRowsChunkSize);
       state.hasMore = result.hasMore;
       for (final row in result.rows) {
         state.chunk.add(row);
@@ -500,9 +704,25 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
       }
       cache.columns = state.chunk.removeFirst();
       return sqliteRow;
+    } on DbasSqliteWebWorkerError catch (e) {
+      // Worker reported a real SQLite rc — preserve it so the statement
+      // layer's `getErrorCode() ?? rc` surfaces the true code.
+      state.lastError = e.message;
+      _captureError(e);
+      cache.columns = null;
+      return e.sqliteCode ?? 1;
     } catch (e) {
+      // Non-SQLite failure (e.g. the owning pool was torn down — a
+      // `StateError` "...is closed", which `_ensureOpen` throws BEFORE
+      // the cursor is consulted, so it never passes through
+      // `_toWorkerError`). Mirror `_bindOne`: clear any cached worker rcs
+      // so the statement layer's `getErrorCode() ?? rc` reports the
+      // honest local SQLITE_ERROR rather than a stale code carried over
+      // from an earlier, unrelated worker error.
       state.lastError = e.toString();
       _captureError(e);
+      _lastErrorCode = null;
+      _lastUniqueErrorCode = null;
       cache.columns = null;
       return 1; // SQLITE_ERROR
     }
@@ -528,7 +748,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     state.countersFetched = true;
     try {
       state.affectedRows =
-          await _pool!.getStmtAffectedRows(state.rawHandle);
+          await state.pool.streamAffectedRows(state.cursor);
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb: getStmtAffectedRows failed at SQLITE_DONE',
@@ -544,7 +764,7 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     }
     try {
       state.lastInsertedId =
-          await _pool!.getStmtLastInsertedId(state.rawHandle);
+          await state.pool.streamLastInsertedId(state.cursor);
     } catch (e, st) {
       developer.log(
         'DbasSqliteNativeWeb: getStmtLastInsertedId failed at SQLITE_DONE',
@@ -569,71 +789,106 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   int getStmtLastInsertedId(int dbPtr, int handle) =>
       _stmts[handle]?.lastInsertedId ?? -1;
 
-  // ── Bindings (positional) ─────────────────────────────────────────────
-  // All bind methods buffer Dart-side and return SQLITE_OK synchronously
-  // (well, via Future). The buffer is flushed in one `bindParams` worker
-  // round-trip on the first `readRowAndCache` call, mirroring how native
-  // FFI replays one bind call per slot — except batched into a single
-  // postMessage for round-trip efficiency.
+  // ── Bindings ─────────────────────────────────────────────────────────
+  // Every bind method makes ONE worker round-trip via [DbasSqliteWebPool.bindParam]
+  // and returns the actual SQLite rc — matching native FFI's per-call
+  // `sqlite3_bind_*` semantics 1:1. The statement layer's `_replayBinds`
+  // then sees the same rc behaviour on both platforms, including the
+  // `SQLITE_RANGE` skip on missing named parameters that the
+  // `bindNameParameters` docstring promises ("silently skipped …
+  // matching Microsoft.Data.Sqlite").
+  //
+  // The previous shim buffered Dart-side and flushed in one batched
+  // `bindParams` postMessage. That broke the contract: the WASM
+  // `bindParams` is all-or-nothing, so one missing named slot threw
+  // `SQLITE_RANGE` for the whole batch and surfaced as
+  // `executeSqlStepFailed` instead of being silently skipped.
 
-  Future<int> _bindPositional(int handle, int index, Object? value) async {
+  Future<int> _bindOne(int handle, Object param, Object? value) async {
     final state = _stmts[handle];
     if (state == null) return sqliteMisuse;
-    state.setPositional(index, value);
-    return sqliteOk;
-  }
-
-  Future<int> _bindNamed(int handle, String name, Object? value) async {
-    final state = _stmts[handle];
-    if (state == null) return sqliteMisuse;
-    state.setNamed(name, value);
-    return sqliteOk;
+    // Bind on the cursor's OWNING pool — do NOT _ensurePool(). The
+    // statement was already prepared on `state.pool`; if that pool has
+    // been torn down, the bind must fail cleanly with a pool-closed
+    // error (a `StateError` "...is closed") rather than spin up a fresh
+    // pool whose cursor map doesn't know this cursor (which would
+    // surface the misleading UNKNOWN_CURSOR).
+    try {
+      await state.pool.streamBind(state.cursor, param, _jsifyBindValue(value));
+      return sqliteOk;
+    } on DbasSqliteWebWorkerError catch (e) {
+      // Worker reported a non-OK rc. Surface it to the statement
+      // layer's `_replayBinds`, which decides per-rc whether to skip
+      // (default for `SQLITE_RANGE` on named binds) or throw.
+      state.lastError = e.message;
+      _captureError(e);
+      return e.sqliteCode ?? 1;
+    } catch (e) {
+      // Worker / protocol-level failure (not a SQLite rc). Surface as
+      // generic SQLITE_ERROR so the statement layer's error path picks
+      // it up via [getLastStmtError] / [getErrorCode].
+      state.lastError = e.toString();
+      _captureError(e);
+      // Clear cached worker rcs so `_replayBinds`'s
+      // `getErrorCode() ?? rc` fallback (in the positional,
+      // named-RANGE, and named-other branches of
+      // `DbasSqliteStatement._replayBinds`) uses the local
+      // SQLITE_ERROR rc returned below instead of reporting a stale
+      // code captured by an earlier, unrelated worker error. This
+      // differs from [_captureError]'s general "preserve rcs across
+      // follow-up Dart exceptions" stance — here the returned rc is
+      // the authoritative signal for this bind, so internal
+      // consistency wins over preservation.
+      _lastErrorCode = null;
+      _lastUniqueErrorCode = null;
+      return 1; // SQLITE_ERROR
+    }
   }
 
   @override
   Future<int> bindNull(int dbPtr, int handle, int index) =>
-      _bindPositional(handle, index, null);
+      _bindOne(handle, index, null);
   @override
   Future<int> bindInt(int dbPtr, int handle, int index, int value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindInt64(int dbPtr, int handle, int index, int value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindFloat(int dbPtr, int handle, int index, double value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindDouble(int dbPtr, int handle, int index, double value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindText(int dbPtr, int handle, int index, String value) =>
-      _bindPositional(handle, index, value);
+      _bindOne(handle, index, value);
   @override
   Future<int> bindBlob(int dbPtr, int handle, int index, List<int> value) =>
-      _bindPositional(
-          handle, index, value is Uint8List ? value : Uint8List.fromList(value));
+      _bindOne(handle, index,
+          value is Uint8List ? value : Uint8List.fromList(value));
 
   @override
   Future<int> bindNameNull(int dbPtr, int handle, String name) =>
-      _bindNamed(handle, name, null);
+      _bindOne(handle, name, null);
   @override
   Future<int> bindNameInt(int dbPtr, int handle, String name, int value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameInt64(int dbPtr, int handle, String name, int value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameFloat(int dbPtr, int handle, String name, double value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameDouble(int dbPtr, int handle, String name, double value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameText(int dbPtr, int handle, String name, String value) =>
-      _bindNamed(handle, name, value);
+      _bindOne(handle, name, value);
   @override
   Future<int> bindNameBlob(int dbPtr, int handle, String name, List<int> value) =>
-      _bindNamed(handle, name,
+      _bindOne(handle, name,
           value is Uint8List ? value : Uint8List.fromList(value));
 
   // ── Per-handle column accessors ──────────────────────────────────────
@@ -692,24 +947,28 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 
   @override
   Future<int> createPool(String path, int readerCount) async {
-    _pool = await DbasSqliteWebPool.create(
-        dbName: dbName, readerCount: readerCount);
+    _pool = await bootWebLivePool(dbName: dbName, readerCount: readerCount);
     await _ensureSqliteVersion();
     return 1;
   }
 
+  // The web "pool pointer" is a fixed sentinel — there is exactly one
+  // live pool per instance. The writer/reader tokens below are what the
+  // statement layer threads back as `dbPtr`, and [prepareQuery] routes a
+  // prepare to the writer or a reader connection based on which it sees.
   @override
-  int poolGetWriter(int poolPtr) => 1;
+  int poolGetWriter(int poolPtr) => _writerConn;
   @override
-  int poolAcquireReader(int poolPtr) => 1;
+  int poolAcquireReader(int poolPtr) => _readerConn;
   @override
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async => 1;
+  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async =>
+      _readerConn;
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) {}
 
   @override
   Future<void> closePool(int poolPtr) async {
-    await _teardownLivePool();
+    await _runExclusive(_teardownLivePool);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────
@@ -731,39 +990,107 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
     // leak into the fresh worker (which would reject them with
     // UNKNOWN_HANDLE on next use).
     if (existing != null) _stmts.clear();
-    _pool = await DbasSqliteWebPool.create(
+    _pool = await bootWebLivePool(
       dbName: dbName,
       readerCount: DbasSqliteNativeInterface.workerPoolSize,
     );
     await _ensureSqliteVersion();
   }
 
-  /// Tears down the live pool and resets all state that depends on
-  /// it. Shared by [closeDb], [closePool], and every destructive file
-  /// operation ([attachDb] / [attachStreamDb] / [dropDb] / [getContent]),
-  /// which all need the worker to release the OPFS file before they
-  /// can mutate or stream it.
+  /// Runs [action] with exclusive access to the pool. Raises
+  /// [_exclusiveGate] so new gated work ([executeSql] / [prepareQuery] /
+  /// [streamCopyDb]) queues behind it, waits for the pool to go
+  /// quiescent (no in-flight gated call, no open statement) so an
+  /// in-flight query is never severed mid-flight, then runs [action].
+  /// The gate is held for the WHOLE action, so a destructive op that
+  /// tears down and then works against a transient pool (attach / drop /
+  /// export) cannot have a fresh live pool spawned underneath it for the
+  /// same OPFS file.
+  ///
+  /// The quiescence drain is bounded by [_teardownDrainTimeout] so a
+  /// leaked (never-finalized) statement cannot wedge a destructive op
+  /// forever — after the timeout the op proceeds and the leaked
+  /// statement's next call gets a clean "Pool is closed".
+  ///
+  /// Continuation calls on an already-open statement (`bind*` /
+  /// [readRowAndCache] / [finalizeStmt]) are intentionally NOT gated, so
+  /// they can drain the open statement while this method waits.
+  Future<T> _runExclusive<T>(Future<T> Function() action) async {
+    // Atomically wait-for-then-claim the gate: the `_exclusiveGate =
+    // gate` assignment runs synchronously after the final null-check
+    // with no `await` between, so two racing destructive ops cannot
+    // both claim it.
+    while (_exclusiveGate != null) {
+      await _exclusiveGate!.future;
+    }
+    final gate = Completer<void>();
+    _exclusiveGate = gate;
+    try {
+      if (!_poolQuiescent) {
+        final idle = _quiescent ??= Completer<void>();
+        try {
+          await idle.future.timeout(_teardownDrainTimeout);
+        } on TimeoutException {
+          _quiescent = null;
+        }
+      }
+      return await action();
+    } finally {
+      _exclusiveGate = null;
+      gate.complete();
+    }
+  }
+
+  /// Tears down the live pool and resets all state that depends on it.
+  /// MUST be called inside [_runExclusive] (directly or as part of a
+  /// destructive op's action) so the close is serialized against
+  /// in-flight queries and other destructive ops.
   ///
   /// Safe to call when no pool is live — becomes a no-op so destructive
   /// callers do not have to guard.
   ///
-  /// Note: `pool.close()` already removes the entry from
-  /// `DbasSqliteWebPool._pools` synchronously (before its own await),
-  /// so an explicit `removePool(dbName)` here would be a no-op.
+  /// Ordering: close before nulling `_pool`. A concurrent [_ensurePool]
+  /// caller then sees the still-set (but `isClosed == true`) pool,
+  /// falls through to [DbasSqliteWebPool.create], and awaits the
+  /// `_closing` barrier — which holds until the worker confirms its
+  /// `closeOpfsHandles()` drain, so a fresh worker is never spawned
+  /// against a file the previous worker still owns.
   Future<void> _teardownLivePool() async {
     final pool = _pool;
+    if (pool != null) await pool.close();
     _pool = null;
     _stmts.clear();
-    if (pool != null) await pool.close();
+  }
+
+  /// TEST-ONLY (named with a `debug` prefix; not part of the public
+  /// contract, reachable only via the platform delegate). Deterministically
+  /// reproduces the "in-flight reader during a pool teardown+recreate"
+  /// race: closes the current live pool and boots a fresh one WITHOUT
+  /// clearing [_stmts] — exactly the state an in-flight reader observes
+  /// when its [_WebStmtState] was captured before a teardown cleared the
+  /// map and a new pool replaced [_pool]. After this, a per-statement op
+  /// MUST route to the statement's OWNING (now-closed) pool and surface a
+  /// "closed" error, NOT route to the new [_pool] (which would give the
+  /// misleading UNKNOWN_CURSOR). The real teardown drains for 5s and
+  /// clears [_stmts], so this exact interleaving can't be produced through
+  /// the public API.
+  Future<void> debugSwapLivePoolPreservingStatements() async {
+    final old = _pool;
+    if (old != null) await old.close();
+    _pool = await bootWebLivePool(
+      dbName: dbName,
+      readerCount: DbasSqliteNativeInterface.workerPoolSize,
+    );
   }
 
   /// Runs [action] against a transient pool that is NOT shared with
   /// [_pool]. Used by destructive file operations and by
   /// [databaseExists] when no live pool exists. The transient pool is
-  /// closed afterwards so a subsequent [_ensurePool] / [createPool]
-  /// creates a fresh worker. (`pool.close()` removes itself from
-  /// `DbasSqliteWebPool._pools` synchronously, so no follow-up
-  /// `removePool` is needed.)
+  /// closed afterwards; `close()` registers the static `_closing`
+  /// barrier and only drops the `_pools` entry after the worker
+  /// confirms the OPFS drain, so a subsequent [_ensurePool] /
+  /// [createPool] either reuses an entry that is genuinely live or
+  /// waits for the drain before spawning a fresh worker.
   ///
   /// Pre-condition: caller has already torn down the live pool via
   /// [_teardownLivePool] if the action requires exclusive file access
@@ -810,14 +1137,28 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
 ///   - the post-step counter cache for write-shape statements
 ///     (column count == 0).
 class _WebStmtState {
-  final JSAny rawHandle;
+  /// Opaque pool cursor token for this statement: a pool-level cursor id
+  /// (multi-worker pool) or the worker's raw statement handle
+  /// (single-worker fallback). Echoed back on every per-stmt call; never
+  /// inspected here.
+  final Object cursor;
+
+  /// The pool this cursor was PREPARED ON. Every per-statement call
+  /// (bind / read / counters / finalize) MUST route through this exact
+  /// pool — NOT the instance's current `_pool`. A teardown + recreate
+  /// for the same dbName swaps `_pool` to a fresh pool whose cursor map
+  /// is empty; an in-flight reader that already captured this state and
+  /// then used `_pool` would dispatch its stale cursor to the new pool
+  /// and get the misleading `UNKNOWN_CURSOR`. Routing to the owning pool
+  /// instead surfaces a clean pool-closed error once that pool is torn
+  /// down (a `StateError` whose message contains "...is closed", thrown
+  /// by the reader pool's `_ensureOpen` before the cursor is ever
+  /// consulted), which is the truthful failure: the cursor's connection
+  /// is gone.
+  final WebLivePool pool;
+
   final int columnCount;
   final List<String> columnNames;
-
-  // Pending binds — flushed before first step.
-  final Map<int, Object?> _positional = {};
-  final Map<String, Object?> _named = {};
-  bool bindsFlushed = false;
 
   // Step machinery.
   final Queue<List<ColumnData>> chunk = Queue();
@@ -835,79 +1176,26 @@ class _WebStmtState {
   String? lastError;
 
   _WebStmtState({
-    required this.rawHandle,
+    required this.cursor,
+    required this.pool,
     required this.columnCount,
     required this.columnNames,
   });
+}
 
-  void setPositional(int index, Object? value) {
-    _positional[index] = value;
-  }
-
-  void setNamed(String name, Object? value) {
-    _named[name] = value;
-  }
-
-  /// Build the parameter payloads for `bindParams`. Returns whichever
-  /// of the two shapes the worker's `bindParams` accepts (positional
-  /// list, named map) are non-empty.
-  ///
-  /// The worker's wrapper splits on `Array.isArray(params)` and
-  /// dispatches each entry to `bindParam(dbPtr, h, key, value)` —
-  /// arrays bind by index, objects bind by name. SQLite's
-  /// `sqlite3_bind_*` slots are independent, so calling `bindParams`
-  /// twice on the same handle (once per shape) accumulates the binds
-  /// rather than overwriting them, matching native FFI's per-slot
-  /// bind semantics for statements that mix `?N` and `:name` markers.
-  ({List<Object?>? positional, Map<String, dynamic>? named})
-      mergedParams() {
-    List<Object?>? positional;
-    if (_positional.isNotEmpty) {
-      // Build a dense list indexed by 1-based position. Sparse binds
-      // (e.g. only slot 1 and 3 set) leave intermediate entries as
-      // `null`, which binds SQLite NULL to those slots — matching
-      // native FFI's behaviour where unbound slots are NULL by
-      // default.
-      final maxIndex =
-          _positional.keys.fold<int>(0, (a, b) => a > b ? a : b);
-      final list = List<Object?>.filled(maxIndex, null);
-      for (final entry in _positional.entries) {
-        list[entry.key - 1] = _jsifyBindValue(entry.value);
-      }
-      positional = list;
-    }
-    Map<String, dynamic>? named;
-    if (_named.isNotEmpty) {
-      final out = <String, dynamic>{};
-      for (final e in _named.entries) {
-        String name = e.key;
-        if (!name.startsWith(':') &&
-            !name.startsWith('@') &&
-            !name.startsWith(r'$')) {
-          name = ':$name';
-        }
-        out[name] = _jsifyBindValue(e.value);
-      }
-      named = out;
-    }
-    return (positional: positional, named: named);
-  }
-
-  /// Adapt a Dart bind value into the JS shape the worker's
-  /// `bindParams` expects. Mirrors the conversion previously done in
-  /// `DbasSqliteStatement._jsifyBindValue` — kept here so the platform
-  /// layer can be the single converter for web.
-  static Object? _jsifyBindValue(Object? value) {
-    if (value == null) return null;
-    if (value is bool) return value ? 1 : 0;
-    if (value is Enum) return value.index;
-    // Blobs MUST cross the postMessage boundary as a typed-array so
-    // the JS wrapper's bindParams recognises them via
-    // `instanceof Uint8Array` and routes through bindBlob. A raw
-    // `List<int>` jsifies to a regular JS Array and gets stringified
-    // by the bindText fallback, silently corrupting the bytes.
-    if (value is Uint8List) return value;
-    if (value is List<int>) return Uint8List.fromList(value);
-    return value;
-  }
+/// Adapts a Dart bind value into the JS shape the worker's
+/// `bindParam` expects. The conversions mirror what the native FFI's
+/// per-type `bind*` functions do implicitly:
+///   - `bool` → 0/1 (native uses `bindInt` with `value ? 1 : 0`),
+///   - `Enum` → `index` (native uses `bindInt(enum.index)`),
+///   - `List<int>` → `Uint8List` so the postMessage layer routes the
+///     bytes through `bindBlob` rather than stringifying them via
+///     `bindText` (which would silently corrupt the payload).
+Object? _jsifyBindValue(Object? value) {
+  if (value == null) return null;
+  if (value is bool) return value ? 1 : 0;
+  if (value is Enum) return value.index;
+  if (value is Uint8List) return value;
+  if (value is List<int>) return Uint8List.fromList(value);
+  return value;
 }

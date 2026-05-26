@@ -21,6 +21,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 - Reads automatically use pool readers; writes use the dedicated writer
 - Falls back to single connection if pool creation fails or `readerPoolSize = 0`
 - Native pool has mutex-protected reader acquire/release for thread safety
+- **Web** uses an equivalent multi-worker pool (1 writer + N reader Web Workers, each its own SQLite connection, coordinated via a `SharedArrayBuffer`-backed WAL SHM) so reads and writes run on separate connections just like native. **Requires the page to be cross-origin isolated** — see [Web Setup](#web-setup); without it the web side falls back to a single connection (no read/write concurrency)
 
 ### Thread Safety & Parallel Readers
 - **Writer lock**: serializes all write operations (`executeSql`, transactions) on both web and native
@@ -112,9 +113,41 @@ flutter pub add dbas_sqlite
 No additional setup required. Native libraries are automatically bundled.
 
 ### Web Setup
-The WASM module and Web Worker are bundled as Flutter assets and loaded automatically by the plugin. No manual file copying or `<script>` tags needed.
+The WASM module and Web Workers are bundled as Flutter assets and loaded automatically by the plugin. Requires a modern browser with OPFS persistence (Chrome 86+, Firefox 111+, Safari 15.2+) served over HTTPS or localhost.
 
-The worker runs inside a dedicated Web Worker with OPFS persistence. Requires a modern browser with OPFS support (Chrome 86+, Firefox 111+, Safari 15.2+) served over HTTPS or localhost.
+**Cross-origin isolation is required for the connection pool.** The web pool runs multiple Web Workers that share WAL state through a `SharedArrayBuffer`, which the browser only exposes when the document is *cross-origin isolated* (`crossOriginIsolated === true`). Enable it one of two ways:
+
+1. **Server headers (recommended for production):** serve the app with
+   `Cross-Origin-Opener-Policy: same-origin` and
+   `Cross-Origin-Embedder-Policy: require-corp` on the document response.
+
+2. **`coi-serviceworker.js` (works on any host, including `flutter run` — no header config):**
+   the plugin ships this file at `web/libs/coi-serviceworker.js`, and
+   `scripts/sqlite/sync_sqlite_lib.(ps1|sh)` copies it to the example's web
+   root. For your own app, copy `coi-serviceworker.js` into your `web/`
+   folder and load it **first** in `web/index.html`, as a plain
+   (non-`async`) script before the Flutter bootstrap:
+
+   ```html
+   <head>
+     <base href="$FLUTTER_BASE_HREF">
+     <meta charset="UTF-8">
+     <script src="coi-serviceworker.js"></script>
+     <!-- ...rest of head... -->
+   </head>
+   ```
+
+   It registers a service worker that injects the COOP/COEP headers and
+   reloads the page once. For **release** builds, build with
+   `flutter build web --pwa-strategy=none` so Flutter's own service worker
+   doesn't take the root scope from it.
+
+> **Why the web root?** A service worker can only control pages within its
+> own URL path, and isolation must apply to the root document — so
+> `coi-serviceworker.js` must be served from `/coi-serviceworker.js`, not
+> as a deep `/assets/packages/...` package asset.
+
+If the page is **not** cross-origin isolated, the plugin logs the reason (channel `dbas_sqlite.lifecycle`) and falls back to a single Web Worker (one SQLite connection). The app still runs, but loses read/write concurrency — a write blocked behind an open read cursor can fail with `SQLITE_BUSY`.
 
 ## Usage
 

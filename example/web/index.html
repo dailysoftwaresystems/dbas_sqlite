@@ -3,6 +3,15 @@
 <head>
   <base href="$FLUTTER_BASE_HREF">
   <meta charset="UTF-8">
+
+  <!-- Cross-origin isolation for SharedArrayBuffer (the dbas_sqlite
+       multi-worker DB pool). Registers a service worker that injects
+       COOP/COEP and reloads once, so it works just by opening the app.
+       coi-serviceworker.js is placed at this web root by
+       scripts/sqlite/sync_sqlite_lib.(ps1|sh). MUST stay a plain
+       (non-async) script before flutter_bootstrap.js. -->
+  <script src="coi-serviceworker.js"></script>
+
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="DbasSqlite Example">
   <meta name="mobile-web-app-capable" content="yes">

@@ -2,6 +2,128 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.8.0 - 2026-05-25
+
+### Added
+
+- **Web: true read/write concurrency via a multi-worker connection
+  pool.** `openDb()` on web now drives the native `createPool`
+  coordinator — 1 writer + N reader Web Workers, each with its own
+  SQLite connection, coordinated through a `SharedArrayBuffer`-backed
+  WAL SHM. Reads dispatch to reader connections and writes to the writer
+  connection, exactly like the native FFI pool, so a long-lived read
+  cursor can no longer block a write. The `createPool` host is
+  instantiated on the main thread (the pool's workers are therefore not
+  nested workers — widest browser support, one IPC hop).
+- **`coi-serviceworker.js`** is now shipped with the package (built and
+  minified from the native web source) and placed at the example web
+  root by `scripts/sqlite/sync_sqlite_lib.(ps1|sh)`. It makes a page
+  cross-origin isolated without server header config — see *Web Setup*
+  in the README.
+
+### Fixed
+
+- **Web: `BEGIN TRANSACTION failed: [SQLITE_BUSY] Cannot write while a
+  read statement is open on this worker; finalize first`.** Every web DB
+  operation previously ran through a single Web Worker (one SQLite
+  connection), so a background read holding a cursor open (e.g. ApiQueue
+  session resolution) made a concurrent `BEGIN` (e.g. the login
+  migrator) fail with `SQLITE_BUSY`. Reads and writes now use separate
+  pooled connections, so the collision is structurally impossible.
+  Writes additionally hold the EXCLUSIVE cross-handle fence while
+  read-only statements (including read-your-writes SELECTs on the writer
+  connection) hold SHARED — decided by the newly exposed native
+  `sqlite3_stmt_readonly` — so there is no torn-page / autocheckpoint
+  window either.
+
+### Changed
+
+- **Web now requires cross-origin isolation** (`crossOriginIsolated ===
+  true`) to get the concurrent pool, because `SharedArrayBuffer` is only
+  available in that context. Serve the document with
+  `Cross-Origin-Opener-Policy: same-origin` +
+  `Cross-Origin-Embedder-Policy: require-corp`, or use the bundled
+  `coi-serviceworker.js`. When the page is **not** cross-origin isolated
+  the plugin logs the reason (channel `dbas_sqlite.lifecycle`) and falls
+  back to the legacy single-worker connection — the app keeps running
+  but loses read/write concurrency (and the write-while-read limitation
+  returns). No public API changed.
+- Requires the matching rebuilt native web bundle (`dbas_sqlite.js` +
+  `dbas_sqlite_worker.js`) in `web/libs/`: it adds the `createPool`
+  `dbName` main-thread-host option and the `GetStmtReadonly` export. Run
+  `scripts/sqlite/sync_sqlite_lib.(ps1|sh)` to refresh the vendored
+  bundle and drop `coi-serviceworker.js` at the example web root.
+
+## 2.7.5 - 2026-05-23
+
+### Fixed
+
+- **Web: `databaseExists` was a creating probe, breaking native
+  parity** — the implementation routed through the worker
+  (`DbasSqliteWebPool.create()` → `pool.send('exists')`), which forced
+  an `init` round-trip. `init` calls the WASM lib's
+  `initPersistentFS`, which both opens the SQLite DB (create-or-open)
+  and walks `openOpfsHandles` calling `opfsDir.getFileHandle(name,
+  {create: true})` for the four SQLite files (`name.db`, `-journal`,
+  `-wal`, `-shm`). Net effect: every `databaseExists` invocation
+  materialised the file in OPFS, and the very next `exists` action
+  returned `true`. Native FFI's `databaseExists` is a no-side-effect
+  `File(path).existsSync()` — calling it on a non-existent file
+  leaves it non-existent. The web behaviour broke any consumer that
+  used `databaseExists` as a "first-time bootstrap?" gate, e.g.
+  `SessionLifecycle._defaultSessionWriter` upserting a row before the
+  migrator created the schema. Symptom seen in consumers: "no such
+  table: dbas_Session" on first-ever login.
+
+### Changed
+
+- **Web: `databaseExists` now probes OPFS directly from Dart** via
+  `navigator.storage.getDirectory().getDirectoryHandle("dbas_data",
+  {create: false}).getFileHandle("<dbName>", {create: false})`. The
+  WASM lib is not involved, no worker is spun up, no file is created
+  — matching native FFI's "is the file on disk?" semantics 1:1. A
+  live `_pool` short-circuits to `true` (file is loaded by
+  definition) so the hot path stays cheap.
+
+## 2.7.4 - 2026-05-23
+
+### Fixed
+
+- **Web: `executeSqlStepFailed [SQLITE_BIND_RANGE]` when a named bind
+  isn't present in the prepared SQL** — `DbasSqliteStatement.bindNameParameters`
+  documents that missing named params are silently skipped to match
+  `Microsoft.Data.Sqlite`, and `_replayBinds` implements that skip per
+  rc on every native FFI bind. On web the contract was broken because
+  the shim's `bindName*` methods buffered Dart-side and always returned
+  `sqliteOk`; the real bind happened later in `readRowAndCache` via one
+  batched `bindParams` call against the worker. The WASM `bindParams`
+  is all-or-nothing, so a single missing named slot threw
+  `SQLITE_RANGE` for the entire batch and surfaced as
+  `executeSqlStepFailed` instead of being skipped. Consumers whose
+  query builder emits a named param that doesn't appear in the SQL
+  (e.g. a recursive-join column auto-added by a higher-level ORM) hit
+  the failure on every read; downstream the failing read could cascade
+  into "no such table" errors when a migration ledger probe couldn't
+  complete and the schema wasn't created.
+
+### Changed
+
+- **Web: per-call bind round-trips, eager rc** — `DbasSqliteNativeWeb`'s
+  positional and named `bind*` methods now each make ONE worker
+  round-trip via the new `DbasSqliteWebPool.bindParam` (singular)
+  action and return the SQLite rc the worker reported, exactly mirroring
+  native FFI's per-call `sqlite3_bind_*` semantics. The statement
+  layer's `_replayBinds` therefore sees the same per-bind rcs on both
+  platforms (including `SQLITE_RANGE` on missing named params, which it
+  silently skips or throws based on `throwOnMissingNamedParams`). The
+  Dart-side bind buffer in `_WebStmtState` (`setPositional` / `setNamed`
+  / `mergedParams` / `bindsFlushed`) and the buffered flush block at
+  the top of `readRowAndCache` are gone — the binds are already on the
+  worker by the time the first row is fetched.
+- **Web: `DbasSqliteWebPool.bindParam` (singular) added** — wraps the
+  worker's `bindParam` action so the platform shim can bind one slot
+  at a time and surface per-call rcs.
+
 ## 2.7.3 - 2026-05-23
 
 ### Fixed
