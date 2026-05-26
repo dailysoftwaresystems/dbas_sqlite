@@ -106,6 +106,23 @@ class DbasSqlite {
   int _readerSlotsAvailable = 0;
   final Queue<Completer<void>> _readerSlotWaitQueue = Queue<Completer<void>>();
 
+  /// Latched at the start of [closeDb] and cleared by [openDb]. While
+  /// set, [_acquireReaderSlot] rejects synchronously with
+  /// [DbasSqliteErrorCode.readerSlotWaitCancelled] and
+  /// [_acquireWriterLock] with
+  /// [DbasSqliteErrorCode.writerLockWaitCancelled], so no caller can
+  /// race into [_platform]'s `poolAcquireReaderBlocking` / `executeSql`
+  /// against the worker-isolate `closePool` / `closeDb` dispatch
+  /// happening on a sibling isolate. The pre-sweep queue drain in
+  /// [closeDb] complements this for already-parked waiters.
+  bool _closing = false;
+
+  /// Non-null while an [openDb] call on this instance is in flight.
+  /// Concurrent [openDb] callers await this single future instead of
+  /// each racing their own pool creation for the same database file —
+  /// see [openDb] for why the plain `isOpened()` guard is insufficient.
+  Future<void>? _opening;
+
   /// When `true`, binding a named parameter that does not exist in
   /// the prepared statement throws an exception instead of silently
   /// skipping it. Defaults to `false` (C#/SQLite-compatible behaviour).
@@ -248,18 +265,72 @@ class DbasSqlite {
   /// change the pool size.
   Future<void> openDb({int readerPoolSize = 4}) async {
     if (isOpened()) {
-      if (readerPoolSize != _readerPoolSize) {
-        throw DbasSqliteException.dart(
-          DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize,
-          'openDb("$dbName") was called with readerPoolSize=$readerPoolSize '
-          'but the database is already opened with readerPoolSize=$_readerPoolSize. '
-          'Close the database before re-opening with a different pool size.',
-        );
-      }
+      _assertReopenPoolSize(readerPoolSize);
       return;
     }
 
+    // Single-flight: coalesce concurrent opens of this instance onto one
+    // in-flight open. The `isOpened()` guard above is NOT sufficient on
+    // its own — `_db` is only assigned AFTER the `createPool` await in
+    // [_performOpen], so two `openDb()` calls that arrive before the
+    // first finishes both observe `_db == null`, both fall through, and
+    // each issues its own `createPool` for the same database file. On
+    // web the pool layer is process-wide and rejects the second with
+    // `POOL_ALREADY_ACTIVE`; on native it would spin up a duplicate C
+    // pool against the same file. Awaiting the in-flight open is what
+    // upholds the documented idempotency contract under concurrency —
+    // it is not a retry that papers over the race.
+    final inFlight = _opening;
+    if (inFlight != null) {
+      await inFlight;
+      // The open we waited on may have left the instance open, or it may
+      // have failed / been closed again in the meantime. If it left us
+      // open, honour this call's pool-size contract and return; otherwise
+      // start a fresh open below.
+      if (isOpened()) {
+        _assertReopenPoolSize(readerPoolSize);
+        return;
+      }
+      return openDb(readerPoolSize: readerPoolSize);
+    }
+
+    final open = _performOpen(readerPoolSize);
+    _opening = open;
+    try {
+      await open;
+    } finally {
+      // Clear the marker only if it still points at this open — a
+      // close→open during teardown could have replaced it.
+      if (identical(_opening, open)) _opening = null;
+    }
+  }
+
+  /// Throws [DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize] when
+  /// an already-open instance is asked to (re)open with a different
+  /// [readerPoolSize] — pool resizing isn't supported.
+  void _assertReopenPoolSize(int readerPoolSize) {
+    if (readerPoolSize != _readerPoolSize) {
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.openDbReopenWithDifferentPoolSize,
+        'openDb("$dbName") was called with readerPoolSize=$readerPoolSize '
+        'but the database is already opened with readerPoolSize=$_readerPoolSize. '
+        'Close the database before re-opening with a different pool size.',
+      );
+    }
+  }
+
+  /// Performs the actual open: resolves the file path, creates the
+  /// connection pool (or falls back to a single connection), and
+  /// publishes the [_db] handle. Always run through [openDb]'s
+  /// single-flight guard so at most one open runs per instance at a time.
+  Future<void> _performOpen(int readerPoolSize) async {
     final fileName = await getAppDatabasePath(dbName: dbName);
+
+    // Clear the close-latched flag so re-opening this same instance
+    // after a [closeDb] doesn't reject every acquire. Reached when a
+    // caller retains the instance reference across close→open, and on
+    // the [attachDb] / [attachStreamDb] `openDb: true` paths.
+    _closing = false;
 
     if (readerPoolSize > 0) {
       final poolPtr = await _platform.createPool(dbName, fileName, readerPoolSize);
@@ -293,6 +364,30 @@ class DbasSqlite {
   /// dangling. Code that needs to react to a failed rollback must call
   /// `rollback()` explicitly before `closeDb()`.
   Future<void> closeDb() async {
+    // Latch the closing flag and drain queues BEFORE anything else.
+    //
+    // Order is load-bearing: the held statement's reader `onClose`
+    // (run during the sweep below) calls [_releaseReaderSlot], which
+    // would normally grant a parked reader-slot waiter. If we
+    // granted one here, that waiter would race into [_platform]'s
+    // `poolAcquireReaderBlocking` → `prepareQuery` on a worker
+    // isolate while this method dispatches `closePool` on a sibling
+    // worker isolate — concurrent against the same C `SQLitePool`,
+    // with a segfault when `ClosePool` destroys the pool
+    // lock/condvar underneath the parked acquire. Draining the queue
+    // here rejects every parked waiter with
+    // [DbasSqliteErrorCode.readerSlotWaitCancelled] and empties the
+    // queue, so the sweep's `onClose` finds an empty queue and
+    // harmlessly increments [_readerSlotsAvailable].
+    //
+    // The [_closing] flag complements that for NEW callers: any
+    // [_acquireReaderSlot] / [_acquireWriterLock] arriving while
+    // teardown is in flight rejects synchronously with the same code
+    // instead of entering the (now-empty) queue.
+    _closing = true;
+    _cancelWriterWaitQueue();
+    _cancelReaderSlotWaitQueue();
+
     try {
       await rollback();
     } catch (e, st) {
@@ -322,9 +417,6 @@ class DbasSqlite {
       }
     }
     _activeStatements.clear();
-
-    _cancelWriterWaitQueue();
-    _cancelReaderSlotWaitQueue();
 
     if (_instance.containsKey(dbName)) {
       _instance.remove(dbName);
@@ -489,16 +581,22 @@ class DbasSqlite {
     final acquired = <int>[];
     try {
       for (int i = 0; i < _readerPoolSize; i++) {
-        final readerPtr =
+        final acquire =
             await delegate.poolAcquireReaderBlocking(_poolPtr!, acquireMs);
-        if (readerPtr == 0) {
+        if (acquire.readerPtr == 0) {
+          if (acquire.status == PoolAcquireStatus.closing) {
+            throw DbasSqliteException.dart(
+              DbasSqliteErrorCode.readerSlotWaitCancelled,
+              'setBusyTimeout was cancelled: the database is closing.',
+            );
+          }
           throw DbasSqliteException.dart(
             DbasSqliteErrorCode.setBusyTimeoutReaderBusy,
             'setBusyTimeout: pool reader $i was busy for '
             '${acquireMs}ms — close in-flight readers first.',
           );
         }
-        acquired.add(readerPtr);
+        acquired.add(acquire.readerPtr);
       }
       for (final readerPtr in acquired) {
         final readerDb = DbasSqliteDb(dbName, readerPtr);
@@ -825,6 +923,12 @@ class DbasSqlite {
   // ── Async writer lock (FIFO) ─────────────────────────────────────────
 
   Future<void> _acquireWriterLock() async {
+    if (_closing) {
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.writerLockWaitCancelled,
+        'Database is closing; writer lock acquire rejected.',
+      );
+    }
     if (!_writerLockHeld) {
       _writerLockHeld = true;
       return;
@@ -862,6 +966,12 @@ class DbasSqlite {
   /// Dart slot is released, so when the next caller's await resumes
   /// the C-side acquire is guaranteed to find a free reader.
   Future<void> _acquireReaderSlot(int timeoutMs) async {
+    if (_closing) {
+      throw DbasSqliteException.dart(
+        DbasSqliteErrorCode.readerSlotWaitCancelled,
+        'Database is closing; reader-slot acquire rejected.',
+      );
+    }
     if (_readerSlotsAvailable > 0) {
       _readerSlotsAvailable--;
       return;
@@ -895,6 +1005,13 @@ class DbasSqlite {
       _readerSlotsAvailable++;
     }
   }
+
+  /// Number of callers currently parked in [_acquireReaderSlot] waiting
+  /// for a pool reader-slot. Test-only seam so a test can pump the event
+  /// loop until the expected number of waiters have registered, instead
+  /// of guessing with a fixed `Future.delayed`.
+  @visibleForTesting
+  int get debugReaderSlotWaitQueueLength => _readerSlotWaitQueue.length;
 
   void _cancelReaderSlotWaitQueue() {
     while (_readerSlotWaitQueue.isNotEmpty) {
@@ -962,13 +1079,35 @@ class DbasSqlite {
       final int remaining = timeoutMs <= 0
           ? timeoutMs
           : (timeoutMs - stopwatch.elapsedMilliseconds).clamp(1, timeoutMs);
-      final readerPtr = await _platform.poolAcquireReaderBlocking(
+      final acquire = await _platform.poolAcquireReaderBlocking(
           dbName, _poolPtr!, remaining);
-      if (readerPtr == 0) {
-        _releaseReaderSlot();
-        return 0;
+      if (acquire.readerPtr != 0) {
+        return acquire.readerPtr;
       }
-      return readerPtr;
+      // No reader. Distinguish the C-reported reasons: a closing pool
+      // (or a destroyed one) is terminal — surface it as a cancellation
+      // so the caller doesn't misread it as a retryable timeout. The
+      // catch below releases the Dart slot on the throw paths.
+      switch (acquire.status) {
+        case PoolAcquireStatus.closing:
+          throw DbasSqliteException.dart(
+            DbasSqliteErrorCode.readerSlotWaitCancelled,
+            'Pool reader acquire was cancelled: the database is closing.',
+          );
+        case PoolAcquireStatus.invalid:
+          throw DbasSqliteException.dart(
+            DbasSqliteErrorCode.acquireReaderConnectionNoPool,
+            'Pool reader acquire failed: the pool is no longer valid.',
+          );
+        case PoolAcquireStatus.ok:
+        case PoolAcquireStatus.noSlot:
+        case PoolAcquireStatus.timeout:
+          // Transient "all readers busy / deadline elapsed" — keep the
+          // existing 0-return contract; the caller raises
+          // executeReaderPoolAcquireTimeout.
+          _releaseReaderSlot();
+          return 0;
+      }
     } catch (_) {
       _releaseReaderSlot();
       rethrow;

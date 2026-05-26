@@ -225,7 +225,16 @@ dynamic _dispatch(_WorkerFfi ffi, IsolateCommand cmd) {
     case 'poolAcquireReaderBlocking':
       final reader = ffi.poolAcquireReaderBlocking(
           _resolvePool(args['poolPtr'] as int), args['timeoutMs'] as int);
-      return (reader == nullptr || reader.address == 0) ? 0 : reader.address;
+      // Read the per-thread status BEFORE returning — it is only valid
+      // on this worker thread immediately after the acquire, with no
+      // intervening native call. The main isolate maps it to an enum.
+      final status = ffi.poolLastAcquireStatus();
+      return {
+        'readerPtr': (reader == nullptr || reader.address == 0)
+            ? 0
+            : reader.address,
+        'status': status,
+      };
 
     case 'poolReleaseReader':
       ffi.poolReleaseReader(
@@ -594,6 +603,7 @@ class _WorkerFfi {
       poolAcquireReader;
   late final Pointer<DbasSqliteDbStruct> Function(
       Pointer<DbasSqlitePoolStruct>, int) poolAcquireReaderBlocking;
+  late final int Function() poolLastAcquireStatus;
   late final void Function(
       Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>) poolReleaseReader;
   late final void Function(Pointer<DbasSqlitePoolStruct>) closePool;
@@ -778,6 +788,8 @@ class _WorkerFfi {
             Pointer<DbasSqlitePoolStruct>, Int32),
         Pointer<DbasSqliteDbStruct> Function(Pointer<DbasSqlitePoolStruct>,
             int)>('PoolAcquireReaderBlocking');
+    poolLastAcquireStatus = lib.lookupFunction<Int32 Function(),
+        int Function()>('PoolLastAcquireStatus');
     poolReleaseReader = lib.lookupFunction<
         Void Function(
             Pointer<DbasSqlitePoolStruct>, Pointer<DbasSqliteDbStruct>),

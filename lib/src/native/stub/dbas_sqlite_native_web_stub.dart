@@ -172,7 +172,8 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   int poolAcquireReader(int poolPtr) => throw UnsupportedError(_msg);
   @override
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) =>
+  Future<({int readerPtr, PoolAcquireStatus status})> poolAcquireReaderBlocking(
+          int poolPtr, int timeoutMs) =>
       throw UnsupportedError(_msg);
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) =>

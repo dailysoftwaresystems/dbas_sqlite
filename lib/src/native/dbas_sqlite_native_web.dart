@@ -961,8 +961,11 @@ class DbasSqliteNativeWeb extends DbasSqliteNativeInterface {
   @override
   int poolAcquireReader(int poolPtr) => _readerConn;
   @override
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async =>
-      _readerConn;
+  Future<({int readerPtr, PoolAcquireStatus status})> poolAcquireReaderBlocking(
+          int poolPtr, int timeoutMs) async =>
+      // The web pool is a single per-instance connection that's always
+      // available; there is no busy/closing contention to report.
+      (readerPtr: _readerConn, status: PoolAcquireStatus.ok);
   @override
   void poolReleaseReader(int poolPtr, int readerPtr) {}
 

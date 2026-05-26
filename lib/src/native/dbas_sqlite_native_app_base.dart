@@ -157,6 +157,7 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   Pointer<DbasSqliteDbStruct> nativePoolGetWriter(Pointer<DbasSqlitePoolStruct> poolPtr);
   Pointer<DbasSqliteDbStruct> nativePoolAcquireReader(Pointer<DbasSqlitePoolStruct> poolPtr);
   Pointer<DbasSqliteDbStruct> nativePoolAcquireReaderBlocking(Pointer<DbasSqlitePoolStruct> poolPtr, int timeoutMs);
+  int nativePoolLastAcquireStatus();
   void nativePoolReleaseReader(Pointer<DbasSqlitePoolStruct> poolPtr, Pointer<DbasSqliteDbStruct> readerPtr);
   void nativeClosePool(Pointer<DbasSqlitePoolStruct> poolPtr);
 
@@ -685,11 +686,16 @@ abstract class DbasSqliteNativeAppBase extends DbasSqliteNativeInterface {
   }
 
   @override
-  Future<int> poolAcquireReaderBlocking(int poolPtr, int timeoutMs) async {
+  Future<({int readerPtr, PoolAcquireStatus status})> poolAcquireReaderBlocking(
+      int poolPtr, int timeoutMs) async {
     final reader =
         nativePoolAcquireReaderBlocking(resolvePoolPtr(poolPtr), timeoutMs);
-    if (reader == nullptr || reader.address == 0) return 0;
-    return reader.address;
+    // Same-thread read: this direct-FFI path runs the acquire and the
+    // status read back-to-back with no await between them, so the
+    // per-thread native status is still this acquire's.
+    final status = PoolAcquireStatus.fromCode(nativePoolLastAcquireStatus());
+    final ptr = (reader == nullptr || reader.address == 0) ? 0 : reader.address;
+    return (readerPtr: ptr, status: status);
   }
 
   @override
