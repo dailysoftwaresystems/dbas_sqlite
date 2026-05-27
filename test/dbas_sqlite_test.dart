@@ -575,6 +575,10 @@ void main() async {
     expect(await reader.readRow(), isTrue);
 
     final dt = reader.getColumnDateTime(0);
+    // A naive stored string is interpreted as UTC wall-clock: the value
+    // is flagged UTC and the components are NOT shifted by the device
+    // timezone (10:30 stays 10:30, never 13:30 on a UTC-3 host).
+    expect(dt.isUtc, isTrue);
     expect(dt.year, 2025);
     expect(dt.month, 6);
     expect(dt.day, 15);
@@ -582,6 +586,48 @@ void main() async {
     expect(dt.minute, 30);
 
     expect(reader.getColumnNullableDateTime(1), isNull);
+
+    await reader.close();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('getColumnDateTime honors an explicit `Z` without shifting', () async {
+    final db = await _createTestDb('datetime_utc_test.db');
+
+    {
+      final stmt = await db.prepareQuery('''
+      CREATE TABLE datetime_utc_test (
+        id INTEGER PRIMARY KEY,
+        created_at TEXT
+      )
+    ''');
+      try {
+        await stmt.executeSql();
+      } finally {
+        await stmt.close();
+      }
+    }
+
+    {
+      final stmt = await db.prepareQuery(
+          'INSERT INTO datetime_utc_test (id, created_at) VALUES (?, ?)');
+      try {
+        await stmt.executeSql(params: [1, '2025-06-15T10:30:00.000Z']);
+      } finally {
+        await stmt.close();
+      }
+    }
+
+    final reader = await (await db.prepareQuery(
+            'SELECT created_at FROM datetime_utc_test WHERE id = 1'))
+        .executeReader();
+    expect(await reader.readRow(), isTrue);
+
+    final dt = reader.getColumnDateTime(0);
+    expect(dt.isUtc, isTrue);
+    expect(dt.hour, 10);
+    expect(dt.minute, 30);
 
     await reader.close();
     await db.closeDb();

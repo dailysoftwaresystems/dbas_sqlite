@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.8.3 - 2026-05-27
+
+### Fixed
+
+- **`getColumnDateTime` mislabeled naive stored timestamps as local,
+  causing `…Z` vs no-`Z` divergence.** SQLite stores timestamps as text,
+  and the project convention is that every persisted timestamp is UTC.
+  The reader previously returned `DateTime.parse(stored)` directly, which
+  yields a **local** (`isUtc == false`) `DateTime` for a naive string
+  (no offset / `Z`). Mixed with UTC-flagged values written elsewhere, the
+  same column ended up holding both `2026-…Z` and `2026-…` strings; lexical
+  SQL comparison of those is only coincidentally correct and broke
+  `ORDER BY`/`WHERE` around the format boundary, while Dart equality
+  treats `DateTime(local) != DateTime(utc)` even for the same instant.
+  `getColumnDateTime` now **interprets** the stored value as UTC: an
+  explicit offset / `Z` is honored, and a naive string is re-flagged as
+  UTC wall-clock via `DateTime.utc(...)` **without shifting** by the
+  device timezone (`.toUtc()` would corrupt it). The returned value
+  always has `isUtc == true`, so ordering and equality never diverge.
+  `getColumnNullableDateTime` inherits the fix (it delegates to
+  `getColumnDateTime`).
+
+  **Behavior change for consumers:** `getColumnDateTime` /
+  `getColumnNullableDateTime` now return UTC-flagged `DateTime`s. Code
+  that relied on the previous local-flagged result (e.g. formatting the
+  components for display without an explicit timezone conversion) should
+  convert to the user timezone at the presentation layer instead.
+
 ## 2.8.2 - 2026-05-26
 
 ### Fixed

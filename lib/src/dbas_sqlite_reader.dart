@@ -171,8 +171,22 @@ class DbasSqliteReader {
   double? getColumnNullableDouble(int idx) =>
       isColumnNull(idx) ? null : getColumnDouble(idx);
 
-  DateTime getColumnDateTime(int idx) =>
-      DateTime.parse(_column(idx)?.value?.toString() ?? '');
+  /// Reads a stored timestamp as a UTC [DateTime].
+  ///
+  /// SQLite stores timestamps as text. The convention is that every
+  /// persisted timestamp is UTC, so a naive stored string (no offset /
+  /// `Z`) is interpreted as UTC wall-clock and is **never shifted** by
+  /// the device timezone; an explicit offset / `Z` is honored. The
+  /// returned value always has `isUtc == true`, so equality and ordering
+  /// comparisons never diverge between `…Z` and no-`Z` values.
+  DateTime getColumnDateTime(int idx) {
+    final parsed = DateTime.parse(_column(idx)?.value?.toString() ?? '');
+    return parsed.isUtc
+        ? parsed
+        : DateTime.utc(parsed.year, parsed.month, parsed.day, parsed.hour,
+            parsed.minute, parsed.second, parsed.millisecond,
+            parsed.microsecond);
+  }
 
   DateTime? getColumnNullableDateTime(int idx) =>
       isColumnNull(idx) ? null : getColumnDateTime(idx);
