@@ -78,7 +78,7 @@ Flutter plugin that provides access to SQLite databases for Android, iOS, macOS,
 - **Transactions**
   - `beginTransaction({strict = false})` - Begin a new transaction. Idempotent by default: if one is already active this joins it (no second hold on the writer lock). `strict: true` never joins — it parks on the writer-lock queue until the active transaction ends, then issues its own `BEGIN`. A `strict: true` call from the flow that already owns the transaction is a self-deadlock and fails with `writerLockWaitTimeout`
   - `startedCurrentTransaction` - Whether the last `beginTransaction()` issued a real `BEGIN` or took the join path. Read it right after the `await`, and use it to decide whether ending the transaction is your job: `if (db.startedCurrentTransaction) await db.commit();`
-  - `commit()` - Commit the current transaction (idempotent). Pre-flights the writer connection first and throws `commitBlockedByInFlightOperation` / `commitBlockedByActiveReader` rather than committing out from under an unfinished write or an open writer-routed reader. There is no reference counting — a joiner's `commit()` ends the transaction for everyone
+  - `commit()` - Commit the current transaction (idempotent). Pre-flights the writer connection first and throws `commitBlockedByInFlightOperation` / `commitBlockedByActiveReader` rather than committing out from under an unfinished write or an open writer-routed reader. There is no reference counting — a joiner's `commit()` ends the transaction for everyone. `commit(onCommitFailed: (failure) async { ... })` awaits the callback when `COMMIT` fails, BEFORE the automatic recovery rollback: the transaction is still open and the writer lock still held, so read-only statements issued there (e.g. `PRAGMA foreign_key_check` after a deferred foreign key refused the `COMMIT`) see the transaction's own state. A throwing callback is logged and never skips the rollback; the `COMMIT` failure is still what is rethrown
   - `rollback()` - Rollback the current transaction (idempotent). Drains in-flight writes first, then issues `ROLLBACK`
   - `transaction(action)` - Execute an action within a transaction with automatic commit/rollback
   - `isInTransaction` - Check if a transaction is currently active
@@ -112,7 +112,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_sqlite: ^2.9.0
+  dbas_sqlite: ^2.10.0
 ```
 
 Or install with the Dart CLI:

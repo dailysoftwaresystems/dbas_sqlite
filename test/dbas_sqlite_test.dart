@@ -2972,6 +2972,180 @@ void main() async {
     await db.dropDb();
   });
 
+  // ──────────────────────────────────────────────────────────────────────
+  // Transaction: commit(onCommitFailed:) — inspecting a refused COMMIT
+  // ──────────────────────────────────────────────────────────────────────
+
+  /// A pooled database with `parent` / `child` tables and, inside an open
+  /// transaction with deferred foreign keys, a `child` row naming a
+  /// `parent` that does not exist: its `COMMIT` is refused (787) and SQLite
+  /// keeps the transaction open (sqlite.org/foreignkeys.html).
+  Future<DbasSqlite> openRefusedCommit(String dbName) async {
+    final db = await _createTestDb(dbName, readerPoolSize: 2);
+    await _runSql(db, 'PRAGMA foreign_keys = ON');
+    await _runSql(db, 'CREATE TABLE parent (id INTEGER PRIMARY KEY)');
+    await _runSql(db,
+        'CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))');
+    await db.beginTransaction();
+    await _runSql(db, 'PRAGMA defer_foreign_keys = ON');
+    await _runSql(db, 'INSERT INTO child (id, parent_id) VALUES (7, 999)');
+    return db;
+  }
+
+  /// Every row [sql] answers, each as its column values.
+  Future<List<List<Object?>>> readRows(DbasSqlite db, String sql) async {
+    final stmt = await db.prepareQuery(sql);
+    try {
+      final reader = await stmt.executeReader();
+      try {
+        final rows = <List<Object?>>[];
+        while (await reader.readRow()) {
+          rows.add(<Object?>[
+            for (var i = 0; i < reader.getColumnCount(); i++)
+              reader.getColumnValue(i),
+          ]);
+        }
+        return rows;
+      } finally {
+        await reader.close();
+      }
+    } finally {
+      await stmt.close();
+    }
+  }
+
+  Matcher isRefusedCommit() => isA<DbasSqliteException>()
+      .having((e) => e.code, 'code', DbasSqliteErrorCode.commitFailed)
+      .having((e) => e.sqliteUniqueCode, 'sqliteUniqueCode', 787)
+      .having((e) => e.subCategory, 'subCategory',
+          DbasSqliteSubCategory.foreignKeyViolation);
+
+  test('commit(onCommitFailed:) reads the refused transaction while it is still open, before the recovery rollback',
+      () async {
+    final db = await openRefusedCommit('commit_inspect_open.db');
+    Object? received;
+    bool? openInside;
+    List<List<Object?>>? violations;
+    List<List<Object?>>? childrenInside;
+
+    Object? thrown;
+    try {
+      await db.commit(onCommitFailed: (failure) async {
+        received = failure;
+        openInside = db.isInTransaction;
+        violations = await readRows(db, 'PRAGMA foreign_key_check');
+        childrenInside = await readRows(db, 'SELECT id, parent_id FROM child');
+      });
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown, isRefusedCommit(),
+        reason: 'the COMMIT failure is what the caller receives');
+    expect(received, same(thrown),
+        reason: 'the callback is handed the very failure that is rethrown');
+    expect(openInside, isTrue,
+        reason: 'the callback runs before the recovery ends the transaction');
+    expect(violations, <List<Object?>>[
+      <Object?>['child', 7, 'parent', 0],
+    ], reason: 'foreign_key_check names the violation inside the open transaction');
+    expect(childrenInside, <List<Object?>>[
+      <Object?>[7, 999],
+    ], reason: "the callback's read sees the transaction's uncommitted row");
+    expect(db.isInTransaction, isFalse,
+        reason: 'the recovery rollback still ran after the callback');
+    expect(await readRows(db, 'SELECT id FROM child'), isEmpty,
+        reason: 'the refused row was rolled back');
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('commit(onCommitFailed:) that throws still rolls back and rethrows the COMMIT failure',
+      () async {
+    final db = await openRefusedCommit('commit_inspect_throws.db');
+    final callbackError = StateError('inspection failed');
+    var calls = 0;
+
+    Object? thrown;
+    try {
+      await db.commit(onCommitFailed: (failure) async {
+        calls++;
+        throw callbackError;
+      });
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(calls, 1);
+    expect(thrown, isRefusedCommit(),
+        reason: "the callback's error never replaces the COMMIT failure");
+    expect(db.isInTransaction, isFalse,
+        reason: 'a throwing callback must not skip the recovery rollback');
+    expect(await readRows(db, 'SELECT id FROM child'), isEmpty,
+        reason: 'the refused row was rolled back');
+
+    // The writer lock was released with the rollback: a strict BEGIN, which
+    // parks on the lock rather than joining, gets it straight away.
+    await db.beginTransaction(strict: true);
+    expect(db.startedCurrentTransaction, isTrue);
+    await _runSql(db, 'INSERT INTO parent (id) VALUES (1)');
+    await db.commit();
+    expect(await readRows(db, 'SELECT id FROM parent'), <List<Object?>>[
+      <Object?>[1],
+    ]);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('commit(onCommitFailed:) is never called by a COMMIT that succeeds',
+      () async {
+    final db = await _createTestDb('commit_inspect_success.db',
+        readerPoolSize: 2);
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY)');
+    var calls = 0;
+
+    await db.beginTransaction();
+    await _runSql(db, 'INSERT INTO t (id) VALUES (1)');
+    await db.commit(onCommitFailed: (failure) async => calls++);
+
+    expect(calls, 0);
+    expect(db.isInTransaction, isFalse);
+    expect(await readRows(db, 'SELECT id FROM t'), <List<Object?>>[
+      <Object?>[1],
+    ]);
+
+    await db.closeDb();
+    await db.dropDb();
+  });
+
+  test('commit(onCommitFailed:) is never called by a pre-flight refusal, which leaves the transaction untouched',
+      () async {
+    final db = await _createTestDb('commit_inspect_preflight.db');
+    await _runSql(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY)');
+    var calls = 0;
+
+    await db.beginTransaction();
+    await _runSql(db, 'INSERT INTO t (id) VALUES (1)'); // routes reads to the writer
+    final readStmt = await db.prepareQuery('SELECT id FROM t');
+    final reader = await readStmt.executeReader(); // left open on purpose
+
+    await expectLater(
+      () => db.commit(onCommitFailed: (failure) async => calls++),
+      throwsA(isA<DbasSqliteException>().having((e) => e.code, 'code',
+          DbasSqliteErrorCode.commitBlockedByActiveReader)),
+    );
+    expect(calls, 0);
+    expect(db.isInTransaction, isTrue);
+
+    await reader.close();
+    await readStmt.close();
+    await db.commit();
+    await db.closeDb();
+    await db.dropDb();
+  });
+
   test('rollback() does NOT pre-flight-block on an open writer-routed reader (unlike commit)',
       () async {
     // Scoping pin for the pre-flight check: it belongs to commit() only.
