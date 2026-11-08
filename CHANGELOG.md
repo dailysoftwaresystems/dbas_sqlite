@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.10.0 - 2026-11-07
+
+**An additive release: a refused `COMMIT` can be inspected before the
+driver rolls it back.** Nothing existing changes behaviour.
+
+### Added
+
+- **`commit({onCommitFailed})` — read why a `COMMIT` was refused, while
+  the transaction is still open.** `commit()` recovers from a failed
+  `COMMIT` by rolling back by itself before it rethrows, so the caller
+  only ever saw the transaction already gone — and with it the one thing
+  that could still say WHY it was refused. A deferred foreign key is the
+  case that needs it: SQLite keeps the transaction open when its
+  `COMMIT` fails on one (sqlite.org/foreignkeys.html), and only
+  `PRAGMA foreign_key_check`, read inside that transaction, lists the
+  violations — which is how a consumer tells "a row this transaction
+  wrote names a row that does not exist" apart from "this transaction
+  deleted a row a stored row still references", two refusals the error
+  code (787) does not distinguish.
+
+  `onCommitFailed` is awaited with the failure the moment `COMMIT` fails,
+  BEFORE the recovery `rollback()`: the transaction is still marked
+  active and the writer lock still held, so a read issued from inside it
+  (after the transaction's first write) is routed to the writer
+  connection and sees the transaction's own uncommitted state. It must be
+  read-only and must not end the transaction itself.
+
+  Everything around it is unchanged: the recovery rollback, the
+  writer-lock release, `commitRollbackAlsoFailed`, the error rethrown (the
+  original `commitFailed`, the very object the callback received) and the
+  pre-flight guards. A successful `COMMIT` and a pre-flight refusal
+  (`commitBlockedByInFlightOperation` / `commitBlockedByActiveReader`)
+  never call it. A callback that throws does not skip the recovery: its
+  error is logged via `dart:developer` with its own stack, and the
+  `COMMIT` failure is still what the caller receives.
+
+  Tests: the callback reads `PRAGMA foreign_key_check` and the
+  uncommitted row inside the open transaction and the rollback still
+  follows; a throwing callback still rolls back, rethrows the `COMMIT`
+  failure and releases the writer lock; a successful `COMMIT` and a
+  pre-flight refusal never call it.
+
 ## 2.9.0 - 2026-07-30
 
 **A `closeDb()`-safety release.** Teardown destroys a connection, a pool

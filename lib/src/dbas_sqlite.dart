@@ -2563,7 +2563,36 @@ class DbasSqlite {
   /// database was closed while a transaction was still marked active —
   /// should not normally happen; mirrors the defensive guard already in
   /// [beginTransaction] / [vacuum].
-  Future<void> commit() async {
+  ///
+  /// **Inspecting the failure before the recovery — [onCommitFailed].**
+  /// When given, it is awaited with the failure the moment `COMMIT`
+  /// fails, BEFORE the automatic [rollback] above runs: the transaction
+  /// is still marked active, the writer lock is still held, and a read
+  /// issued from inside it after the transaction's first write is routed
+  /// to the writer connection, so it observes the transaction's own,
+  /// uncommitted state. That is the one window in which SQLite can still
+  /// say WHY a `COMMIT` was refused: a deferred foreign key keeps the
+  /// transaction open when its `COMMIT` fails
+  /// (sqlite.org/foreignkeys.html), and `PRAGMA foreign_key_check` read
+  /// there lists the violations — which a caller cannot read after the
+  /// recovery, because the rollback discards them. An error after which
+  /// SQLite ends the transaction by itself leaves the callback reading
+  /// the state that rollback restored.
+  ///
+  /// The callback must be read-only and must not end the transaction:
+  /// issue no write, and call neither [commit] nor [rollback] — the
+  /// recovery below owns the transaction's end. Close every reader it
+  /// opens before it returns. Nothing else changes: the recovery
+  /// [rollback], the writer-lock release, the error rethrown (the
+  /// original `COMMIT` failure, or
+  /// [DbasSqliteErrorCode.commitRollbackAlsoFailed]) and the pre-flight
+  /// guards are exactly as without it. A pre-flight refusal and a
+  /// successful `COMMIT` never call it. A callback that throws does not
+  /// skip the recovery: its error is logged via `dart:developer` with its
+  /// own stack, and the `COMMIT` failure is what the caller receives.
+  Future<void> commit({
+    Future<void> Function(Object failure)? onCommitFailed,
+  }) async {
     if (!_isInTransaction) return;
     if (!isOpened()) {
       throw DbasSqliteException.dart(
@@ -2598,6 +2627,23 @@ class DbasSqlite {
       _rotateReentrantWriterOpEpoch();
       _releaseWriterLock();
     } catch (originalError, originalStack) {
+      if (onCommitFailed != null) {
+        // The transaction is still open and the writer lock still held:
+        // the caller's one chance to read why COMMIT was refused. Its
+        // failure must never cost the recovery below, nor replace the
+        // COMMIT failure the caller receives — logged, with its own stack.
+        try {
+          await onCommitFailed(originalError);
+        } catch (callbackError, callbackStack) {
+          developer.log(
+            'commit: onCommitFailed threw; the recovery rollback runs '
+            'regardless and the COMMIT failure is what is rethrown',
+            name: 'dbas_sqlite.DbasSqlite',
+            error: callbackError,
+            stackTrace: callbackStack,
+          );
+        }
+      }
       try {
         await rollback();
       } catch (rollbackError, rollbackStack) {
